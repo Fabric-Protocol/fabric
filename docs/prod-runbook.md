@@ -175,3 +175,60 @@ gcloud logging read $err --limit 50 --freshness=24h --format="value(timestamp,lo
 
 Keep `rejectUnauthorized: true` permanently.  
 Do **not** use insecure TLS (`rejectUnauthorized:false` / `sslmode=no-verify`) except emergency outage mitigation, and only with a short rollback window and immediate follow-up to restore strict verification.
+
+## PowerShell-safe Cloud Logging queries
+
+Use this pattern in PowerShell:
+- Build `$filter` as one string variable.
+- Pass it as a single argument: `gcloud logging read "$filter"`.
+- Use `--format=json` and post-filter with `ConvertFrom-Json` + `Where-Object` for `jsonPayload.msg`.
+
+### a) Event-specific processed webhook logs (last 6h)
+
+```powershell
+$env:PATH="C:\Users\trade\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin;$env:PATH"
+gcloud config set project fabric-487608 | Out-Null
+
+$eventId = "evt_1T1Qr9K3gJAgZl81iD1oE6Nz"
+$filter = 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND jsonPayload.event_id="' + $eventId + '"'
+
+$raw = gcloud logging read "$filter" `
+  --project fabric-487608 `
+  --freshness=6h `
+  --limit 200 `
+  --format=json
+
+$logs = $raw | ConvertFrom-Json
+$processed = $logs |
+  Where-Object { $_.jsonPayload.msg -eq "Stripe webhook processed" } |
+  Sort-Object timestamp
+
+"count=$($processed.Count)"
+$processed | ForEach-Object {
+  "{0}`t{1}`t{2}" -f $_.timestamp, $_.jsonPayload.event_id, $_.jsonPayload.event_type
+}
+```
+
+### b) Service-level recent processed webhook logs (last 24h, newest 5)
+
+```powershell
+$env:PATH="C:\Users\trade\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin;$env:PATH"
+gcloud config set project fabric-487608 | Out-Null
+
+$filter = 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api"'
+
+$raw = gcloud logging read "$filter" `
+  --project fabric-487608 `
+  --freshness=24h `
+  --limit 1000 `
+  --format=json
+
+$logs = $raw | ConvertFrom-Json
+$logs |
+  Where-Object { $_.jsonPayload.msg -eq "Stripe webhook processed" } |
+  Sort-Object timestamp -Descending |
+  Select-Object -First 5 |
+  ForEach-Object {
+    "{0}`t{1}`t{2}" -f $_.timestamp, $_.jsonPayload.event_id, $_.jsonPayload.event_type
+  }
+```
