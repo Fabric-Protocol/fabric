@@ -39,14 +39,14 @@ Last updated: 2026-02-16
   - `gcloud config set project fabric-487608`
 - [x] Build and deploy container image to Cloud Run:
   - `.\scripts\deploy-cloud-run.ps1 -ProjectId fabric-487608`
-- [ ] Set Cloud Run runtime env vars with real values:
-  - Done: `DATABASE_URL`, `ADMIN_KEY`
-  - Remaining: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- [x] Set Cloud Run runtime env vars with real values:
+  - Done: `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - [ ] Complete Stripe production wiring:
-  - Configure products/prices + webhook destination/secret
+  - Done: webhook destination + event selection + webhook secret configured
+  - Remaining: deterministic Node mapping for subscription/invoice lifecycle updates
 - [ ] Run post-deploy smoke tests:
-  - Done: bootstrap + `GET /v1/me`, admin projections rebuild
-  - Remaining: webhook/subscription transition smoke tests
+  - Done: bootstrap + `GET /v1/me`, admin projections rebuild, webhook signature 200 deliveries
+  - Remaining: verify subscription state + credits transitions on mapped Stripe events
 
 ## P1 - Backend branch follow-ups
 - [x] Merge backend API contract/test gap work into `main` (PR #1 merged).

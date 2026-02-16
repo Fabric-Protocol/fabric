@@ -8,37 +8,41 @@ Last updated: 2026-02-16
 - Target branch: `main`
 
 ## Current git snapshot
-- Last commit: `e92df2a` (`project-files: update handoff/todo/decisions from thread notes`)
-- Working tree: not clean (untracked: `tmp-bootstrap.json`, `tmp/`)
+- Last commit: `447ad31` (`stripe: verify webhook using raw body + multiple v1 signatures`)
+- Working tree: not clean
+  - Modified: `src/app.ts`, `src/db/fabricRepo.ts`, `src/services/fabricService.ts`, `tests/api.test.mjs`, `docs/prod-runbook.md`
+  - Untracked: `scripts/smoke-stripe-subscription.ps1`
 
 ## What just changed in this thread
-- Confirmed Cloud Run deployment is live in `us-west1`:
-  - Service URL: `https://fabric-api-393345198409.us-west1.run.app`
-- Wired production DB credentials to Cloud Run:
-  - `DATABASE_URL` set to Supabase direct connection
-  - `ADMIN_KEY` set on Cloud Run
-- Resolved deployment blockers in sequence:
-  - Missing `DATABASE_URL` caused localhost DB attempts
-  - Supabase password mismatch was corrected
-  - Missing schema (`relation "nodes" does not exist`) fixed by running `docs/specs/21__db-ddl.sql` in Supabase SQL editor
-- Production smoke checks now passing:
-  - `POST /v1/bootstrap` returns node + api key + signup credits
-  - `GET /v1/me` succeeds with returned `ApiKey`
-  - `POST /v1/admin/projections/rebuild?kind=all&mode=full` succeeds with admin key
+- Stripe webhook signature verification was fixed for production deliveries:
+  - Uses raw body bytes for HMAC verification
+  - Supports multiple `v1` values in `Stripe-Signature`
+  - Stripe deliveries now return HTTP 200 with `{ "ok": true }` instead of signature-failure 400s
+- Stripe webhook node mapping path was implemented in working tree:
+  - Mapping order: `metadata.node_id` -> `stripe_customer_id` -> `stripe_subscription_id`
+  - Unmapped events log `reason=unmapped_stripe_customer` and still return 200
+- Local coverage updated:
+  - Tests extended for mapping scenarios
+  - PowerShell smoke helper added: `scripts/smoke-stripe-subscription.ps1`
+  - Runbook notes updated in `docs/prod-runbook.md`
+- Deployed environment status:
+  - Cloud Run and Supabase are live
+  - Stripe endpoint receives events, including `customer.subscription.created`
 
 ## Current blocker
-- Stripe production setup is still pending:
-  - Cloud Run missing `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`
-  - Stripe products/prices and webhook wiring not completed yet
+- Dashboard-created Stripe subscriptions are not deterministic for Fabric Node updates unless mapping exists (`metadata.node_id` or stored Stripe customer/subscription IDs).
+- Billing checkout/portal endpoints are not present in current contracts/implementation, so there is no canonical API flow yet to establish mapping automatically.
 
 ## Exact next command sequence
 1. `git switch main`
 2. `git pull`
-3. `gcloud config set project fabric-487608`
-4. `gcloud run services update fabric-api --project fabric-487608 --region us-west1 --update-env-vars "STRIPE_SECRET_KEY=[STRIPE_SECRET_KEY],STRIPE_WEBHOOK_SECRET=[STRIPE_WEBHOOK_SECRET]"`
-5. `# Configure Stripe products/prices in Stripe dashboard`
-6. `# Configure webhook endpoint: https://fabric-api-393345198409.us-west1.run.app/v1/webhooks/stripe`
-7. `# Run webhook smoke tests and verify subscription state transitions`
+3. `git status --short`
+4. `npm test`
+5. `gcloud builds submit --tag gcr.io/fabric-487608/fabric-api .`
+6. `gcloud run deploy fabric-api --region us-west1 --image gcr.io/fabric-487608/fabric-api`
+7. `# Bootstrap a node and ensure Stripe mapping input exists (metadata.node_id or persisted stripe_customer_id/stripe_subscription_id)`
+8. `# Resend Stripe events from Stripe dashboard and check Cloud Run logs for absence of reason=unmapped_stripe_customer`
+9. `# Verify GET /v1/me reflects active subscription and invoice.paid credit changes`
 
 ## Handoff objective for next thread
-- Complete Stripe wiring on the deployed Cloud Run service and validate end-to-end subscription flows.
+- Finalize deterministic Stripe-to-Node mapping path in production and validate subscription/credit lifecycle updates end-to-end.

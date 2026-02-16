@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Stripe webhook node mapping fallback order
+Decision: Webhook processing maps Stripe events to a Node in this order: `metadata.node_id`, then stored `stripe_customer_id`, then stored `stripe_subscription_id`; if still unmapped, log `unmapped_stripe_customer` and return 200.
+Reason: Real Stripe subscription events can arrive without node metadata, but webhook handling must stay idempotent and non-failing while preserving observability.
+Impact: Subscription and invoice events update the correct Node when any mapping exists; unmapped events no longer hard-fail and can be triaged from logs.
+
 ## 2026-02-16 - Production schema baseline from canonical DDL
 Decision: Initialize the Supabase production database from `docs/specs/21__db-ddl.sql` before Cloud Run smoke tests.
 Reason: Ensure deployed API behavior runs against the canonical MVP schema.
