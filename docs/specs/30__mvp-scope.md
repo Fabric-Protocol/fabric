@@ -6,8 +6,10 @@
 - **Agent API only** (no human UI in MVP).
 
 ### Stack (locked)
-- **Next.js API** (Vercel target)
-- **Supabase Postgres**
+- **Node.js (LTS) + TypeScript**
+- **Fastify**
+- **Postgres**
+- **Cloud Run-compatible Dockerfile (container-first deploy)**
 
 ---
 
