@@ -265,6 +265,54 @@ async function resolvePlanCode(nodeId: string, event: any, fallback: string) {
   return me?.plan_code ?? fallback;
 }
 
+async function fetchStripeJson(path: string) {
+  if (!config.stripeSecretKey) return null;
+  try {
+    const res = await fetch(`https://api.stripe.com/v1/${path}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${config.stripeSecretKey}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+async function fetchNodeIdFromStripeCustomer(stripeCustomerId: string) {
+  const customer = await fetchStripeJson(`customers/${encodeURIComponent(stripeCustomerId)}`);
+  const nodeId = customer?.metadata?.node_id;
+  return typeof nodeId === 'string' && nodeId ? nodeId : null;
+}
+
+async function fetchNodeIdFromStripeSubscription(stripeSubscriptionId: string) {
+  const subscription = await fetchStripeJson(`subscriptions/${encodeURIComponent(stripeSubscriptionId)}`);
+  const nodeId = subscription?.metadata?.node_id;
+  return typeof nodeId === 'string' && nodeId ? nodeId : null;
+}
+
+async function resolveDeterministicStripeIds(nodeId: string, incomingStripeCustomerId: string | null, incomingStripeSubscriptionId: string | null) {
+  const existing = await repo.getSubscriptionMapping(nodeId);
+  let stripeCustomerId = existing.stripe_customer_id;
+  let stripeSubscriptionId = existing.stripe_subscription_id;
+
+  if (incomingStripeCustomerId) {
+    const owner = await repo.findNodeIdByStripeCustomerId(incomingStripeCustomerId);
+    const canAttachToNode = !owner || owner === nodeId;
+    const nodeAllows = !existing.stripe_customer_id || existing.stripe_customer_id === incomingStripeCustomerId;
+    if (canAttachToNode && nodeAllows) stripeCustomerId = incomingStripeCustomerId;
+  }
+
+  if (incomingStripeSubscriptionId) {
+    const owner = await repo.findNodeIdByStripeSubscriptionId(incomingStripeSubscriptionId);
+    const canAttachToNode = !owner || owner === nodeId;
+    const nodeAllows = !existing.stripe_subscription_id || existing.stripe_subscription_id === incomingStripeSubscriptionId;
+    if (canAttachToNode && nodeAllows) stripeSubscriptionId = incomingStripeSubscriptionId;
+  }
+
+  return { stripeCustomerId: stripeCustomerId ?? null, stripeSubscriptionId: stripeSubscriptionId ?? null };
+}
+
 async function resolveNodeMapping(event: any) {
   const object = event.data?.object ?? {};
   const nodeIdFromPayload = object.metadata?.node_id ?? object.node_id ?? event.node_id ?? null;
@@ -289,6 +337,20 @@ async function resolveNodeMapping(event: any) {
     }
   }
 
+  if (stripeCustomerId) {
+    const byCustomerMetadata = await fetchNodeIdFromStripeCustomer(stripeCustomerId);
+    if (byCustomerMetadata) {
+      return { nodeId: byCustomerMetadata, source: 'stripe_customer_metadata' as const, stripeCustomerId, stripeSubscriptionId };
+    }
+  }
+
+  if (stripeSubscriptionId) {
+    const bySubscriptionMetadata = await fetchNodeIdFromStripeSubscription(stripeSubscriptionId);
+    if (bySubscriptionMetadata) {
+      return { nodeId: bySubscriptionMetadata, source: 'stripe_subscription_metadata' as const, stripeCustomerId, stripeSubscriptionId };
+    }
+  }
+
   return { nodeId: null, source: null, stripeCustomerId, stripeSubscriptionId };
 }
 
@@ -307,8 +369,9 @@ async function resolveNodeMapping(event: any) {
   }
 
   const nodeId = mapping.nodeId;
-  const stripeCustomerId = mapping.stripeCustomerId ?? stripeId(object.customer);
-  const stripeSubscriptionId = mapping.stripeSubscriptionId ?? (type.startsWith('customer.subscription.') ? stripeId(object.id) : stripeId(object.subscription));
+  const incomingStripeCustomerId = mapping.stripeCustomerId ?? stripeId(object.customer);
+  const incomingStripeSubscriptionId = mapping.stripeSubscriptionId ?? (type.startsWith('customer.subscription.') ? stripeId(object.id) : stripeId(object.subscription));
+  const { stripeCustomerId, stripeSubscriptionId } = await resolveDeterministicStripeIds(nodeId, incomingStripeCustomerId, incomingStripeSubscriptionId);
 
   if (type === 'customer.subscription.created' || type === 'customer.subscription.updated' || type === 'customer.subscription.deleted') {
     const planCode = await resolvePlanCode(nodeId, event, 'free');

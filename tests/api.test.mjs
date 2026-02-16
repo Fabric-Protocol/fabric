@@ -8,6 +8,7 @@ delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
 
 process.env.ADMIN_KEY = 'admin-test';
+process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 
 const { buildApp } = await import('../dist/src/app.js');
@@ -23,6 +24,23 @@ function sign(body) {
   const raw = JSON.stringify(body);
   const v1 = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(`${t}.${raw}`).digest('hex');
   return { t, v1, raw, header: `t=${t},v1=${v1}` };
+}
+
+function jsonResponse(status, payload) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+async function withMockFetch(mockFetch, fn) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 test('canonical error envelope for unauthorized', async () => {
@@ -154,6 +172,79 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
 
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter - balBefore, 1500);
+  await app.close();
+});
+
+test('webhook maps customer.subscription.created via fetched customer metadata.node_id and persists mapping', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-fetch-sub-created');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_fetch_sub_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_fetch_sub_${nodeId.slice(0, 8)}`;
+  const customerPath = `/v1/customers/${encodeURIComponent(customerId)}`;
+  const fetchCalls = [];
+
+  await withMockFetch(async (url) => {
+    const u = String(url);
+    fetchCalls.push(u);
+    if (u.endsWith(customerPath)) {
+      return jsonResponse(200, { id: customerId, metadata: { node_id: nodeId } });
+    }
+    return jsonResponse(404, { error: 'not_found' });
+  }, async () => {
+    const subEvent = {
+      id: `evt_fetch_sub_created_${nodeId.slice(0, 8)}`,
+      type: 'customer.subscription.created',
+      data: { object: { id: subscriptionId, customer: customerId, status: 'active', current_period_start: 1735689600, current_period_end: 1738368000 } },
+    };
+    const sig = sign(subEvent);
+    const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+    assert.equal(res.statusCode, 200);
+  });
+
+  assert.equal(fetchCalls.some((u) => u.endsWith(customerPath)), true);
+  const me = await repo.getMe(nodeId);
+  assert.equal(me.sub_status, 'active');
+  const mapping = await repo.getSubscriptionMapping(nodeId);
+  assert.equal(mapping.stripe_customer_id, customerId);
+  assert.equal(mapping.stripe_subscription_id, subscriptionId);
+  await app.close();
+});
+
+test('webhook maps invoice.paid via fetched customer metadata.node_id and persists mapping', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-fetch-invoice');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_fetch_invoice_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_fetch_invoice_${nodeId.slice(0, 8)}`;
+  const customerPath = `/v1/customers/${encodeURIComponent(customerId)}`;
+
+  const balBefore = await repo.creditBalance(nodeId);
+  await withMockFetch(async (url) => {
+    const u = String(url);
+    if (u.endsWith(customerPath)) {
+      return jsonResponse(200, { id: customerId, metadata: { node_id: nodeId } });
+    }
+    return jsonResponse(404, { error: 'not_found' });
+  }, async () => {
+    const invoiceEvent = {
+      id: `evt_fetch_invoice_paid_${nodeId.slice(0, 8)}`,
+      type: 'invoice.paid',
+      data: { object: { customer: customerId, subscription: subscriptionId, period_start: 1735689600, period_end: 1738368000, metadata: { plan_code: 'basic' } } },
+    };
+    const sig = sign(invoiceEvent);
+    const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+    assert.equal(res.statusCode, 200);
+  });
+
+  const me = await repo.getMe(nodeId);
+  assert.equal(me.sub_status, 'active');
+  assert.equal(me.plan_code, 'basic');
+  const mapping = await repo.getSubscriptionMapping(nodeId);
+  assert.equal(mapping.stripe_customer_id, customerId);
+  assert.equal(mapping.stripe_subscription_id, subscriptionId);
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter - balBefore, 500);
   await app.close();
 });
 

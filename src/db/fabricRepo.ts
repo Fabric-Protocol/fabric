@@ -342,6 +342,14 @@ export async function findNodeIdByStripeSubscriptionId(stripeSubscriptionId: str
   return rows[0]?.node_id ?? null;
 }
 
+export async function getSubscriptionMapping(nodeId: string) {
+  const rows = await query<{ stripe_customer_id: string | null; stripe_subscription_id: string | null }>(
+    'select stripe_customer_id, stripe_subscription_id from subscriptions where node_id=$1 limit 1',
+    [nodeId],
+  );
+  return rows[0] ?? { stripe_customer_id: null, stripe_subscription_id: null };
+}
+
 export async function monthlyCreditGranted(nodeId: string, periodStart: string) {
   const rows = await query<{ c: string }>("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_subscription_monthly' and (meta->>'period_start')=$2", [nodeId, periodStart]);
   return Number(rows[0].c) > 0;

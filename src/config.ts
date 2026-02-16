@@ -9,5 +9,6 @@ export const config = {
   defaultRateLimitLimit: Number(process.env.DEFAULT_RATE_LIMIT_LIMIT ?? 1000),
   searchCreditCost: Number(process.env.SEARCH_CREDIT_COST ?? 2),
   signupGrantCredits: Number(process.env.SIGNUP_GRANT_CREDITS ?? 200),
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? '',
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
 };

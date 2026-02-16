@@ -44,10 +44,16 @@
   - Server logs include structured webhook fields (`event_type`, `event_id`, `signature_verified`) without exposing secrets.
 
 ## Stripe node mapping requirements
-- For deterministic webhook mapping, Stripe events must include a Node mapping via:
-  - `metadata.node_id` on event payloads, or
-  - previously stored `stripe_customer_id`/`stripe_subscription_id` in `subscriptions`.
-- If neither mapping is present, webhook still returns `200` and logs `reason=unmapped_stripe_customer`.
+- Webhook mapping order is:
+  - `metadata.node_id` from event payload
+  - stored `stripe_customer_id`
+  - stored `stripe_subscription_id`
+  - fetched Stripe Customer `metadata.node_id` (when `customer` id exists)
+  - fetched Stripe Subscription `metadata.node_id` (when `subscription` id exists)
+- When fallback metadata resolves a Node, mapping is persisted deterministically:
+  - set `stripe_customer_id` / `stripe_subscription_id` only when current value is null or the same value
+  - never remap an existing Stripe id to a different Node
+- If no mapping is found, webhook still returns `200` and logs `reason=unmapped_stripe_customer`.
 
 ## Stripe subscription smoke test (PowerShell)
 - Run:
