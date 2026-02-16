@@ -131,3 +131,11 @@ Do not refactor unrelated files in the same change.
 Prefer additive changes over wide rewrites.
 
 If a decision is required (e.g., plan thresholds), do not guess; leave a TODO and document the required decision in docs/specs/decision-log.md (or the repo’s chosen decision log file).
+
+Required Codex instruction header fields:
+Model
+Reasoning (low/medium/high/extra high)
+IDE Context (what it should rely on: repo files only vs include Project Files/spec pack)
+Planning (on/off)
+Execution (local vs cloud)
+Permissions (default vs full access)

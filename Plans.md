@@ -11,6 +11,14 @@ Create an ExecPlan for any change that touches more than ~3 files, adds a new su
 - Keep the ExecPlan updated as milestones complete.
 
 ## ExecPlan Template (copy for each task)
+Required Codex instruction header fields:
+
+Model
+Reasoning (low/medium/high/extra high)
+IDE Context (what it should rely on: repo files only vs include Project Files/spec pack)
+Planning (on/off)
+Execution (local vs cloud)
+Permissions (default vs full access)
 
 ### Goal
 - What outcome should exist when done (must be verifiable).
