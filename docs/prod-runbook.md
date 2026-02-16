@@ -64,3 +64,114 @@
   - Calls configured billing checkout endpoint (if present)
   - Prompts you to complete Stripe test checkout
   - Verifies `GET /v1/me` and checks subscription status
+
+
+**CA Rotation Runbook (fabric-api / Cloud Run)**
+
+Use this exact flow in PowerShell.
+
+```powershell
+$env:PATH="C:\Users\trade\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin;$env:PATH"
+gcloud config set project fabric-487608
+```
+
+### 1) Verify current CA wiring and runtime usage
+
+1. Confirm Cloud Run is wired to Secret Manager (`DATABASE_SSL_CA`):
+```powershell
+$svc = gcloud run services describe fabric-api --region us-west1 --format=json | ConvertFrom-Json
+$rev = $svc.status.latestReadyRevisionName
+$svc.spec.template.spec.containers[0].env | Where-Object { $_.name -eq "DATABASE_SSL_CA" } | ConvertTo-Json -Depth 6
+```
+
+2. Confirm app runtime sees CA (`database_ssl_ca_present=true`):
+```powershell
+$filter = 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND resource.labels.revision_name="' + $rev + '" AND jsonPayload.msg="db env check"'
+gcloud logging read $filter --region us-west1 --limit 20 --freshness=1h --format="value(timestamp,jsonPayload.check_point,jsonPayload.database_ssl_ca_present,jsonPayload.config_database_url_host)"
+```
+
+3. Secret location and versions:
+```powershell
+gcloud secrets describe DATABASE_SSL_CA --format="value(name)"
+gcloud secrets versions list DATABASE_SSL_CA --format="table(name,state,createTime)"
+```
+Secret path is: `projects/fabric-487608/secrets/DATABASE_SSL_CA`
+
+---
+
+### 2) Update `DATABASE_SSL_CA` and force a new revision
+
+1. Save new CA bundle PEM to file:
+```powershell
+@'
+-----BEGIN CERTIFICATE-----
+...new CA/intermediate/root PEM content...
+-----END CERTIFICATE-----
+'@ | Set-Content .\database_ssl_ca.pem
+```
+
+2. Add new secret version:
+```powershell
+gcloud secrets versions add DATABASE_SSL_CA --data-file .\database_ssl_ca.pem
+```
+
+3. Force new Cloud Run revision to pick latest secret:
+```powershell
+gcloud run services update fabric-api --region us-west1 --update-secrets DATABASE_SSL_CA=DATABASE_SSL_CA:latest
+```
+
+4. Confirm new ready revision:
+```powershell
+gcloud run services describe fabric-api --region us-west1 --format="value(status.latestReadyRevisionName)"
+```
+
+---
+
+### 3) Validate after rotation
+
+1. Trigger Stripe test event:
+- Preferred: Stripe Dashboard -> Webhooks -> endpoint `https://fabric-api-393345198409.us-west1.run.app/v1/webhooks/stripe` -> resend recent event.
+
+2. Validate logs on latest revision:
+```powershell
+$svc = gcloud run services describe fabric-api --region us-west1 --format=json | ConvertFrom-Json
+$rev = $svc.status.latestReadyRevisionName
+$base = 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND resource.labels.revision_name="' + $rev + '"'
+
+gcloud logging read ($base + ' AND jsonPayload.msg="Stripe webhook signature verified"') --limit 20 --freshness=1h --format="value(timestamp,jsonPayload.event_id,jsonPayload.event_type)"
+gcloud logging read ($base + ' AND jsonPayload.msg="Stripe webhook processed"') --limit 20 --freshness=1h --format="value(timestamp,jsonPayload.event_id,jsonPayload.event_type)"
+gcloud logging read ($base + ' AND jsonPayload.msg="stripe webhook handler failed"') --limit 20 --freshness=1h --format="value(timestamp,jsonPayload.err.message)"
+```
+
+Success criteria:
+- `Stripe webhook signature verified` present.
+- `Stripe webhook processed` present.
+- No `stripe webhook handler failed`.
+- No TLS trust errors.
+
+---
+
+### 4) Errors to watch and where
+
+Watch in **Cloud Run logs** (Logs Explorer / `gcloud logging read`) and **Error Reporting** for service `fabric-api`:
+
+- `SELF_SIGNED_CERT_IN_CHAIN`
+- `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`
+- `unable to verify the first certificate`
+- `CERT_HAS_EXPIRED`
+- `hostname/IP does not match certificate's altnames`
+
+Fast grep query:
+```powershell
+$svc = gcloud run services describe fabric-api --region us-west1 --format=json | ConvertFrom-Json
+$rev = $svc.status.latestReadyRevisionName
+$err = 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND resource.labels.revision_name="' + $rev + '" AND (textPayload:"SELF_SIGNED_CERT_IN_CHAIN" OR textPayload:"UNABLE_TO_GET_ISSUER_CERT_LOCALLY" OR textPayload:"unable to verify the first certificate" OR textPayload:"CERT_HAS_EXPIRED" OR jsonPayload.err.message:"SELF_SIGNED_CERT_IN_CHAIN" OR jsonPayload.err.message:"UNABLE_TO_GET_ISSUER_CERT_LOCALLY")'
+gcloud logging read $err --limit 50 --freshness=24h --format="value(timestamp,logName,textPayload,jsonPayload.err.message)"
+```
+
+---
+
+### 5) Security policy note
+
+Keep `rejectUnauthorized: true` permanently.  
+Do **not** use insecure TLS (`rejectUnauthorized:false` / `sslmode=no-verify`) except emergency outage mitigation, and only with a short rollback window and immediate follow-up to restore strict verification.
