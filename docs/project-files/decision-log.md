@@ -2,6 +2,20 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Track package-lock.json (repo policy)
+Decision: Commit and maintain package-lock.json in git.
+Reason: Deterministic installs/CI; avoid dependency drift across machines.
+Impact: Any dependency change requires running npm install and committing lockfile changes.
+
+Track package-lock.json (repo policy), merged PR #2, rationale: deterministic installs/CI
+ADMIN_KEY is API-only; rotate before deploy; never reuse DB creds.
+
+## 2026-02-16 - Track package-lock.json (repo policy)
+Decision: Commit and maintain package-lock.json in git (merged PR #2).
+Reason: Deterministic installs/CI; avoids dependency drift.
+Impact: Any dependency change requires committing lockfile updates.
+
+
 ## 2026-02-16 - Keep local project-files workflow artifacts untracked
 Decision: Local workflow artifacts under `docs/project-files` (workflow/prompt/archive files) and `scripts/thread-switch.ps1` should stay local-only and not be tracked in repo commits.
 Reason: Keep shared git history focused on product code/spec/docs changes while allowing local thread workflow files.
