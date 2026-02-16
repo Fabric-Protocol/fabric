@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Production target locked: Supabase direct + Cloud Run
+Decision: Production deployment uses Supabase Postgres via direct connection string (non-pooler), with Supabase Data API disabled, and deploy target set to GCP Cloud Run (container-first).
+Reason: Keep API-to-DB connectivity explicit through `DATABASE_URL` and standardize deployment path for productionization.
+Impact: Production rollout should proceed via Cloud Run image deploy + Cloud Run env var wiring (`DATABASE_URL`, `ADMIN_KEY`, Stripe secrets); no Data API dependency in runtime path.
+
 ## 2026-02-16 - ADMIN_KEY boundary (API auth only)
 Decision: Treat `ADMIN_KEY` strictly as an API/admin authentication secret, not a PostgreSQL credential.
 Reason: Avoid cross-system secret coupling and prevent mistaken DB password rotations during API key changes.

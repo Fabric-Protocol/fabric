@@ -23,6 +23,30 @@ Last updated: 2026-02-16
   - `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
   - `ADMIN_KEY=<non-empty>`
 
+## P0 - Productionization execution (Supabase + Cloud Run)
+- [x] Lock production decisions in-thread:
+  - Supabase Postgres as provider
+  - Direct connection string (non-pooler)
+  - Supabase Data API disabled
+  - Cloud Run as deploy target
+- [x] Land deployment prep artifacts:
+  - `Dockerfile` + `.dockerignore`
+  - `docs/env-vars.md`, `docs/prod-runbook.md`, `docs/deploy-cloud-run.md`
+  - `scripts/validate-env.ps1`, `scripts/deploy-cloud-run.ps1`
+  - Hermetic test env reset in `tests/api.test.mjs`
+- [ ] Authenticate GCP CLI and set active project:
+  - `gcloud auth login`
+  - `gcloud config set project <PROJECT_ID>`
+- [ ] Build and deploy container image to Cloud Run:
+  - `.\scripts\deploy-cloud-run.ps1 -ProjectId <PROJECT_ID>`
+- [ ] Set Cloud Run runtime env vars with real values:
+  - `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+- [ ] Complete Stripe production wiring:
+  - Configure products/prices + webhook destination/secret
+- [ ] Run post-deploy smoke tests:
+  - `GET /healthz`
+  - bootstrap + auth-keys flow against deployed Cloud Run URL
+
 ## P1 - Backend branch follow-ups
 - [x] Merge backend API contract/test gap work into `main` (PR #1 merged).
 - [ ] If new backend changes are needed, branch from updated `main` and rerun:
