@@ -351,7 +351,7 @@ export async function getSubscriptionMapping(nodeId: string) {
 }
 
 export async function monthlyCreditGranted(nodeId: string, periodStart: string) {
-  const rows = await query<{ c: string }>("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_subscription_monthly' and (meta->>'period_start')=$2", [nodeId, periodStart]);
+  const rows = await query<{ c: string }>("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_subscription_monthly' and amount > 0 and (meta->>'period_start')=$2", [nodeId, periodStart]);
   return Number(rows[0].c) > 0;
 }
 

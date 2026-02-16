@@ -511,6 +511,21 @@ export function buildApp() {
     await repo.addCredit(parsed.data.node_id, 'adjustment_manual', parsed.data.delta, { reason: parsed.data.reason });
     return { ok: true };
   });
+  app.post('/v1/admin/nodes/:nodeId/api-keys', async (req, reply) => {
+    const params = z.object({ nodeId: z.string().uuid() }).safeParse(req.params);
+    if (!params.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid params'));
+    const body = typeof req.body === 'object' && req.body !== null ? req.body : {};
+    const parsed = z.object({ label: z.string().optional() }).safeParse(body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const node = await repo.getMe(params.data.nodeId);
+    if (!node) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
+    const created = await fabricService.createAuthKey(params.data.nodeId, parsed.data.label ?? 'post-tls-verify');
+    return {
+      api_key: created.api_key,
+      key_prefix: created.api_key.slice(0, 8),
+      node_id: params.data.nodeId,
+    };
+  });
   app.post('/v1/admin/projections/rebuild', async (req) => {
     const q = req.query as any;
     const kind = q.kind ?? 'all';

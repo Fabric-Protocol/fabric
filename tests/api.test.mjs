@@ -6,10 +6,13 @@ delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
+delete process.env.STRIPE_PRICE_PLUS;
+delete process.env.STRIPE_PRICE_IDS_PLUS;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
 
 const { buildApp } = await import('../dist/src/app.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
@@ -175,6 +178,102 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
   await app.close();
 });
 
+test('webhook maps invoice.paid price id to plus plan', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-plus-plan');
+  const nodeId = b.json().node.id;
+  const balBefore = await repo.creditBalance(nodeId);
+
+  const invoiceEvent = {
+    id: `evt_plus_invoice_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_plus_${nodeId.slice(0, 8)}`,
+        customer: `cus_plus_${nodeId.slice(0, 8)}`,
+        subscription: `sub_plus_${nodeId.slice(0, 8)}`,
+        period_start: 1735689600,
+        period_end: 1738368000,
+        metadata: { node_id: nodeId },
+        lines: {
+          data: [
+            {
+              amount: 1999,
+              pricing: {
+                type: 'price_details',
+                price_details: { price: 'price_plus_test' },
+                unit_amount_decimal: '1999',
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  const sig = sign(invoiceEvent);
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(res.statusCode, 200);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().subscription.plan, 'plus');
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter - balBefore, 1500);
+  await app.close();
+});
+
+test('invoice.paid credits grant ignores prior zero-credit grant for same period', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-plus-regrant');
+  const nodeId = b.json().node.id;
+  const periodStart = 1735689600;
+  const periodEnd = 1738368000;
+
+  const firstEvent = {
+    id: `evt_zero_grant_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_zero_${nodeId.slice(0, 8)}`,
+        customer: `cus_zero_${nodeId.slice(0, 8)}`,
+        subscription: `sub_zero_${nodeId.slice(0, 8)}`,
+        period_start: periodStart,
+        period_end: periodEnd,
+        metadata: { node_id: nodeId },
+      },
+    },
+  };
+  const firstSig = sign(firstEvent);
+  const firstRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': firstSig.header }, payload: firstSig.raw });
+  assert.equal(firstRes.statusCode, 200);
+
+  const beforePaid = await repo.creditBalance(nodeId);
+  const secondEvent = {
+    id: `evt_plus_after_zero_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_plus_after_zero_${nodeId.slice(0, 8)}`,
+        customer: `cus_zero_${nodeId.slice(0, 8)}`,
+        subscription: `sub_zero_${nodeId.slice(0, 8)}`,
+        period_start: periodStart,
+        period_end: periodEnd,
+        metadata: { node_id: nodeId, plan_code: 'plus' },
+      },
+    },
+  };
+  const secondSig = sign(secondEvent);
+  const secondRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': secondSig.header }, payload: secondSig.raw });
+  assert.equal(secondRes.statusCode, 200);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().subscription.plan, 'plus');
+  const afterPaid = await repo.creditBalance(nodeId);
+  assert.equal(afterPaid - beforePaid, 1500);
+  await app.close();
+});
+
 test('webhook maps customer.subscription.created via fetched customer metadata.node_id and persists mapping', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-fetch-sub-created');
@@ -268,6 +367,38 @@ test('metering only charges on HTTP 200 for search', async () => {
   assert.equal(ok.statusCode, 200);
   const bal3 = await repo.creditBalance(nodeId);
   assert.equal(bal3 < bal2, true);
+  await app.close();
+});
+
+test('admin can mint an api key for an existing node and rejects unknown node', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-admin-mint');
+  const nodeId = b.json().node.id;
+
+  const notFound = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/nodes/00000000-0000-0000-0000-000000000000/api-keys',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-mint-missing' },
+    payload: { label: 'post-tls-verify' },
+  });
+  assert.equal(notFound.statusCode, 404);
+  assert.equal(notFound.json().error.code, 'not_found');
+
+  const minted = await app.inject({
+    method: 'POST',
+    url: `/v1/admin/nodes/${nodeId}/api-keys`,
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-mint-ok' },
+    payload: { label: 'post-tls-verify' },
+  });
+  assert.equal(minted.statusCode, 200);
+  assert.equal(minted.json().node_id, nodeId);
+  assert.equal(typeof minted.json().api_key, 'string');
+  assert.equal(typeof minted.json().key_prefix, 'string');
+  assert.equal(minted.json().api_key.startsWith(minted.json().key_prefix), true);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${minted.json().api_key}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().node.id, nodeId);
   await app.close();
 });
 
