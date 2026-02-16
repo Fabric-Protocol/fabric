@@ -8,6 +8,8 @@ import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
 
 type AuthedRequest = FastifyRequest & { nodeId?: string; plan?: string; isSubscriber?: boolean; idem?: { key: string; hash: string; keyScope: string } };
+type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
+type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeWebhookLogContext };
 
 const nonGet = new Set(['POST', 'PATCH', 'DELETE', 'PUT']);
 const anonIdem = new Map<string, { hash: string; status: number; response: unknown }>();
@@ -85,6 +87,36 @@ function timingSafeHexEqual(aHex: string, bHex: string) {
   return crypto.timingSafeEqual(a, b);
 }
 
+function hasStripeSignatureHeader(req: FastifyRequest) {
+  const sigHeader = req.headers['stripe-signature'];
+  if (Array.isArray(sigHeader)) return sigHeader.length > 0;
+  return typeof sigHeader === 'string' && sigHeader.length > 0;
+}
+
+function setStripeWebhookLogContext(req: FastifyRequest, update: Partial<StripeWebhookLogContext>) {
+  const webhookReq = req as StripeWebhookRequest;
+  webhookReq.stripeWebhookLogContext = {
+    event_id: webhookReq.stripeWebhookLogContext?.event_id ?? null,
+    event_type: webhookReq.stripeWebhookLogContext?.event_type ?? null,
+    stripe_signature_present: webhookReq.stripeWebhookLogContext?.stripe_signature_present ?? hasStripeSignatureHeader(req),
+    ...update,
+  };
+}
+
+function requestErrorLogFields(req: FastifyRequest) {
+  const fields: Record<string, unknown> = {
+    req_method: req.method,
+    req_url: req.url,
+    req_id: req.id,
+  };
+  if (req.url !== '/v1/webhooks/stripe') return fields;
+  const ctx = (req as StripeWebhookRequest).stripeWebhookLogContext;
+  fields.stripe_signature_present = ctx?.stripe_signature_present ?? hasStripeSignatureHeader(req);
+  if (ctx?.event_id) fields.event_id = ctx.event_id;
+  if (ctx?.event_type) fields.event_type = ctx.event_type;
+  return fields;
+}
+
 export function buildApp() {
   const app = Fastify({ logger: true });
 
@@ -92,9 +124,10 @@ export function buildApp() {
     done(null, body);
   });
 
-  app.setErrorHandler((err, _req, reply) => {
+  app.setErrorHandler((err, req, reply) => {
+    req.log.error({ err, ...requestErrorLogFields(req) }, 'unhandled error');
     if (reply.sent) return;
-    reply.status(500).send(errorEnvelope('internal_error', err.message || 'Internal server error'));
+    reply.send(err);
   });
 
   app.addHook('onRequest', async (req, reply) => {
@@ -373,75 +406,86 @@ export function buildApp() {
     });
 
     webhookApp.post('/v1/webhooks/stripe', async (req, reply) => {
-      const sigHeader = (req.headers['stripe-signature'] as string | undefined) ?? '';
-      if (!sigHeader) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'missing_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
-      }
-      const parsedSig = parseStripeSignature(sigHeader);
-      if (!parsedSig) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
-      }
-      const { t, v1Values } = parsedSig;
-      if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'timestamp_out_of_tolerance', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
-      }
-      const bodyBuffer = rawBodyBuffer(req.body);
-      if (bodyBuffer === null) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_raw_body', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
-      }
-      if (!config.stripeWebhookSecret) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'missing_webhook_secret', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
-      }
-
-      const payload = Buffer.concat([Buffer.from(String(t), 'utf8'), Buffer.from('.', 'utf8'), bodyBuffer]);
-      const expected = crypto.createHmac('sha256', config.stripeWebhookSecret).update(payload).digest('hex');
-      const signatureVerified = v1Values.some((v1) => timingSafeHexEqual(v1, expected));
-
-      let event: any;
+      setStripeWebhookLogContext(req, {
+        event_id: null,
+        event_type: null,
+        stripe_signature_present: hasStripeSignatureHeader(req),
+      });
       try {
-        event = JSON.parse(bodyBuffer.toString('utf8'));
-      } catch {
-        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_json_payload', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook JSON payload'));
-      }
-
-      const eventId = String(event.id ?? '');
-      const eventType = String(event.type ?? 'unknown');
-      if (!signatureVerified) {
-        webhookApp.log.warn({ signature_verified: false, reason: 'signature_mismatch', event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verification failed');
-        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
-      }
-      webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verified');
-
-      if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
-      await repo.insertStripeEvent(eventId, eventType, event);
-      try {
-        const processing = await (fabricService as any).processStripeEvent(event);
-        await repo.markStripeProcessed(eventId);
-        if (processing?.mapped === false && processing?.reason === 'unmapped_stripe_customer') {
-          webhookApp.log.warn(
-            {
-              signature_verified: true,
-              reason: 'unmapped_stripe_customer',
-              event_type: eventType,
-              event_id: eventId,
-              stripe_customer_id: processing?.stripe_customer_id ?? null,
-              stripe_subscription_id: processing?.stripe_subscription_id ?? null,
-            },
-            'Stripe webhook processed without node mapping',
-          );
+        const sigHeader = (req.headers['stripe-signature'] as string | undefined) ?? '';
+        if (!sigHeader) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'missing_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
         }
-        webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId }, 'Stripe webhook processed');
-        return { ok: true };
-      } catch (err: any) {
-        await repo.markStripeError(eventId, err?.message ?? 'processing_error');
-        webhookApp.log.warn({ signature_verified: true, reason: 'processing_error', event_type: eventType, event_id: eventId }, 'Stripe webhook processing failed');
-        return { ok: true };
+        const parsedSig = parseStripeSignature(sigHeader);
+        if (!parsedSig) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'invalid_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
+        }
+        const { t, v1Values } = parsedSig;
+        if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'timestamp_out_of_tolerance', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
+        }
+        const bodyBuffer = rawBodyBuffer(req.body);
+        if (bodyBuffer === null) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'invalid_raw_body', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
+        }
+        if (!config.stripeWebhookSecret) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'missing_webhook_secret', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+        }
+
+        const payload = Buffer.concat([Buffer.from(String(t), 'utf8'), Buffer.from('.', 'utf8'), bodyBuffer]);
+        const expected = crypto.createHmac('sha256', config.stripeWebhookSecret).update(payload).digest('hex');
+        const signatureVerified = v1Values.some((v1) => timingSafeHexEqual(v1, expected));
+
+        let event: any;
+        try {
+          event = JSON.parse(bodyBuffer.toString('utf8'));
+        } catch {
+          webhookApp.log.warn({ signature_verified: false, reason: 'invalid_json_payload', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook JSON payload'));
+        }
+
+        const eventId = String(event.id ?? '');
+        const eventType = String(event.type ?? 'unknown');
+        setStripeWebhookLogContext(req, { event_id: eventId || null, event_type: eventType || null });
+        if (!signatureVerified) {
+          webhookApp.log.warn({ signature_verified: false, reason: 'signature_mismatch', event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verification failed');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+        }
+        webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verified');
+
+        if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
+        await repo.insertStripeEvent(eventId, eventType, event);
+        try {
+          const processing = await (fabricService as any).processStripeEvent(event);
+          await repo.markStripeProcessed(eventId);
+          if (processing?.mapped === false && processing?.reason === 'unmapped_stripe_customer') {
+            webhookApp.log.warn(
+              {
+                signature_verified: true,
+                reason: 'unmapped_stripe_customer',
+                event_type: eventType,
+                event_id: eventId,
+                stripe_customer_id: processing?.stripe_customer_id ?? null,
+                stripe_subscription_id: processing?.stripe_subscription_id ?? null,
+              },
+              'Stripe webhook processed without node mapping',
+            );
+          }
+          webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId }, 'Stripe webhook processed');
+          return { ok: true };
+        } catch (err: any) {
+          await repo.markStripeError(eventId, err?.message ?? 'processing_error');
+          webhookApp.log.warn({ signature_verified: true, reason: 'processing_error', event_type: eventType, event_id: eventId }, 'Stripe webhook processing failed');
+          return { ok: true };
+        }
+      } catch (err) {
+        req.log.error({ err, ...requestErrorLogFields(req) }, 'stripe webhook handler failed');
+        return reply.code(500).send({ ok: false });
       }
     });
   });
