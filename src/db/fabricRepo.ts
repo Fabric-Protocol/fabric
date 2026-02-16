@@ -274,6 +274,10 @@ export async function findReferralCode(code: string) {
   return rows[0] ?? null;
 }
 
+export async function ensureReferralCode(code: string, issuerNodeId: string) {
+  await query('insert into referral_codes(code, issuer_node_id, active) values($1,$2,true) on conflict (code) do nothing', [code, issuerNodeId]);
+}
+
 export async function hasReferralClaim(nodeId: string) {
   const rows = await query<{ c: string }>('select count(*)::text as c from referral_claims where claimer_node_id=$1', [nodeId]);
   return Number(rows[0].c) > 0;
@@ -286,7 +290,8 @@ export async function hasPaidStripeEvent(nodeId: string) {
 
 export async function createReferralClaim(code: string, claimerNodeId: string, issuerNodeId: string) {
   await query(`insert into referral_claims(code,claimer_node_id,issuer_node_id,status)
-    values($1,$2,$3,'claimed')`, [code, claimerNodeId, issuerNodeId]);
+    values($1,$2,$3,'claimed')
+    on conflict (claimer_node_id) do nothing`, [code, claimerNodeId, issuerNodeId]);
 }
 
 export async function stripeEventExists(id: string) {
@@ -307,6 +312,9 @@ export async function markStripeError(id: string, message: string) {
 }
 
 export async function upsertSubscription(nodeId: string, planCode: string, status: string, periodStart: string | null, periodEnd: string | null, stripeCustomerId: string | null, stripeSubId: string | null) {
+  if (stripeSubId) {
+    await query('update subscriptions set stripe_subscription_id = null where stripe_subscription_id = $1 and node_id <> $2', [stripeSubId, nodeId]);
+  }
   await query(`insert into subscriptions(node_id,plan_code,status,current_period_start,current_period_end,stripe_customer_id,stripe_subscription_id)
     values($1,$2,$3,$4,$5,$6,$7)
     on conflict (node_id) do update set plan_code=excluded.plan_code,status=excluded.status,current_period_start=excluded.current_period_start,current_period_end=excluded.current_period_end,stripe_customer_id=excluded.stripe_customer_id,stripe_subscription_id=excluded.stripe_subscription_id`,

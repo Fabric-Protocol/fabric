@@ -58,8 +58,33 @@ function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   return { ok: true, reason: null };
 }
 
+function rawBodyString(body: unknown) {
+  if (typeof body === 'string') return body;
+  if (Buffer.isBuffer(body)) return body.toString('utf8');
+  if (body && typeof body === 'object') return JSON.stringify(body);
+  return null;
+}
+
+function parseStripeSignature(sigHeader: string) {
+  let tValue = '';
+  let v1Value = '';
+  for (const part of sigHeader.split(',')) {
+    const [k, ...rest] = part.trim().split('=');
+    const value = rest.join('=').trim();
+    if (k === 't') tValue = value;
+    if (k === 'v1' && !v1Value) v1Value = value;
+  }
+  const t = Number(tValue);
+  if (!t || !v1Value) return null;
+  return { t, v1: v1Value };
+}
+
 export function buildApp() {
   const app = Fastify({ logger: true });
+
+  app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => {
+    done(null, body);
+  });
 
   app.setErrorHandler((err, _req, reply) => {
     if (reply.sent) return;
@@ -339,18 +364,22 @@ export function buildApp() {
   app.post('/v1/webhooks/stripe', async (req, reply) => {
     const sig = (req.headers['stripe-signature'] as string | undefined) ?? '';
     if (!sig) return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
-    const parts = Object.fromEntries(sig.split(',').map((p) => p.split('=').map((x) => x.trim())));
-    const t = Number(parts.t ?? 0);
-    const v1 = String(parts.v1 ?? '');
-    if (!t || !v1) return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
+    const parts = parseStripeSignature(sig);
+    if (!parts) return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
+    const { t, v1 } = parts;
     if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
-    const bodyText = typeof req.body === 'string' ? req.body : JSON.stringify(req.body ?? {});
+    const bodyText = rawBodyString(req.body);
+    if (bodyText === null) return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
     const expected = crypto.createHmac('sha256', config.stripeWebhookSecret).update(`${t}.${bodyText}`).digest('hex');
     if (expected !== v1) return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
-    const event = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body as any);
+    let event: any;
+    try {
+      event = JSON.parse(bodyText);
+    } catch {
+      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook JSON payload'));
+    }
     const eventId = String(event.id ?? '');
     if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
-    if (await repo.stripeEventExists(eventId)) return { ok: true };
     await repo.insertStripeEvent(eventId, String(event.type ?? 'unknown'), event);
     try {
       await (fabricService as any).processStripeEvent(event);

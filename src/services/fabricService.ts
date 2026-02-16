@@ -24,9 +24,16 @@ export const fabricService = {
     await repo.ensureSubscription(node.id);
     await repo.addCredit(node.id, 'grant_signup', config.signupGrantCredits, {});
     if (payload.referral_code) {
-      const code = await repo.findReferralCode(payload.referral_code);
-      if (code?.active && !(await repo.hasPaidStripeEvent(node.id)) && !(await repo.hasReferralClaim(node.id))) {
-        await repo.createReferralClaim(payload.referral_code, node.id, code.issuer_node_id);
+      const referralCode = payload.referral_code.trim();
+      if (referralCode) {
+        let code = await repo.findReferralCode(referralCode);
+        if (!code) {
+          await repo.ensureReferralCode(referralCode, node.id);
+          code = await repo.findReferralCode(referralCode);
+        }
+        if (code?.active && !(await repo.hasPaidStripeEvent(node.id)) && !(await repo.hasReferralClaim(node.id))) {
+          await repo.createReferralClaim(referralCode, node.id, code.issuer_node_id);
+        }
       }
     }
     return {
