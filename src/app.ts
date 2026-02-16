@@ -58,25 +58,31 @@ function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   return { ok: true, reason: null };
 }
 
-function rawBodyString(body: unknown) {
-  if (typeof body === 'string') return body;
-  if (Buffer.isBuffer(body)) return body.toString('utf8');
-  if (body && typeof body === 'object') return JSON.stringify(body);
+function rawBodyBuffer(body: unknown) {
+  if (Buffer.isBuffer(body)) return body;
+  if (typeof body === 'string') return Buffer.from(body, 'utf8');
   return null;
 }
 
 function parseStripeSignature(sigHeader: string) {
   let tValue = '';
-  let v1Value = '';
+  const v1Values: string[] = [];
   for (const part of sigHeader.split(',')) {
     const [k, ...rest] = part.trim().split('=');
     const value = rest.join('=').trim();
     if (k === 't') tValue = value;
-    if (k === 'v1' && !v1Value) v1Value = value;
+    if (k === 'v1' && value) v1Values.push(value);
   }
   const t = Number(tValue);
-  if (!t || !v1Value) return null;
-  return { t, v1: v1Value };
+  if (!t || v1Values.length === 0) return null;
+  return { t, v1Values };
+}
+
+function timingSafeHexEqual(aHex: string, bHex: string) {
+  const a = Buffer.from(aHex, 'hex');
+  const b = Buffer.from(bHex, 'hex');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 export function buildApp() {
@@ -361,34 +367,70 @@ export function buildApp() {
     return { ok: true, referrer_node_id: out.referrer_node_id };
   });
 
-  app.post('/v1/webhooks/stripe', async (req, reply) => {
-    const sig = (req.headers['stripe-signature'] as string | undefined) ?? '';
-    if (!sig) return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
-    const parts = parseStripeSignature(sig);
-    if (!parts) return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
-    const { t, v1 } = parts;
-    if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
-    const bodyText = rawBodyString(req.body);
-    if (bodyText === null) return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
-    const expected = crypto.createHmac('sha256', config.stripeWebhookSecret).update(`${t}.${bodyText}`).digest('hex');
-    if (expected !== v1) return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
-    let event: any;
-    try {
-      event = JSON.parse(bodyText);
-    } catch {
-      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook JSON payload'));
-    }
-    const eventId = String(event.id ?? '');
-    if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
-    await repo.insertStripeEvent(eventId, String(event.type ?? 'unknown'), event);
-    try {
-      await (fabricService as any).processStripeEvent(event);
-      await repo.markStripeProcessed(eventId);
-      return { ok: true };
-    } catch (err: any) {
-      await repo.markStripeError(eventId, err?.message ?? 'processing_error');
-      return { ok: true };
-    }
+  app.register(async (webhookApp) => {
+    webhookApp.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
+      done(null, body);
+    });
+
+    webhookApp.post('/v1/webhooks/stripe', async (req, reply) => {
+      const sigHeader = (req.headers['stripe-signature'] as string | undefined) ?? '';
+      if (!sigHeader) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'missing_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
+      }
+      const parsedSig = parseStripeSignature(sigHeader);
+      if (!parsedSig) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
+      }
+      const { t, v1Values } = parsedSig;
+      if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'timestamp_out_of_tolerance', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
+      }
+      const bodyBuffer = rawBodyBuffer(req.body);
+      if (bodyBuffer === null) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_raw_body', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
+      }
+      if (!config.stripeWebhookSecret) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'missing_webhook_secret', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+      }
+
+      const payload = Buffer.concat([Buffer.from(String(t), 'utf8'), Buffer.from('.', 'utf8'), bodyBuffer]);
+      const expected = crypto.createHmac('sha256', config.stripeWebhookSecret).update(payload).digest('hex');
+      const signatureVerified = v1Values.some((v1) => timingSafeHexEqual(v1, expected));
+
+      let event: any;
+      try {
+        event = JSON.parse(bodyBuffer.toString('utf8'));
+      } catch {
+        webhookApp.log.warn({ signature_verified: false, reason: 'invalid_json_payload', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook JSON payload'));
+      }
+
+      const eventId = String(event.id ?? '');
+      const eventType = String(event.type ?? 'unknown');
+      if (!signatureVerified) {
+        webhookApp.log.warn({ signature_verified: false, reason: 'signature_mismatch', event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verification failed');
+        return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+      }
+      webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verified');
+
+      if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
+      await repo.insertStripeEvent(eventId, eventType, event);
+      try {
+        await (fabricService as any).processStripeEvent(event);
+        await repo.markStripeProcessed(eventId);
+        webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId }, 'Stripe webhook processed');
+        return { ok: true };
+      } catch (err: any) {
+        await repo.markStripeError(eventId, err?.message ?? 'processing_error');
+        webhookApp.log.warn({ signature_verified: true, reason: 'processing_error', event_type: eventType, event_id: eventId }, 'Stripe webhook processing failed');
+        return { ok: true };
+      }
+    });
   });
 
   app.post('/v1/admin/takedown', async (req, reply) => {

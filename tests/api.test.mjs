@@ -22,7 +22,7 @@ function sign(body) {
   const t = Math.floor(Date.now() / 1000);
   const raw = JSON.stringify(body);
   const v1 = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(`${t}.${raw}`).digest('hex');
-  return { raw, header: `t=${t},v1=${v1}` };
+  return { t, v1, raw, header: `t=${t},v1=${v1}` };
 }
 
 test('canonical error envelope for unauthorized', async () => {
@@ -80,6 +80,18 @@ test('webhook processes checkout.session.completed and is idempotent by event id
   const me = await repo.getMe(nodeId);
   assert.equal(me.sub_status, 'active');
   assert.equal(me.plan_code, 'pro');
+  await app.close();
+});
+
+test('webhook accepts valid signature when stripe-signature has multiple v1 values', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-multi');
+  const nodeId = b.json().node.id;
+  const body = { id: 'evt_2', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_2', subscription: 'sub_2' } } };
+  const sig = sign(body);
+  const header = `t=${sig.t},v1=00${sig.v1.slice(2)},v1=${sig.v1}`;
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': header }, payload: sig.raw });
+  assert.equal(res.statusCode, 200);
   await app.close();
 });
 

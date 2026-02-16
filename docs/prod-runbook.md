@@ -34,3 +34,11 @@
   - `GET /healthz` (expects `{ "ok": true }`)
 - DB connectivity:
   - TBD: no dedicated DB connectivity endpoint currently exists.
+
+## Stripe webhook signature verification check
+- Ensure `STRIPE_WEBHOOK_SECRET` is set for the target environment.
+- Send a signed test webhook from PowerShell:
+  - `.\scripts\verify-stripe-webhook.ps1 -Url "http://localhost:8080/v1/webhooks/stripe" -Secret "<STRIPE_WEBHOOK_SECRET>" -NodeId "<EXISTING_NODE_ID>"`
+- Expected result:
+  - HTTP `200` and `{ "ok": true }`
+  - Server logs include structured webhook fields (`event_type`, `event_id`, `signature_verified`) without exposing secrets.
