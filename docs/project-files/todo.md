@@ -40,13 +40,15 @@ Last updated: 2026-02-16
 - [x] Build and deploy container image to Cloud Run:
   - `.\scripts\deploy-cloud-run.ps1 -ProjectId fabric-487608`
 - [x] Set Cloud Run runtime env vars with real values:
-  - Done: `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
-- [ ] Complete Stripe production wiring:
+  - Done: `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `DATABASE_SSL_CA` (secret-backed)
+- [x] Complete Stripe production wiring:
   - Done: webhook destination + event selection + webhook secret configured
-  - Remaining: deterministic Node mapping for subscription/invoice lifecycle updates
+  - Done: deterministic Node mapping for subscription/invoice lifecycle updates
+  - Done: production TLS trust chain fix for Supabase Postgres (`DATABASE_SSL_CA`) eliminated webhook 500 TLS failures
 - [ ] Run post-deploy smoke tests:
   - Done: bootstrap + `GET /v1/me`, admin projections rebuild, webhook signature 200 deliveries
-  - Remaining: verify subscription state + credits transitions on mapped Stripe events
+  - Done: real Stripe webhook deliveries return 200 after TLS CA pinning; DB webhook insert path succeeds in Cloud Run
+  - Remaining: verify `/v1/me` subscription state + credits transitions on live mapped paid events
 
 ## P1 - Backend branch follow-ups
 - [x] Merge backend API contract/test gap work into `main` (PR #1 merged).

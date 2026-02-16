@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Enforce strict DB TLS with secret-backed CA pinning on Cloud Run
+Decision: Production DB connections use explicit TLS verification (`rejectUnauthorized: true`) with `DATABASE_SSL_CA` injected from GCP Secret Manager; SSL query params are stripped from `DATABASE_URL` before pg Pool config so runtime TLS settings are deterministic.
+Reason: Stripe webhook processing on Cloud Run was failing at DB insert with `SELF_SIGNED_CERT_IN_CHAIN` despite valid `DATABASE_URL`.
+Impact: Webhook deliveries moved from 500 to 200 in production, DB writes succeed under strict TLS, and CA rotation is now managed as Secret Manager version updates.
+
 ## 2026-02-16 - Stripe webhook node mapping fallback order
 Decision: Webhook processing maps Stripe events to a Node in this order: `metadata.node_id`, then stored `stripe_customer_id`, then stored `stripe_subscription_id`; if still unmapped, log `unmapped_stripe_customer` and return 200.
 Reason: Real Stripe subscription events can arrive without node metadata, but webhook handling must stay idempotent and non-failing while preserving observability.
