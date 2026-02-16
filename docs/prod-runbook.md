@@ -42,3 +42,18 @@
 - Expected result:
   - HTTP `200` and `{ "ok": true }`
   - Server logs include structured webhook fields (`event_type`, `event_id`, `signature_verified`) without exposing secrets.
+
+## Stripe node mapping requirements
+- For deterministic webhook mapping, Stripe events must include a Node mapping via:
+  - `metadata.node_id` on event payloads, or
+  - previously stored `stripe_customer_id`/`stripe_subscription_id` in `subscriptions`.
+- If neither mapping is present, webhook still returns `200` and logs `reason=unmapped_stripe_customer`.
+
+## Stripe subscription smoke test (PowerShell)
+- Run:
+  - `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "https://<api-host>" -BillingPath "/v1/billing/checkout-session" -PlanCode "basic"`
+- Flow:
+  - Bootstraps a node and captures `api_key`
+  - Calls configured billing checkout endpoint (if present)
+  - Prompts you to complete Stripe test checkout
+  - Verifies `GET /v1/me` and checks subscription status

@@ -284,7 +284,18 @@ export async function hasReferralClaim(nodeId: string) {
 }
 
 export async function hasPaidStripeEvent(nodeId: string) {
-  const rows = await query<{ c: string }>("select count(*)::text as c from stripe_events where type='invoice.paid' and coalesce(payload->'data'->'object'->'metadata'->>'node_id', payload->'data'->'object'->>'node_id', payload->>'node_id')=$1", [nodeId]);
+  const rows = await query<{ c: string }>(`select count(*)::text as c
+    from stripe_events e
+    where e.type='invoice.paid'
+      and (
+        coalesce(e.payload->'data'->'object'->'metadata'->>'node_id', e.payload->'data'->'object'->>'node_id', e.payload->>'node_id') = $1
+        or exists (
+          select 1 from subscriptions s
+          where s.node_id::text = $1
+            and s.stripe_customer_id is not null
+            and s.stripe_customer_id = coalesce(e.payload->'data'->'object'->>'customer', e.payload->>'customer')
+        )
+      )`, [nodeId]);
   return Number(rows[0].c) > 0;
 }
 
@@ -319,6 +330,16 @@ export async function upsertSubscription(nodeId: string, planCode: string, statu
     values($1,$2,$3,$4,$5,$6,$7)
     on conflict (node_id) do update set plan_code=excluded.plan_code,status=excluded.status,current_period_start=excluded.current_period_start,current_period_end=excluded.current_period_end,stripe_customer_id=excluded.stripe_customer_id,stripe_subscription_id=excluded.stripe_subscription_id`,
     [nodeId, planCode, status, periodStart, periodEnd, stripeCustomerId, stripeSubId]);
+}
+
+export async function findNodeIdByStripeCustomerId(stripeCustomerId: string) {
+  const rows = await query<{ node_id: string }>('select node_id from subscriptions where stripe_customer_id=$1 limit 1', [stripeCustomerId]);
+  return rows[0]?.node_id ?? null;
+}
+
+export async function findNodeIdByStripeSubscriptionId(stripeSubscriptionId: string) {
+  const rows = await query<{ node_id: string }>('select node_id from subscriptions where stripe_subscription_id=$1 limit 1', [stripeSubscriptionId]);
+  return rows[0]?.node_id ?? null;
 }
 
 export async function monthlyCreditGranted(nodeId: string, periodStart: string) {

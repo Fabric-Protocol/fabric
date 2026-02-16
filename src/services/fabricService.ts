@@ -241,29 +241,92 @@ export async function offerSummary(offer: any) {
 
 const planCredits: Record<string, number> = { free: 0, basic: 500, pro: 1500, business: 5000 };
 
-(fabricService as any).processStripeEvent = async (event: any) => {
-  const type = event.type;
-  const nodeId = event.data?.object?.metadata?.node_id ?? event.data?.object?.node_id ?? event.node_id ?? null;
-  if (!nodeId) return;
+function stripeId(value: any): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && typeof value.id === 'string') return value.id;
+  return null;
+}
 
-  if (type === 'customer.subscription.created' || type === 'customer.subscription.updated' || type === 'customer.subscription.deleted') {
-    const planCode = event.data?.object?.metadata?.plan_code ?? event.data?.object?.plan_code ?? 'free';
-    const status = type === 'customer.subscription.deleted' ? 'canceled' : (event.data?.object?.status ?? 'active');
-    await repo.upsertSubscription(nodeId, planCode, status, event.data?.object?.current_period_start ?? null, event.data?.object?.current_period_end ?? null, event.data?.object?.customer ?? null, event.data?.object?.id ?? null);
-    return;
+function stripeTimeToIso(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') return new Date(value * 1000).toISOString();
+  if (typeof value === 'string') {
+    if (/^\d+$/.test(value)) return new Date(Number(value) * 1000).toISOString();
+    return value;
+  }
+  return null;
+}
+
+async function resolvePlanCode(nodeId: string, event: any, fallback: string) {
+  const explicitPlan = event.data?.object?.metadata?.plan_code ?? event.data?.object?.plan_code ?? null;
+  if (explicitPlan) return explicitPlan;
+  const me = await repo.getMe(nodeId);
+  return me?.plan_code ?? fallback;
+}
+
+async function resolveNodeMapping(event: any) {
+  const object = event.data?.object ?? {};
+  const nodeIdFromPayload = object.metadata?.node_id ?? object.node_id ?? event.node_id ?? null;
+  const stripeCustomerId = stripeId(object.customer);
+  const stripeSubscriptionId = event.type?.startsWith('customer.subscription.') ? stripeId(object.id) : stripeId(object.subscription);
+
+  if (nodeIdFromPayload) {
+    return { nodeId: nodeIdFromPayload as string, source: 'metadata' as const, stripeCustomerId, stripeSubscriptionId };
   }
 
+  if (stripeCustomerId) {
+    const byCustomer = await repo.findNodeIdByStripeCustomerId(stripeCustomerId);
+    if (byCustomer) {
+      return { nodeId: byCustomer, source: 'stripe_customer_id' as const, stripeCustomerId, stripeSubscriptionId };
+    }
+  }
+
+  if (stripeSubscriptionId) {
+    const bySub = await repo.findNodeIdByStripeSubscriptionId(stripeSubscriptionId);
+    if (bySub) {
+      return { nodeId: bySub, source: 'stripe_subscription_id' as const, stripeCustomerId, stripeSubscriptionId };
+    }
+  }
+
+  return { nodeId: null, source: null, stripeCustomerId, stripeSubscriptionId };
+}
+
+(fabricService as any).processStripeEvent = async (event: any) => {
+  const type = String(event.type ?? 'unknown');
+  const object = event.data?.object ?? {};
+  const mapping = await resolveNodeMapping(event);
+  if (!mapping.nodeId) {
+    return {
+      mapped: false,
+      reason: 'unmapped_stripe_customer',
+      event_type: type,
+      stripe_customer_id: mapping.stripeCustomerId,
+      stripe_subscription_id: mapping.stripeSubscriptionId,
+    };
+  }
+
+  const nodeId = mapping.nodeId;
+  const stripeCustomerId = mapping.stripeCustomerId ?? stripeId(object.customer);
+  const stripeSubscriptionId = mapping.stripeSubscriptionId ?? (type.startsWith('customer.subscription.') ? stripeId(object.id) : stripeId(object.subscription));
+
+  if (type === 'customer.subscription.created' || type === 'customer.subscription.updated' || type === 'customer.subscription.deleted') {
+    const planCode = await resolvePlanCode(nodeId, event, 'free');
+    const status = type === 'customer.subscription.deleted' ? 'canceled' : (object.status ?? 'active');
+    await repo.upsertSubscription(nodeId, planCode, status, stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
+    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
+  }
 
   if (type === 'checkout.session.completed') {
-    const planCode = event.data?.object?.metadata?.plan_code ?? 'basic';
-    await repo.upsertSubscription(nodeId, planCode, 'active', event.data?.object?.current_period_start ?? null, event.data?.object?.current_period_end ?? null, event.data?.object?.customer ?? null, event.data?.object?.subscription ?? null);
-    return;
+    const planCode = await resolvePlanCode(nodeId, event, 'basic');
+    await repo.upsertSubscription(nodeId, planCode, 'active', stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
+    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
   }
 
   if (type === 'invoice.paid') {
-    const planCode = event.data?.object?.metadata?.plan_code ?? 'basic';
-    const periodStart = String(event.data?.object?.period_start ?? new Date().toISOString());
-    await repo.upsertSubscription(nodeId, planCode, 'active', periodStart, event.data?.object?.period_end ?? null, event.data?.object?.customer ?? null, event.data?.object?.subscription ?? null);
+    const planCode = await resolvePlanCode(nodeId, event, 'basic');
+    const periodStart = stripeTimeToIso(object.period_start) ?? new Date().toISOString();
+    await repo.upsertSubscription(nodeId, planCode, 'active', periodStart, stripeTimeToIso(object.period_end), stripeCustomerId, stripeSubscriptionId);
     if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {
       await repo.addCredit(nodeId, 'grant_subscription_monthly', planCredits[planCode] ?? 0, { period_start: periodStart });
     }
@@ -272,10 +335,14 @@ const planCredits: Record<string, number> = { free: 0, basic: 500, pro: 1500, bu
       await repo.addCredit(claim.issuer_node_id, 'grant_referral', 100, { claimer_node_id: nodeId, claim_id: claim.id });
       await repo.markReferralAwarded(claim.id);
     }
-    return;
+    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
   }
 
   if (type === 'invoice.payment_failed') {
-    await repo.upsertSubscription(nodeId, 'free', 'past_due', null, null, event.data?.object?.customer ?? null, event.data?.object?.subscription ?? null);
+    const planCode = await resolvePlanCode(nodeId, event, 'free');
+    await repo.upsertSubscription(nodeId, planCode, 'past_due', stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
+    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
   }
+
+  return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
 };

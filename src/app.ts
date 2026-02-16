@@ -421,8 +421,21 @@ export function buildApp() {
       if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
       await repo.insertStripeEvent(eventId, eventType, event);
       try {
-        await (fabricService as any).processStripeEvent(event);
+        const processing = await (fabricService as any).processStripeEvent(event);
         await repo.markStripeProcessed(eventId);
+        if (processing?.mapped === false && processing?.reason === 'unmapped_stripe_customer') {
+          webhookApp.log.warn(
+            {
+              signature_verified: true,
+              reason: 'unmapped_stripe_customer',
+              event_type: eventType,
+              event_id: eventId,
+              stripe_customer_id: processing?.stripe_customer_id ?? null,
+              stripe_subscription_id: processing?.stripe_subscription_id ?? null,
+            },
+            'Stripe webhook processed without node mapping',
+          );
+        }
         webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId }, 'Stripe webhook processed');
         return { ok: true };
       } catch (err: any) {

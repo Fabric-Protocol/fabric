@@ -95,6 +95,68 @@ test('webhook accepts valid signature when stripe-signature has multiple v1 valu
   await app.close();
 });
 
+test('webhook maps subscription events by stored stripe_customer_id when node metadata is absent', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-map-sub');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_map_sub_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_map_sub_${nodeId.slice(0, 8)}`;
+
+  const checkoutEvent = {
+    id: `evt_map_checkout_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
+  };
+  const checkoutSig = sign(checkoutEvent);
+  const checkoutRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': checkoutSig.header }, payload: checkoutSig.raw });
+  assert.equal(checkoutRes.statusCode, 200);
+
+  const subEvent = {
+    id: `evt_map_subscription_${nodeId.slice(0, 8)}`,
+    type: 'customer.subscription.updated',
+    data: { object: { id: subscriptionId, customer: customerId, status: 'active', current_period_start: 1735689600, current_period_end: 1738368000 } },
+  };
+  const subSig = sign(subEvent);
+  const subRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': subSig.header }, payload: subSig.raw });
+  assert.equal(subRes.statusCode, 200);
+
+  const me = await repo.getMe(nodeId);
+  assert.equal(me.sub_status, 'active');
+  assert.equal(me.plan_code, 'basic');
+  await app.close();
+});
+
+test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly credits once', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-map-invoice');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_map_invoice_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_map_invoice_${nodeId.slice(0, 8)}`;
+
+  const checkoutEvent = {
+    id: `evt_map_checkout_2_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
+  };
+  const checkoutSig = sign(checkoutEvent);
+  const checkoutRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': checkoutSig.header }, payload: checkoutSig.raw });
+  assert.equal(checkoutRes.statusCode, 200);
+
+  const balBefore = await repo.creditBalance(nodeId);
+  const invoiceEvent = {
+    id: `evt_map_invoice_paid_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: { object: { customer: customerId, subscription: subscriptionId, period_start: 1735689600, period_end: 1738368000 } },
+  };
+  const invoiceSig = sign(invoiceEvent);
+  const invoiceRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': invoiceSig.header }, payload: invoiceSig.raw });
+  assert.equal(invoiceRes.statusCode, 200);
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter - balBefore, 1500);
+  await app.close();
+});
+
 test('metering only charges on HTTP 200 for search', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search');
