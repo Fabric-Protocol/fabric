@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - ADMIN_KEY boundary (API auth only)
+Decision: Treat `ADMIN_KEY` strictly as an API/admin authentication secret, not a PostgreSQL credential.
+Reason: Avoid cross-system secret coupling and prevent mistaken DB password rotations during API key changes.
+Impact: Postgres authentication remains exclusively governed by `DATABASE_URL`; rotate `ADMIN_KEY` independently.
+
 ## 2026-02-16 - Track package-lock.json (repo policy)
 Decision: Commit and maintain package-lock.json in git.
 Reason: Deterministic installs/CI; avoid dependency drift across machines.

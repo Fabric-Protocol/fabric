@@ -3,10 +3,9 @@
 Last updated: 2026-02-16
 
 ## P0 - Post-merge decisions and hygiene
-- [ ] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
-  - A) commit it and keep it updated
-  - B) keep it untracked (current after revert)
-- [ ] Apply the chosen lockfile policy in a clean follow-up PR.
+- [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
+  - Policy chosen: commit it and keep it updated.
+- [x] Apply the chosen lockfile policy in a clean follow-up PR (merged to `main`).
 - [x] Keep local-only project-files artifacts out of git using `.git/info/exclude` (done in this thread).
 
 ## P0 - Keep local verification baseline healthy

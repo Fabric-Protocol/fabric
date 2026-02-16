@@ -1,41 +1,43 @@
-﻿# Thread Handoff
+# Thread Handoff
 
 Last updated: 2026-02-16
 
 ## Repo and branches
 - Repo: `fabric-api`
 - Current branch: `main`
-- Target branch: `main` (create a short-lived policy branch only if lockfile tracking behavior changes)
+- Target branch: `main`
 
 ## Current git snapshot
-- Last commit: `f9f2f0f` (`Revert "chore: add package-lock.json"`)
-- Working tree: clean (`git status --short` empty)
+- Last commit: `f099be7` (`docs: record lockfile and admin key decisions`)
+- Working tree: clean (`git status --short --branch` shows only `## main...origin/main`)
 
 ## What just changed in this thread
-- Merged PR #1 into `main` (contract-gap closures + endpoint-level `app.inject` tests).
-- Synced local `main` with `origin/main`.
-- Confirmed local tests pass (`npm test`).
-- Chose local-only tracking behavior for thread workflow artifacts via `.git/info/exclude`.
-- Accidentally committed `package-lock.json`, then reverted it on `main`.
+- Lockfile policy work was completed end-to-end:
+  - Created `codex/package-lock-policy`
+  - Generated and committed `package-lock.json`
+  - Merged PR with only lockfile change into `main`
+  - Deleted short-lived branch after merge
+- Confirmed baseline checks:
+  - `npm test` passes
+  - `.env` is not tracked (`git ls-files -- .env .env.*`)
+- Recorded policy/secret-boundary notes in decision log:
+  - Track and maintain `package-lock.json`
+  - `ADMIN_KEY` is API-only and separate from Postgres auth
 
 ## Current blocker
-- Repo-wide policy for `package-lock.json` is unresolved.
-  - Option A: track and maintain lockfile.
-  - Option B: keep it untracked (current state after revert).
+- No active code blocker on `main`.
+- Next blocker is operational readiness for productionization (prod Postgres provisioning, deploy env wiring, Stripe setup).
 
 ## Exact next command sequence
 1. `git switch main`
 2. `git pull`
 3. `git status --short`
 4. `npm test`
-5. Decide lockfile policy:
-   - If policy is "track lockfile":
-     1. `git switch -c codex/package-lock-policy`
-     2. `npm install`
-     3. `git add package-lock.json`
-     4. `git commit -m "chore: track package-lock.json"`
-   - If policy is "do not track lockfile":
-     1. No code changes; record decision in `docs/project-files/decision-log.md` and proceed with feature work from `main`.
+5. `# Begin productionization work`
+6. `# - provision prod Postgres`
+7. `# - deploy API`
+8. `# - set prod env vars (DATABASE_URL, ADMIN_KEY)`
+9. `# - configure Stripe products/webhook and run smoke tests`
 
 ## Handoff objective for next thread
-- Resolve `package-lock.json` policy and execute the matching branch/commit flow without changing unrelated files.
+- Start productionization from clean `main` without reopening lockfile-policy decisions.
