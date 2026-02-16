@@ -3,3 +3,5 @@ dist/
 .env.*
 .env
 coverage
+# local debugging filters
+logfilter.txt

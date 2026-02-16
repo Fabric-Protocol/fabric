@@ -6,6 +6,7 @@ import { errorEnvelope } from './http.js';
 import { fabricService } from './services/fabricService.js';
 import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
+import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 
 type AuthedRequest = FastifyRequest & { nodeId?: string; plan?: string; isSubscriber?: boolean; idem?: { key: string; hash: string; keyScope: string } };
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
@@ -13,6 +14,7 @@ type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeW
 
 const nonGet = new Set(['POST', 'PATCH', 'DELETE', 'PUT']);
 const anonIdem = new Map<string, { hash: string; status: number; response: unknown }>();
+let startupDbEnvCheckLogged = false;
 
 const resourceSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
@@ -119,6 +121,11 @@ function requestErrorLogFields(req: FastifyRequest) {
 
 export function buildApp() {
   const app = Fastify({ logger: true });
+
+  if (!startupDbEnvCheckLogged) {
+    startupDbEnvCheckLogged = true;
+    app.log.info({ ...getSafeDbEnvDiagnostics(), check_point: 'startup' }, 'db env check');
+  }
 
   app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => {
     done(null, body);
@@ -406,6 +413,7 @@ export function buildApp() {
     });
 
     webhookApp.post('/v1/webhooks/stripe', async (req, reply) => {
+      req.log.info({ ...getSafeDbEnvDiagnostics(), check_point: 'stripe_webhook' }, 'db env check');
       setStripeWebhookLogContext(req, {
         event_id: null,
         event_type: null,
