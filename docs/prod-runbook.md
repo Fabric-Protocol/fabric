@@ -16,6 +16,7 @@
 ## Store secrets in deployment env vars
 - Required:
   - `DATABASE_URL`
+  - `DATABASE_SSL_CA`
   - `ADMIN_KEY`
   - `STRIPE_SECRET_KEY`
   - `STRIPE_WEBHOOK_SECRET`

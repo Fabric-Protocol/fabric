@@ -22,6 +22,7 @@ export function getSafeDbEnvDiagnostics() {
     pghost_present: Boolean(pghost),
     pghost,
     pgport,
+    database_ssl_ca_present: Boolean(config.databaseSslCa),
     config_database_url_present: Boolean(config.databaseUrl),
     config_database_url_host: parseDatabaseUrlHost(config.databaseUrl),
   };

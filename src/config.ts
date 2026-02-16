@@ -5,6 +5,7 @@ export const config = {
   port: Number(process.env.PORT ?? 8080),
   host: process.env.HOST ?? '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL ?? '',
+  databaseSslCa: process.env.DATABASE_SSL_CA ?? '',
   adminKey: process.env.ADMIN_KEY ?? '',
   defaultRateLimitLimit: Number(process.env.DEFAULT_RATE_LIMIT_LIMIT ?? 1000),
   searchCreditCost: Number(process.env.SEARCH_CREDIT_COST ?? 2),

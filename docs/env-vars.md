@@ -9,6 +9,11 @@
 - Get this from Supabase Dashboard -> Project -> Connect -> Direct connection string.
 - Use provider defaults / SSL required.
 
+### `DATABASE_SSL_CA`
+- Supabase DB CA certificate in PEM format.
+- Recommended source: Supabase Dashboard -> Database -> Connection info/certificate.
+- Use this to enforce strict TLS verification for Postgres connections.
+
 ### `ADMIN_KEY`
 - Admin authentication secret for `/v1/admin/*` endpoints.
 
