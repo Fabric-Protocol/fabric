@@ -1208,7 +1208,7 @@ None
 
 Purpose
 
-Invoked by scheduler (Vercel Cron) to rebuild projections.
+Invoked by scheduler to rebuild projections.
 
 Query
 

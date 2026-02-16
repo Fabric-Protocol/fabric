@@ -9,8 +9,12 @@ All implementation MUST conform to these docs under `docs/specs/` (precedence or
 2. `10__invariants.md`
 3. `20__api-contracts.md`
 4. `22__projections-and-search.md`
-5. `30__mvp-scope.md`
-6. `40__vision.md` (non-normative)
+5. `25__plans-credits-gating.md
+6. `30__mvp-scope.md`
+7. `40__vision.md` (non-normative)
+8. `01__implementation-map.md` (implementation guidance; non-authoritative vs items 1–6)
+9. `02__agent-onboarding.md` (onboarding guidance; non-authoritative vs items 1–6)
+10. `40__vision.md` (non-normative)
 
 If anything conflicts, update the later doc(s). Do not “resolve” by inventing new behavior in code.
 

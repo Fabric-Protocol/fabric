@@ -13,8 +13,8 @@ Precedence: This file is **informational**, but the routing/auth/error/idempoten
 ## 0) Repo + runtime assumptions
 
 Backend repo: `fabric-api`  
-Runtime: (fill) `Next.js API routes` | `Express` | `Fastify` | `Hono` | other: ______  
-DB: (fill) `Postgres` (recommended)  
+Runtime: **Fastify** (Node.js LTS + TypeScript)  
+DB: **Postgres**  
 ORM/query: (fill) `drizzle` | `prisma` | `kysely` | SQL-only  
 Migrations: (fill) `drizzle-kit` | `prisma migrate` | `knex` | `sqitch` | SQL scripts
 

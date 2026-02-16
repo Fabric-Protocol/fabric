@@ -13,7 +13,10 @@ If any requirement conflicts, resolve in this order:
 3. **20__api-contracts.md** (endpoint-by-endpoint contracts)
 4. **21__db-ddl.sql** (DDL is authoritative for storage constraints, not API semantics)
 5. **22__projections-and-search.md** (projection/search mechanics, allowlists, ranking)
-6. **30__mvp-scope.md** (what is/ isn’t in MVP)
+6. **25__plans-credits-gating.md
+7. **30__mvp-scope.md** (what is/ isn’t in MVP)
+8. **01__implementation-map.md** (implementation guidance; non-authoritative vs invariants/contracts)
+9. **02__agent-onboarding.md** (agent onboarding; non-authoritative vs invariants/contracts)
 
 **40__vision.md is non-normative** (must not add new requirements).
 
