@@ -34,18 +34,19 @@ Last updated: 2026-02-16
   - `docs/env-vars.md`, `docs/prod-runbook.md`, `docs/deploy-cloud-run.md`
   - `scripts/validate-env.ps1`, `scripts/deploy-cloud-run.ps1`
   - Hermetic test env reset in `tests/api.test.mjs`
-- [ ] Authenticate GCP CLI and set active project:
+- [x] Authenticate GCP CLI and set active project:
   - `gcloud auth login`
-  - `gcloud config set project <PROJECT_ID>`
-- [ ] Build and deploy container image to Cloud Run:
-  - `.\scripts\deploy-cloud-run.ps1 -ProjectId <PROJECT_ID>`
+  - `gcloud config set project fabric-487608`
+- [x] Build and deploy container image to Cloud Run:
+  - `.\scripts\deploy-cloud-run.ps1 -ProjectId fabric-487608`
 - [ ] Set Cloud Run runtime env vars with real values:
-  - `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+  - Done: `DATABASE_URL`, `ADMIN_KEY`
+  - Remaining: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 - [ ] Complete Stripe production wiring:
   - Configure products/prices + webhook destination/secret
 - [ ] Run post-deploy smoke tests:
-  - `GET /healthz`
-  - bootstrap + auth-keys flow against deployed Cloud Run URL
+  - Done: bootstrap + `GET /v1/me`, admin projections rebuild
+  - Remaining: webhook/subscription transition smoke tests
 
 ## P1 - Backend branch follow-ups
 - [x] Merge backend API contract/test gap work into `main` (PR #1 merged).

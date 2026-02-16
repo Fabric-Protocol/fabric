@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Production schema baseline from canonical DDL
+Decision: Initialize the Supabase production database from `docs/specs/21__db-ddl.sql` before Cloud Run smoke tests.
+Reason: Ensure deployed API behavior runs against the canonical MVP schema.
+Impact: Base production tables are now present (including `nodes`); future schema changes should continue from this baseline.
+
 ## 2026-02-16 - Production target locked: Supabase direct + Cloud Run
 Decision: Production deployment uses Supabase Postgres via direct connection string (non-pooler), with Supabase Data API disabled, and deploy target set to GCP Cloud Run (container-first).
 Reason: Keep API-to-DB connectivity explicit through `DATABASE_URL` and standardize deployment path for productionization.

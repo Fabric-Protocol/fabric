@@ -8,41 +8,37 @@ Last updated: 2026-02-16
 - Target branch: `main`
 
 ## Current git snapshot
-- Last commit: `6ff7a6f` (`deploy: Cloud Run container + make tests hermetic`)
-- Working tree: clean (`git status --short --branch` reports only `## main...origin/main`)
+- Last commit: `e92df2a` (`project-files: update handoff/todo/decisions from thread notes`)
+- Working tree: not clean (untracked: `tmp-bootstrap.json`, `tmp/`)
 
 ## What just changed in this thread
-- Locked productionization decisions:
-  - Supabase as prod Postgres provider
-  - Direct (non-pooler) DB connection
-  - Supabase Data API disabled
-  - GCP Cloud Run as deploy target
-- Added productionization docs/tooling:
-  - `docs/env-vars.md`, `docs/prod-runbook.md`, `docs/deploy-cloud-run.md`
-  - `scripts/validate-env.ps1`, `scripts/deploy-cloud-run.ps1`
-  - `Dockerfile`, `.dockerignore`
-- Runtime bind alignment for Cloud Run:
-  - `src/config.ts` default `PORT` is now `8080`
-  - `HOST` remains `0.0.0.0`
-- Test reliability fix:
-  - `tests/api.test.mjs` now deletes shell-provided `DATABASE_URL` / admin / Stripe env vars at top before app setup.
-- Validation outcome:
-  - `npm test` passes after hermetic env fix.
+- Confirmed Cloud Run deployment is live in `us-west1`:
+  - Service URL: `https://fabric-api-393345198409.us-west1.run.app`
+- Wired production DB credentials to Cloud Run:
+  - `DATABASE_URL` set to Supabase direct connection
+  - `ADMIN_KEY` set on Cloud Run
+- Resolved deployment blockers in sequence:
+  - Missing `DATABASE_URL` caused localhost DB attempts
+  - Supabase password mismatch was corrected
+  - Missing schema (`relation "nodes" does not exist`) fixed by running `docs/specs/21__db-ddl.sql` in Supabase SQL editor
+- Production smoke checks now passing:
+  - `POST /v1/bootstrap` returns node + api key + signup credits
+  - `GET /v1/me` succeeds with returned `ApiKey`
+  - `POST /v1/admin/projections/rebuild?kind=all&mode=full` succeeds with admin key
 
 ## Current blocker
-- First production deploy has not been executed yet.
-- Remaining blockers: Cloud Run env var injection with real secrets, Stripe product/webhook setup, and deployed smoke checks.
+- Stripe production setup is still pending:
+  - Cloud Run missing `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`
+  - Stripe products/prices and webhook wiring not completed yet
 
 ## Exact next command sequence
 1. `git switch main`
 2. `git pull`
-3. `npm test`
-4. `gcloud auth login`
-5. `gcloud config set project <PROJECT_ID>`
-6. `.\scripts\deploy-cloud-run.ps1 -ProjectId <PROJECT_ID>`
-7. `gcloud run services update fabric-api --region us-west1 --set-env-vars "DATABASE_URL=postgresql://postgres:[PASSWORD]@db.[PROJECT_REF].supabase.co:5432/postgres,ADMIN_KEY=[ADMIN_KEY],STRIPE_SECRET_KEY=[STRIPE_SECRET_KEY],STRIPE_WEBHOOK_SECRET=[STRIPE_WEBHOOK_SECRET]"`
-8. `# Configure Stripe products/prices and webhook secret in Stripe + Cloud Run`
-9. `# Smoke test deployed service: GET /healthz and bootstrap/auth-key flow`
+3. `gcloud config set project fabric-487608`
+4. `gcloud run services update fabric-api --project fabric-487608 --region us-west1 --update-env-vars "STRIPE_SECRET_KEY=[STRIPE_SECRET_KEY],STRIPE_WEBHOOK_SECRET=[STRIPE_WEBHOOK_SECRET]"`
+5. `# Configure Stripe products/prices in Stripe dashboard`
+6. `# Configure webhook endpoint: https://fabric-api-393345198409.us-west1.run.app/v1/webhooks/stripe`
+7. `# Run webhook smoke tests and verify subscription state transitions`
 
 ## Handoff objective for next thread
-- Execute first Cloud Run deploy and complete post-deploy env/Stripe/smoke-test checklist.
+- Complete Stripe wiring on the deployed Cloud Run service and validate end-to-end subscription flows.
