@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
+delete process.env.DATABASE_URL;
+delete process.env.ADMIN_KEY;
+delete process.env.STRIPE_SECRET_KEY;
+delete process.env.STRIPE_WEBHOOK_SECRET;
+
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 
