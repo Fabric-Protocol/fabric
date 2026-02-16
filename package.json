@@ -10,7 +10,8 @@
     "lint": "npm run typecheck",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/**/*.test.mjs",
-    "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js"
+    "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",
+    "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
