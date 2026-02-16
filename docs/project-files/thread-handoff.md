@@ -2,34 +2,40 @@
 
 Last updated: 2026-02-16
 
-## Current git snapshot
-- Branch: `codex/implement-fabric-api-mvp-backend-service`
-- Last commit before this handoff update: `e26d7c7` (`docs: lock MVP stack to Fastify + Postgres + Cloud Run`)
-- Status before this handoff update: `?? docs/project-files/` and `?? scripts/thread-switch.ps1`
+## Repo and branches
+- Repo: `fabric-api`
+- Current branch: `main`
+- Target branch: `main` (create a short-lived policy branch only if lockfile tracking behavior changes)
 
-## What just changed
-- Docs/specs stack lock was merged to `main` in the prior thread.
-- Local PostgreSQL 17 was installed and verified (`psql 17.8`).
-- Local database `fabric` was created.
-- Project files (`todo`, `decision-log`, `thread-handoff`) were refreshed from `thread-notes`.
+## Current git snapshot
+- Last commit: `f9f2f0f` (`Revert "chore: add package-lock.json"`)
+- Working tree: clean (`git status --short` empty)
+
+## What just changed in this thread
+- Merged PR #1 into `main` (contract-gap closures + endpoint-level `app.inject` tests).
+- Synced local `main` with `origin/main`.
+- Confirmed local tests pass (`npm test`).
+- Chose local-only tracking behavior for thread workflow artifacts via `.git/info/exclude`.
+- Accidentally committed `package-lock.json`, then reverted it on `main`.
 
 ## Current blocker
-- `.env` is not yet configured for local Postgres on this backend branch, so DB bootstrap/tests have not been run to completion.
+- Repo-wide policy for `package-lock.json` is unresolved.
+  - Option A: track and maintain lockfile.
+  - Option B: keep it untracked (current state after revert).
 
 ## Exact next command sequence
-1. `git switch codex/implement-fabric-api-mvp-backend-service`
+1. `git switch main`
 2. `git pull`
-3. `copy .env.example .env`
-4. Edit `.env` and set:
-   - `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
-   - `ADMIN_KEY=<non-empty>`
-5. `npm run db:bootstrap`
-6. `npm test`
-7. If either fails, capture:
-   - full `npm run db:bootstrap` output
-   - first failing `npm test` block
-   - `netstat -ano | findstr :5432`
-   - `psql --version`
+3. `git status --short`
+4. `npm test`
+5. Decide lockfile policy:
+   - If policy is "track lockfile":
+     1. `git switch -c codex/package-lock-policy`
+     2. `npm install`
+     3. `git add package-lock.json`
+     4. `git commit -m "chore: track package-lock.json"`
+   - If policy is "do not track lockfile":
+     1. No code changes; record decision in `docs/project-files/decision-log.md` and proceed with feature work from `main`.
 
 ## Handoff objective for next thread
-- Get bootstrap + tests green on `codex/implement-fabric-api-mvp-backend-service`, then proceed to merge readiness checks.
+- Resolve `package-lock.json` policy and execute the matching branch/commit flow without changing unrelated files.

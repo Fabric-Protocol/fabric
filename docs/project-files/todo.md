@@ -1,45 +1,34 @@
-﻿# Fabric — TODO (thread-active)
+﻿# Fabric - TODO (thread-active)
 
 Last updated: 2026-02-16
 
-## P0 — Unblock local verification (required before merging backend code PR)
-- [ ] Confirm you are on `codex/implement-fabric-api-mvp-backend-service` and up to date:
-  - `git switch codex/implement-fabric-api-mvp-backend-service`
+## P0 - Post-merge decisions and hygiene
+- [ ] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
+  - A) commit it and keep it updated
+  - B) keep it untracked (current after revert)
+- [ ] Apply the chosen lockfile policy in a clean follow-up PR.
+- [x] Keep local-only project-files artifacts out of git using `.git/info/exclude` (done in this thread).
+
+## P0 - Keep local verification baseline healthy
+- [x] Sync `main` and verify status is clean:
+  - `git switch main`
   - `git pull`
+  - `git status --short`
+- [x] Run local test suite on current `main`:
+  - `npm test`
 - [ ] Ensure PostgreSQL service is running and listening on port 5432:
   - Verify: `netstat -ano | findstr :5432`
-- [ ] Ensure `psql` is available in PATH (Postgres bin):
+- [ ] Ensure `psql` is available in PATH:
   - Verify: `psql --version`
-- [ ] Create DB `fabric` (once):
-  - In `psql`: `CREATE DATABASE fabric;`
-- [ ] Configure repo env:
-  - Create `.env` from `.env.example`
-  - Set `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
-  - Set `ADMIN_KEY=<non-empty>`
-- [ ] Run DB bootstrap:
-  - `npm run db:bootstrap`
-- [ ] Run tests:
-  - `npm test`
-- [ ] If failures: capture logs and classify root cause:
-  - DB connectivity/service/credentials
-  - DB/schema/bootstrap issues
-  - Env var issues
-  - Contract mismatch
-  - Node version/toolchain mismatch (LTS vs non-LTS)
+- [ ] Validate repo `.env` values for local DB remain correct:
+  - `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
+  - `ADMIN_KEY=<non-empty>`
 
-## P0 — Confirm runtime/toolchain matches “stack A”
-- [ ] Stack A is canonical: Node.js (LTS) + TypeScript + Fastify + Postgres + Cloud Run-compatible Dockerfile.
-- [ ] If issues appear, align Node to LTS (v22.x recommended).
-
-## P1 — Merge backend scaffold PR once locally verified
-- [ ] Verify on branch `codex/implement-fabric-api-mvp-backend-service`:
+## P1 - Backend branch follow-ups
+- [x] Merge backend API contract/test gap work into `main` (PR #1 merged).
+- [ ] If new backend changes are needed, branch from updated `main` and rerun:
   - `npm run typecheck`
   - `npm test`
-- [ ] Merge into `main` after local verification passes.
 
-## P1 — Repo hygiene
+## P1 - Repo hygiene
 - [ ] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
-- [ ] Decide policy for `package-lock.json` and record it in decision-log:
-  - A) commit it (recommended for deterministic installs)
-  - B) keep untracked (current)
-  - C) ignore repo-wide (only if intentional)

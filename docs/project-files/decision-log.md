@@ -2,6 +2,14 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-16 - Keep local project-files workflow artifacts untracked
+Decision: Local workflow artifacts under `docs/project-files` (workflow/prompt/archive files) and `scripts/thread-switch.ps1` should stay local-only and not be tracked in repo commits.
+Reason: Keep shared git history focused on product code/spec/docs changes while allowing local thread workflow files.
+Where captured:
+- `docs/project-files/thread-notes.md` (2026-02-15/16 merge + cleanup thread)
+Impact:
+- Local excludes were added via `.git/info/exclude`; `git status` remains clean locally.
+
 ## 2026-02-15 - Local verification baseline set to PostgreSQL 17 + `fabric` database
 Decision: Local MVP verification uses PostgreSQL 17 with a local `fabric` database on `localhost:5432`.
 Reason: `npm run db:bootstrap` failed with `ECONNREFUSED` until a local Postgres instance was installed and initialized.
