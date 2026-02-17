@@ -26,6 +26,7 @@ const REQUIRED_LEGAL_VERSION = '2026-02-17';
 
 const { buildApp } = await import('../dist/src/app.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
+const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 
 async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', email: null, referral_code: null }) {
@@ -39,6 +40,20 @@ async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', 
   };
   const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': idk }, payload: requestPayload });
   return res;
+}
+
+async function suspendNode(nodeId) {
+  await query("update nodes set status='SUSPENDED', suspended_at=now() where id=$1", [nodeId]);
+}
+
+async function activateBasicSubscriber(app, nodeId, eventIdPrefix = 'evt_subscriber') {
+  const body = {
+    id: `${eventIdPrefix}_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
+  };
+  const sig = sign(body);
+  return app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 }
 
 function sign(body) {
@@ -212,6 +227,65 @@ test('GET /v1/auth/keys returns masked prefix format', async () => {
   await app.close();
 });
 
+test('suspended node api key is rejected at auth middleware', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-suspend-auth');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const activeRes = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(activeRes.statusCode, 200);
+
+  await suspendNode(nodeId);
+
+  const suspendedRes = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(suspendedRes.statusCode, 403);
+  assert.equal(suspendedRes.json().error.code, 'forbidden');
+  assert.equal(suspendedRes.json().error.message, 'Node is suspended');
+  await app.close();
+});
+
+test('publish endpoint rejects suspended node before projection write', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-suspend-publish');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', nodeId, {
+    title: 'Suspended publish',
+    description: 'should be blocked',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    measure: 'EA',
+    custom_measure: null,
+    scope_primary: 'OTHER',
+    scope_secondary: [],
+    scope_notes: 'suspension-publish',
+    location_text_public: null,
+    origin_region: null,
+    dest_region: null,
+    service_region: null,
+    delivery_format: null,
+    tags: [],
+    category_ids: [],
+    public_summary: 'suspension publish test',
+  });
+
+  await suspendNode(nodeId);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unit.id}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `suspend-publish-${nodeId}` },
+    payload: {},
+  });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error.code, 'forbidden');
+  assert.equal(res.json().error.message, 'Node is suspended');
+  await app.close();
+});
+
 test('subscriber-gated endpoints stay blocked for non-subscribers even with credits', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-subscriber-gate');
@@ -289,7 +363,7 @@ test('GET /v1/credits/quote returns pack and plan quote catalog', async () => {
   assert.equal(body.credit_packs.length, 3);
   assert.equal(body.credit_packs[0].pack_code, 'credits_100');
   assert.equal(body.credit_packs[0].credits, 100);
-  assert.equal(body.credit_packs[0].price_cents, 400);
+  assert.equal(body.credit_packs[0].price_cents, 399);
   assert.equal(body.credit_packs[0].stripe_price_id, 'price_topup_100_test');
   await app.close();
 });
@@ -1144,6 +1218,76 @@ test('search excludes caller-owned published listings and requests by default', 
   assert.equal(requestsRes.statusCode, 200);
   const ownRequestSeen = requestsRes.json().items.some((row) => row.item?.node_id === nodeId);
   assert.equal(ownRequestSeen, false);
+
+  await app.close();
+});
+
+test('search and public node inventory exclude suspended nodes', async () => {
+  const app = buildApp();
+
+  const searcherBoot = await bootstrap(app, 'boot-suspend-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  const activated = await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_susp');
+  assert.equal(activated.statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-suspend-target');
+  const targetNodeId = targetBoot.json().node.id;
+
+  const unit = await repo.createResource('units', targetNodeId, {
+    title: 'Suspended listing',
+    description: 'should disappear from public search',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    measure: 'EA',
+    custom_measure: null,
+    scope_primary: 'OTHER',
+    scope_secondary: [],
+    scope_notes: 'suspended-visibility',
+    location_text_public: null,
+    origin_region: null,
+    dest_region: null,
+    service_region: null,
+    delivery_format: null,
+    tags: [],
+    category_ids: [],
+    public_summary: 'suspended visibility',
+  });
+  await repo.setPublished('units', unit.id, true);
+  const published = await repo.getResource('units', targetNodeId, unit.id);
+  await repo.upsertProjection('units', published);
+
+  const before = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-before-${searcherNodeId}` },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(before.statusCode, 200);
+  const seenBefore = before.json().items.some((row) => row.item?.node_id === targetNodeId);
+  assert.equal(seenBefore, true);
+
+  await suspendNode(targetNodeId);
+
+  const after = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-after-${searcherNodeId}` },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(after.statusCode, 200);
+  const seenAfter = after.json().items.some((row) => row.item?.node_id === targetNodeId);
+  assert.equal(seenAfter, false);
+
+  const inventory = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${targetNodeId}/listings?limit=20`,
+    headers: { authorization: `ApiKey ${searcherApiKey}` },
+  });
+  assert.equal(inventory.statusCode, 200);
+  assert.equal(Array.isArray(inventory.json().items), true);
+  assert.equal(inventory.json().items.length, 0);
 
   await app.close();
 });

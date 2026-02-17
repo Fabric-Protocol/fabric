@@ -5,10 +5,17 @@ export type NodeContext = { nodeId: string };
 
 export async function findApiKey(rawKey: string) {
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
-  const rows = await query<{ node_id: string; plan_code: string; status: string }>(
-    `select ak.node_id, coalesce(s.plan_code, 'free') as plan_code, coalesce(s.status, 'none') as status
-     from api_keys ak left join subscriptions s on s.node_id=ak.node_id
-     where ak.key_hash=$1 and ak.revoked_at is null limit 1`,
+  const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean }>(
+    `select
+       ak.node_id,
+       coalesce(s.plan_code, 'free') as plan_code,
+       coalesce(s.status, 'none') as status,
+       (n.status <> 'ACTIVE' or n.suspended_at is not null) as is_suspended
+     from api_keys ak
+     join nodes n on n.id = ak.node_id and n.deleted_at is null
+     left join subscriptions s on s.node_id = ak.node_id
+     where ak.key_hash=$1 and ak.revoked_at is null
+     limit 1`,
     [keyHash],
   );
   return rows[0] ?? null;
@@ -79,7 +86,7 @@ export async function addCreditIdempotent(nodeId: string, type: string, amount: 
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
-      n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,
+      n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,
       coalesce(s.plan_code,'free') as plan_code, coalesce(s.status,'none') as sub_status,
       s.current_period_start,s.current_period_end
      from nodes n left join subscriptions s on s.node_id=n.id where n.id=$1 and n.deleted_at is null`,
@@ -209,19 +216,61 @@ export async function searchPublic(kind:'listings'|'requests', scope:string, lim
   if (cursor) {
     if (callerNodeId) {
       return query<any>(
-        `select * from ${table} where published_at < $2::timestamptz and (doc->>'scope_primary')=$3 and node_id <> $4 order by published_at desc limit $1`,
+        `select p.*
+         from ${table} p
+         join nodes n on n.id=p.node_id
+         where p.published_at < $2::timestamptz
+           and (p.doc->>'scope_primary')=$3
+           and p.node_id <> $4
+           and n.status='ACTIVE'
+           and n.suspended_at is null
+           and n.deleted_at is null
+         order by p.published_at desc
+         limit $1`,
         [limit, cursor, scope, callerNodeId],
       );
     }
-    return query<any>(`select * from ${table} where published_at < $2::timestamptz and (doc->>'scope_primary')=$3 order by published_at desc limit $1`, [limit, cursor, scope]);
+    return query<any>(
+      `select p.*
+       from ${table} p
+       join nodes n on n.id=p.node_id
+       where p.published_at < $2::timestamptz
+         and (p.doc->>'scope_primary')=$3
+         and n.status='ACTIVE'
+         and n.suspended_at is null
+         and n.deleted_at is null
+       order by p.published_at desc
+       limit $1`,
+      [limit, cursor, scope],
+    );
   }
   if (callerNodeId) {
     return query<any>(
-      `select * from ${table} where (doc->>'scope_primary')=$2 and node_id <> $3 order by published_at desc limit $1`,
+      `select p.*
+       from ${table} p
+       join nodes n on n.id=p.node_id
+       where (p.doc->>'scope_primary')=$2
+         and p.node_id <> $3
+         and n.status='ACTIVE'
+         and n.suspended_at is null
+         and n.deleted_at is null
+       order by p.published_at desc
+       limit $1`,
       [limit, scope, callerNodeId],
     );
   }
-  return query<any>(`select * from ${table} where (doc->>'scope_primary')=$2 order by published_at desc limit $1`, [limit, scope]);
+  return query<any>(
+    `select p.*
+     from ${table} p
+     join nodes n on n.id=p.node_id
+     where (p.doc->>'scope_primary')=$2
+       and n.status='ACTIVE'
+       and n.suspended_at is null
+       and n.deleted_at is null
+     order by p.published_at desc
+     limit $1`,
+    [limit, scope],
+  );
 }
 
 export async function logSearch(nodeId:string, kind:'listings'|'requests', scope:string, q:string|null, filters:any, broadening:number, credits:number) {
@@ -232,8 +281,33 @@ export async function logSearch(nodeId:string, kind:'listings'|'requests', scope
 
 export async function listNodePublic(nodeId:string, kind:'listings'|'requests', limit:number, cursor:string|null) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
-  if (cursor) return query<any>(`select doc,published_at from ${table} where node_id=$1 and published_at < $3::timestamptz order by published_at desc limit $2`, [nodeId,limit,cursor]);
-  return query<any>(`select doc,published_at from ${table} where node_id=$1 order by published_at desc limit $2`, [nodeId,limit]);
+  if (cursor) {
+    return query<any>(
+      `select p.doc,p.published_at
+       from ${table} p
+       join nodes n on n.id=p.node_id
+       where p.node_id=$1
+         and p.published_at < $3::timestamptz
+         and n.status='ACTIVE'
+         and n.suspended_at is null
+         and n.deleted_at is null
+       order by p.published_at desc
+       limit $2`,
+      [nodeId, limit, cursor],
+    );
+  }
+  return query<any>(
+    `select p.doc,p.published_at
+     from ${table} p
+     join nodes n on n.id=p.node_id
+     where p.node_id=$1
+       and n.status='ACTIVE'
+       and n.suspended_at is null
+       and n.deleted_at is null
+     order by p.published_at desc
+     limit $2`,
+    [nodeId, limit],
+  );
 }
 
 export async function getUnitsOwners(unitIds: string[]) {

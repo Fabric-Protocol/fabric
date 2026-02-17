@@ -212,6 +212,9 @@ export const fabricService = {
   patchRequest(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('requests', nodeId, id, version, payload); },
   deleteRequest(nodeId: string, id: string) { return repo.deleteResource('requests', nodeId, id); },
   async publish(kind: 'units' | 'requests', nodeId: string, id: string) {
+    const me = await repo.getMe(nodeId);
+    if (!me) return { notFound: true };
+    if (me.status !== 'ACTIVE' || me.suspended_at) return { forbidden: true };
     const row = await repo.getResource(kind, nodeId, id);
     if (!row) return { notFound: true };
     const failure = requirePublishFields(row);

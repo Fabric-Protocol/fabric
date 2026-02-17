@@ -438,6 +438,7 @@ export function buildApp() {
     if (!auth?.startsWith('ApiKey ')) return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid API key'));
     const found = await repo.findApiKey(auth.slice('ApiKey '.length));
     if (!found) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid API key'));
+    if (found.is_suspended) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
     (req as AuthedRequest).nodeId = found.node_id;
     (req as AuthedRequest).plan = found.plan_code;
     (req as AuthedRequest).isSubscriber = found.status === 'active';
@@ -685,6 +686,7 @@ export function buildApp() {
   app.post('/v1/units/:unit_id/publish', async (req, reply) => {
     const out = await fabricService.publish('units', (req as AuthedRequest).nodeId!, (req.params as any).unit_id);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Unit not found'));
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
     return out;
   });
@@ -692,6 +694,7 @@ export function buildApp() {
   app.post('/v1/requests/:request_id/publish', async (req, reply) => {
     const out = await fabricService.publish('requests', (req as AuthedRequest).nodeId!, (req.params as any).request_id);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Request not found'));
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
     return out;
   });
@@ -939,13 +942,13 @@ export function buildApp() {
       await query('truncate table public_listings');
       await query(`insert into public_listings(unit_id,node_id,doc,published_at)
         select u.id,u.node_id,jsonb_build_object('id',u.id,'node_id',u.node_id,'scope_primary',u.scope_primary,'scope_secondary',u.scope_secondary,'title',u.title,'description',u.description,'public_summary',u.public_summary,'quantity',u.quantity,'measure',u.measure,'custom_measure',u.custom_measure,'category_ids',u.category_ids,'tags',u.tags,'type',u.type,'condition',u.condition,'location_text_public',u.location_text_public,'origin_region',u.origin_region,'dest_region',u.dest_region,'service_region',u.service_region,'delivery_format',u.delivery_format,'photos',u.photos,'published_at',u.published_at,'updated_at',u.updated_at),u.published_at
-        from units u join nodes n on n.id=u.node_id where u.published_at is not null and u.deleted_at is null and n.status='ACTIVE' and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='listing' and t.target_id=u.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=u.node_id and t.reversed_at is null)`);
+        from units u join nodes n on n.id=u.node_id where u.published_at is not null and u.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='listing' and t.target_id=u.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=u.node_id and t.reversed_at is null)`);
     }
     if (kind === 'all' || kind === 'requests') {
       await query('truncate table public_requests');
       await query(`insert into public_requests(request_id,node_id,doc,published_at)
         select r.id,r.node_id,jsonb_build_object('id',r.id,'node_id',r.node_id,'scope_primary',r.scope_primary,'scope_secondary',r.scope_secondary,'title',r.title,'description',r.description,'public_summary',r.public_summary,'desired_quantity',r.desired_quantity,'measure',r.measure,'custom_measure',r.custom_measure,'category_ids',r.category_ids,'tags',r.tags,'type',r.type,'condition',r.condition,'location_text_public',r.location_text_public,'origin_region',r.origin_region,'dest_region',r.dest_region,'service_region',r.service_region,'delivery_format',r.delivery_format,'need_by',r.need_by,'accept_substitutions',r.accept_substitutions,'published_at',r.published_at,'updated_at',r.updated_at),r.published_at
-        from requests r join nodes n on n.id=r.node_id where r.published_at is not null and r.deleted_at is null and n.status='ACTIVE' and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='request' and t.target_id=r.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=r.node_id and t.reversed_at is null)`);
+        from requests r join nodes n on n.id=r.node_id where r.published_at is not null and r.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='request' and t.target_id=r.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=r.node_id and t.reversed_at is null)`);
     }
     const listingsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_listings'))[0].c);
     const requestsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_requests'))[0].c);
