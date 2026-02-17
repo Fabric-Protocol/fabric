@@ -13,10 +13,17 @@ function New-IdempotencyKey {
 }
 
 Write-Host "[STEP] Bootstrap node..."
+$meta = Invoke-RestMethod -Uri "$BaseUrl/v1/meta" -Method Get
+$requiredLegalVersion = $meta.required_legal_version
+
 $bootstrapBody = @{
   display_name = "Stripe Smoke"
   email = $null
   referral_code = $null
+  legal = @{
+    accepted = $true
+    version = $requiredLegalVersion
+  }
 } | ConvertTo-Json -Compress
 
 $bootstrap = Invoke-RestMethod -Uri "$BaseUrl/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key" = (New-IdempotencyKey) } -ContentType "application/json" -Body $bootstrapBody

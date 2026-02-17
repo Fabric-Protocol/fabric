@@ -14,6 +14,8 @@ function parsePriceIds(listValue: string | undefined, singleValue: string | unde
 }
 
 export const config = {
+  apiVersion: 'v1',
+  requiredLegalVersion: '2026-02-17',
   port: Number(process.env.PORT ?? 8080),
   host: process.env.HOST ?? '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL ?? '',

@@ -38,12 +38,21 @@ create table if not exists nodes (
 
   status text not null default 'ACTIVE' check (status in ('ACTIVE','SUSPENDED')),
   suspended_at timestamptz null,
+  legal_accepted_at timestamptz not null default now(),
+  legal_version text not null default 'legacy',
+  legal_ip text null,
+  legal_user_agent text null,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   row_version bigint not null default 1,
   deleted_at timestamptz null
 );
+
+alter table nodes add column if not exists legal_accepted_at timestamptz not null default now();
+alter table nodes add column if not exists legal_version text not null default 'legacy';
+alter table nodes add column if not exists legal_ip text null;
+alter table nodes add column if not exists legal_user_agent text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 

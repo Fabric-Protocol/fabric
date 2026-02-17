@@ -18,8 +18,20 @@ function requirePublishFields(row: any) {
 }
 
 export const fabricService = {
-  async bootstrap(payload: { display_name: string; email: string | null; referral_code: string | null }) {
-    const node = await repo.createNode(payload.display_name, payload.email);
+  async bootstrap(payload: {
+    display_name: string;
+    email: string | null;
+    referral_code: string | null;
+    legal_version: string;
+    legal_ip: string | null;
+    legal_user_agent: string | null;
+  }) {
+    const node = await repo.createNode(payload.display_name, payload.email, {
+      acceptedAt: new Date().toISOString(),
+      version: payload.legal_version,
+      ip: payload.legal_ip,
+      userAgent: payload.legal_user_agent,
+    });
     const apiKey = await repo.createApiKey(node.id, 'default');
     await repo.ensureSubscription(node.id);
     await repo.addCredit(node.id, 'grant_signup', config.signupGrantCredits, {});

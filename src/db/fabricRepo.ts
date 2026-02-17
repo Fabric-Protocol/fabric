@@ -31,10 +31,16 @@ export async function saveIdempotency(nodeId: string, key: string, method: strin
   );
 }
 
-export async function createNode(displayName: string, email: string | null) {
-  const rows = await query<{ id: string; created_at: string }>(
-    `insert into nodes(display_name,email,status) values($1,$2,'ACTIVE') returning id,created_at`,
-    [displayName, email],
+export async function createNode(
+  displayName: string,
+  email: string | null,
+  legal: { acceptedAt: string; version: string; ip: string | null; userAgent: string | null },
+) {
+  const rows = await query<{ id: string; created_at: string; legal_accepted_at: string; legal_version: string }>(
+    `insert into nodes(display_name,email,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
+     values($1,$2,'ACTIVE',$3,$4,$5,$6)
+     returning id,created_at,legal_accepted_at,legal_version`,
+    [displayName, email, legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
   );
   return rows[0];
 }
@@ -60,6 +66,7 @@ export async function addCredit(nodeId: string, type: string, amount: number, me
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
+      n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,
       coalesce(s.plan_code,'free') as plan_code, coalesce(s.status,'none') as sub_status,
       s.current_period_start,s.current_period_end
      from nodes n left join subscriptions s on s.node_id=n.id where n.id=$1 and n.deleted_at is null`,

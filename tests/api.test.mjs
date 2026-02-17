@@ -15,11 +15,21 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
 
+const REQUIRED_LEGAL_VERSION = '2026-02-17';
+
 const { buildApp } = await import('../dist/src/app.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
 
 async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', email: null, referral_code: null }) {
-  const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': idk }, payload });
+  const requestPayload = {
+    display_name: 'Node',
+    email: null,
+    referral_code: null,
+    legal: { accepted: true, version: REQUIRED_LEGAL_VERSION },
+    ...payload,
+    legal: (payload && typeof payload === 'object' && payload.legal) ? payload.legal : { accepted: true, version: REQUIRED_LEGAL_VERSION },
+  };
+  const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': idk }, payload: requestPayload });
   return res;
 }
 
@@ -52,6 +62,71 @@ test('canonical error envelope for unauthorized', async () => {
   const res = await app.inject({ method: 'GET', url: '/v1/me' });
   assert.equal(res.statusCode, 401);
   assert.equal(res.json().error.code, 'unauthorized');
+  await app.close();
+});
+
+test('GET /v1/meta returns required legal version and legal URLs', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/v1/meta' });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.api_version, 'v1');
+  assert.equal(body.required_legal_version, REQUIRED_LEGAL_VERSION);
+  assert.match(body.legal_urls.terms, /\/legal\/terms$/);
+  assert.match(body.legal_urls.privacy, /\/legal\/privacy$/);
+  assert.match(body.legal_urls.aup, /\/legal\/aup$/);
+  assert.match(body.support_url, /\/support$/);
+  await app.close();
+});
+
+test('GET /legal/terms returns HTML', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/legal/terms' });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
+  assert.match(res.body, /Terms of Service/);
+  await app.close();
+});
+
+test('POST /v1/bootstrap without legal assent returns legal_required', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/bootstrap',
+    headers: { 'idempotency-key': 'boot-no-legal' },
+    payload: { display_name: 'Node', email: null, referral_code: null },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'legal_required');
+  assert.equal(res.json().error.details.required_legal_version, REQUIRED_LEGAL_VERSION);
+  assert.equal(typeof res.json().error.details.legal_urls.terms, 'string');
+  await app.close();
+});
+
+test('POST /v1/bootstrap with legal assent stores legal fields', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/bootstrap',
+    headers: {
+      'idempotency-key': 'boot-with-legal',
+      'user-agent': 'fabric-test-agent',
+      'x-forwarded-for': '203.0.113.10, 198.51.100.3',
+    },
+    payload: {
+      display_name: 'Node Legal',
+      email: null,
+      referral_code: null,
+      legal: { accepted: true, version: REQUIRED_LEGAL_VERSION },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const nodeId = res.json().node.id;
+  const me = await repo.getMe(nodeId);
+  assert.equal(me.legal_version, REQUIRED_LEGAL_VERSION);
+  assert.ok(me.legal_accepted_at);
+  assert.equal(me.legal_ip, '203.0.113.10');
+  assert.equal(me.legal_user_agent, 'fabric-test-agent');
   await app.close();
 });
 

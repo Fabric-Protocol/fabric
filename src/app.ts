@@ -28,6 +28,107 @@ const searchSchema = z.object({
   q: z.string().nullable(), scope: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']), filters: z.record(z.any()), broadening: z.object({ level: z.number(), allow: z.boolean() }), limit: z.number().min(1).max(100).default(20), cursor: z.string().nullable(),
 });
 
+const legalPageTemplate = (title: string, body: string) => `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${title}</title>
+</head>
+<body>
+  <main>
+    <h1>${title}</h1>
+    ${body}
+  </main>
+</body>
+</html>`;
+
+const legalPages = {
+  terms: legalPageTemplate('Fabric Terms of Service', `
+    <p>Fabric API access is provided subject to these terms.</p>
+    <p>You must follow applicable laws, respect platform safety rules, and avoid abusive or deceptive automation.</p>
+  `),
+  privacy: legalPageTemplate('Fabric Privacy Policy', `
+    <p>Fabric processes account, usage, and event data required to operate the API securely and reliably.</p>
+    <p>Audit and billing records are retained according to platform policy and legal requirements.</p>
+  `),
+  aup: legalPageTemplate('Fabric Acceptable Use Policy', `
+    <p>Do not use Fabric to violate law, abuse infrastructure, scrape protected data, or bypass access controls.</p>
+    <p>Security testing must be authorized. Abuse reports are triaged and may result in suspension.</p>
+  `),
+  support: legalPageTemplate('Fabric Support', `
+    <p>Support: support@fabric.local</p>
+    <p>Security/abuse reports: security@fabric.local</p>
+    <p>For urgent abuse concerns, include timestamps, request IDs, and endpoint paths.</p>
+  `),
+  agentsDocs: legalPageTemplate('Fabric Agent Docs', `
+    <p>Agent-facing docs placeholder.</p>
+    <p>Use <code>/v1/meta</code> for machine-readable legal and support pointers.</p>
+  `),
+};
+
+function routePath(url: string) {
+  const qIndex = url.indexOf('?');
+  return qIndex >= 0 ? url.slice(0, qIndex) : url;
+}
+
+function isPublicRoute(path: string) {
+  return path === '/v1/bootstrap'
+    || path === '/v1/webhooks/stripe'
+    || path === '/healthz'
+    || path === '/v1/meta'
+    || path === '/support'
+    || path === '/docs/agents'
+    || path === '/legal/terms'
+    || path === '/legal/privacy'
+    || path === '/legal/aup';
+}
+
+function firstHeaderValue(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] ?? '';
+  return value ?? '';
+}
+
+function absoluteUrl(req: FastifyRequest, path: string) {
+  const forwardedProto = firstHeaderValue(req.headers['x-forwarded-proto'] as string | string[] | undefined).split(',')[0].trim();
+  const forwardedHost = firstHeaderValue(req.headers['x-forwarded-host'] as string | string[] | undefined).split(',')[0].trim();
+  const host = forwardedHost || firstHeaderValue(req.headers.host as string | string[] | undefined).trim();
+  const proto = forwardedProto || 'http';
+  if (!host) return path;
+  return `${proto}://${host}${path}`;
+}
+
+function legalUrls(req: FastifyRequest) {
+  return {
+    terms: absoluteUrl(req, '/legal/terms'),
+    privacy: absoluteUrl(req, '/legal/privacy'),
+    aup: absoluteUrl(req, '/legal/aup'),
+  };
+}
+
+function buildMetaPayload(req: FastifyRequest) {
+  return {
+    api_version: config.apiVersion,
+    required_legal_version: config.requiredLegalVersion,
+    legal_urls: legalUrls(req),
+    support_url: absoluteUrl(req, '/support'),
+    docs_urls: {
+      agents_url: absoluteUrl(req, '/docs/agents'),
+    },
+  };
+}
+
+function extractClientIp(req: FastifyRequest) {
+  const forwardedFor = firstHeaderValue(req.headers['x-forwarded-for'] as string | string[] | undefined);
+  if (forwardedFor) return forwardedFor.split(',')[0]?.trim() || null;
+  return req.ip ?? null;
+}
+
+function extractUserAgent(req: FastifyRequest) {
+  const ua = firstHeaderValue(req.headers['user-agent'] as string | string[] | undefined).trim();
+  return ua || null;
+}
+
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
@@ -145,7 +246,7 @@ export function buildApp() {
     reply.header('X-Credits-Charged', '0');
     reply.header('X-Credits-Plan', 'unknown');
 
-    if (req.url === '/v1/bootstrap' || req.url === '/v1/webhooks/stripe' || req.url === '/healthz') return;
+    if (isPublicRoute(routePath(req.url))) return;
 
     if (req.url.startsWith('/v1/admin/')) {
       if (req.headers['x-admin-key'] !== config.adminKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
@@ -204,11 +305,56 @@ export function buildApp() {
     return payload;
   });
 
+  app.get('/v1/meta', async (req) => buildMetaPayload(req));
+
+  app.get('/legal/terms', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.terms));
+  app.get('/legal/privacy', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.privacy));
+  app.get('/legal/aup', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.aup));
+  app.get('/support', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.support));
+  app.get('/docs/agents', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.agentsDocs));
+
   app.post('/v1/bootstrap', async (req, reply) => {
-    const schema = z.object({ display_name: z.string(), email: z.string().nullable(), referral_code: z.string().nullable() });
+    const schema = z.object({
+      display_name: z.string(),
+      email: z.string().nullable(),
+      referral_code: z.string().nullable(),
+      legal: z.unknown().optional(),
+    });
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
-    return fabricService.bootstrap(parsed.data);
+
+    const meta = buildMetaPayload(req);
+    const legal = parsed.data.legal;
+    if (!legal || typeof legal !== 'object') {
+      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', {
+        required_legal_version: config.requiredLegalVersion,
+        legal_urls: meta.legal_urls,
+      }));
+    }
+
+    const legalAccepted = (legal as any).accepted === true;
+    const legalVersion = typeof (legal as any).version === 'string' ? (legal as any).version : '';
+    if (!legalAccepted) {
+      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', {
+        required_legal_version: config.requiredLegalVersion,
+        legal_urls: meta.legal_urls,
+      }));
+    }
+    if (legalVersion !== config.requiredLegalVersion) {
+      return reply.status(422).send(errorEnvelope('legal_version_mismatch', 'Legal version mismatch', {
+        required_legal_version: config.requiredLegalVersion,
+        legal_urls: meta.legal_urls,
+      }));
+    }
+
+    return fabricService.bootstrap({
+      display_name: parsed.data.display_name,
+      email: parsed.data.email,
+      referral_code: parsed.data.referral_code,
+      legal_version: legalVersion,
+      legal_ip: extractClientIp(req),
+      legal_user_agent: extractUserAgent(req),
+    });
   });
 
   app.post('/v1/auth/keys', async (req, reply) => {

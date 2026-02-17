@@ -172,5 +172,12 @@ Acquisition:
 
 ---
 
-## 19) Vision invariant
+## 19) Legal assent is required for bootstrap
+- `POST /v1/bootstrap` **MUST** require explicit legal assent payload with accepted=`true` and a matching legal version.
+- The backend **MUST** reject missing/false assent or version mismatch with canonical error envelopes.
+- The service **MUST** expose machine-readable legal pointers and required legal version at `GET /v1/meta`.
+
+---
+
+## 20) Vision invariant
 - Fabric is the shared substrate of allocatable reality.

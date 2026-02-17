@@ -17,6 +17,47 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 
 ---
 
+# 0) Public metadata + legal/support pages
+
+## GET /v1/meta
+
+### Auth
+None
+
+### Purpose
+Machine-readable service metadata for legal gating and support discovery.
+
+### Response 200
+```json
+{
+  "api_version": "v1",
+  "required_legal_version": "2026-02-17",
+  "legal_urls": {
+    "terms": "https://<host>/legal/terms",
+    "privacy": "https://<host>/legal/privacy",
+    "aup": "https://<host>/legal/aup"
+  },
+  "support_url": "https://<host>/support",
+  "docs_urls": {
+    "agents_url": "https://<host>/docs/agents"
+  }
+}
+```
+
+## GET /legal/terms
+## GET /legal/privacy
+## GET /legal/aup
+## GET /support
+
+### Auth
+None
+
+### Purpose
+Serve public legal and support pages from the same service origin as the API.
+
+### Response 200
+`text/html`
+
 # 1) Bootstrap + API keys
 
 ## POST /v1/bootstrap
@@ -38,8 +79,13 @@ Creates a Node and issues the first API key; applies one-time signup grant.
 {
   "display_name": "string",
   "email": "string|null",
-  "referral_code": "string|null"
+  "referral_code": "string|null",
+  "legal": {
+    "accepted": true,
+    "version": "2026-02-17"
+  }
 }
+```
 
 
 Response 200
@@ -70,7 +116,13 @@ Signup grant (200 credits) applies once per Node.
 
 If referral_code is provided, it is recorded as a referral claim (subject to the referral rules in section 13).
 
+`legal.accepted` MUST be `true` and `legal.version` MUST match `required_legal_version` from `GET /v1/meta`.
+
 Errors
+
+422 legal_required
+
+422 legal_version_mismatch
 
 422 validation error
 
