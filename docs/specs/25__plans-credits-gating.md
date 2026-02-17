@@ -5,6 +5,8 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 
 ## 0) Definitions
 - Subscriber: Node with active paid subscription status.
+- Trial-entitled: Node with an active upload trial entitlement window.
+- Entitled spender: `subscriber OR active trial`.
 - Credits: balance computed from `credit_ledger` deltas.
 - Metered endpoint: decrements credits only on HTTP 200.
 - Free node: node without active paid subscription.
@@ -16,17 +18,19 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 - View own resources and own offers.
 - Reject inbound offers.
 
-### 1.2 Subscriber-only actions
+### 1.2 Entitled-spend actions (subscriber OR active trial)
 - `POST /v1/search/listings`
 - `POST /v1/search/requests`
 - `GET /v1/public/nodes/{node_id}/listings`
 - `GET /v1/public/nodes/{node_id}/requests`
+
+### 1.3 Subscriber-only actions
 - `POST /v1/offers`
 - `POST /v1/offers/{offer_id}/counter`
 - `POST /v1/offers/{offer_id}/accept`
 - `POST /v1/offers/{offer_id}/reveal-contact`
 
-### 1.3 Two-sided subscriber requirement
+### 1.4 Two-sided subscriber requirement
 - Contact reveal requires both offer parties to be subscribers.
 - If either side is non-subscriber, return `403 subscriber_required`.
 
@@ -47,7 +51,7 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 
 ### 2.4 Ledger behavior
 - Search/expand writes negative entries (`debit_search`, `debit_search_page`).
-- Grants write positive entries (`grant_signup`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
+- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
 - Balance is authoritative `SUM(amount)` per node.
 
 ## 3) Rate limits (default env-backed values)
@@ -87,6 +91,14 @@ Implementation note:
 - Award trigger: first paid subscription invoice.
 - Current grant: 100 credits to referrer.
 - One claim per referred node.
+
+## 6b) Upload trial bridge
+- Trigger: first time a node reaches `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `10`).
+- Grant (one-time): active trial entitlement for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`) plus `UPLOAD_TRIAL_CREDIT_GRANT` credits (default `100`).
+- Idempotency/audit:
+  - Entitlement is unique per node.
+  - Credit grant is written once as `grant_trial`.
+  - Trial grant is recorded in trial entitlement event audit.
 
 ## 7) Credits quote endpoints
 - `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).

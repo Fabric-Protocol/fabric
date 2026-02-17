@@ -9,7 +9,13 @@ import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
 
-type AuthedRequest = FastifyRequest & { nodeId?: string; plan?: string; isSubscriber?: boolean; idem?: { key: string; hash: string; keyScope: string } };
+type AuthedRequest = FastifyRequest & {
+  nodeId?: string;
+  plan?: string;
+  isSubscriber?: boolean;
+  hasSpendEntitlement?: boolean;
+  idem?: { key: string; hash: string; keyScope: string };
+};
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
 type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeWebhookLogContext };
 
@@ -523,10 +529,13 @@ export function buildApp() {
     if (!auth?.startsWith('ApiKey ')) return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid API key'));
     const found = await repo.findApiKey(auth.slice('ApiKey '.length));
     if (!found) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid API key'));
+    if (found.is_revoked) return reply.status(403).send(errorEnvelope('forbidden', 'API key is revoked'));
     if (found.is_suspended) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
+    const isSubscriber = found.status === 'active';
     (req as AuthedRequest).nodeId = found.node_id;
     (req as AuthedRequest).plan = found.plan_code;
-    (req as AuthedRequest).isSubscriber = found.status === 'active';
+    (req as AuthedRequest).isSubscriber = isSubscriber;
+    (req as AuthedRequest).hasSpendEntitlement = isSubscriber || found.has_active_trial;
     reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
     reply.header('X-Credits-Remaining', String(await repo.creditBalance(found.node_id)));
 
@@ -817,7 +826,7 @@ export function buildApp() {
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).isSubscriber, parsed.data, (req as AuthedRequest).idem!.key);
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
@@ -827,7 +836,7 @@ export function buildApp() {
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).isSubscriber, parsed.data, (req as AuthedRequest).idem!.key);
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
@@ -835,14 +844,14 @@ export function buildApp() {
 
   app.get('/v1/public/nodes/:node_id/listings', async (req, reply) => {
     const q = req.query as any;
-    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', !!(req as AuthedRequest).isSubscriber, Number(q.limit ?? 20), q.cursor ?? null);
+    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
   app.get('/v1/public/nodes/:node_id/requests', async (req, reply) => {
     const q = req.query as any;
-    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', !!(req as AuthedRequest).isSubscriber, Number(q.limit ?? 20), q.cursor ?? null);
+    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;

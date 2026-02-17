@@ -146,6 +146,7 @@ create table if not exists credit_ledger (
 
   type text not null check (type in (
     'grant_signup',
+    'grant_trial',
     'grant_subscription_monthly',
     'grant_referral',
     'topup_purchase',
@@ -167,6 +168,61 @@ create index if not exists credit_ledger_node_created_idx on credit_ledger(node_
 create unique index if not exists credit_ledger_idem_unique
   on credit_ledger(node_id, idempotency_key)
   where idempotency_key is not null;
+
+-- =========================
+-- Trial entitlements (upload bridge)
+-- =========================
+create table if not exists trial_entitlements (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+
+  source text not null check (source in ('unit_upload_count')),
+  threshold_count int not null,
+  upload_count_at_grant int not null,
+
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  created_at timestamptz not null default now(),
+
+  constraint trial_entitlements_node_unique unique (node_id),
+  constraint trial_entitlements_window_chk check (ends_at > starts_at)
+);
+
+create index if not exists trial_entitlements_active_idx on trial_entitlements(node_id, ends_at);
+
+create table if not exists trial_entitlement_events (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+  event_type text not null check (event_type in ('granted')),
+  meta jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+do $$
+begin
+  if exists (
+    select 1
+    from information_schema.tables
+    where table_schema = 'public' and table_name = 'credit_ledger'
+  ) then
+    alter table credit_ledger drop constraint if exists credit_ledger_type_check;
+    alter table credit_ledger add constraint credit_ledger_type_check check (type in (
+      'grant_signup',
+      'grant_trial',
+      'grant_subscription_monthly',
+      'grant_referral',
+      'topup_purchase',
+      'debit_search',
+      'debit_search_page',
+      'debit_broadening',
+      'adjustment_manual',
+      'reversal'
+    ));
+  end if;
+end $$;
+
+create index if not exists trial_entitlement_events_node_created_idx
+  on trial_entitlement_events(node_id, created_at desc);
 
 -- =========================
 -- Units + Requests (canonical private)

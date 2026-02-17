@@ -5,16 +5,24 @@ export type NodeContext = { nodeId: string };
 
 export async function findApiKey(rawKey: string) {
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
-  const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean }>(
+  const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean; is_revoked: boolean; has_active_trial: boolean }>(
     `select
        ak.node_id,
        coalesce(s.plan_code, 'free') as plan_code,
        coalesce(s.status, 'none') as status,
-       (n.status <> 'ACTIVE' or n.suspended_at is not null) as is_suspended
+       (n.status <> 'ACTIVE' or n.suspended_at is not null) as is_suspended,
+       (ak.revoked_at is not null) as is_revoked,
+       exists (
+         select 1
+         from trial_entitlements te
+         where te.node_id = ak.node_id
+           and te.starts_at <= now()
+           and te.ends_at > now()
+       ) as has_active_trial
      from api_keys ak
      join nodes n on n.id = ak.node_id and n.deleted_at is null
      left join subscriptions s on s.node_id = ak.node_id
-     where ak.key_hash=$1 and ak.revoked_at is null
+     where ak.key_hash=$1
      limit 1`,
     [keyHash],
   );
@@ -95,6 +103,23 @@ export async function getMe(nodeId: string) {
   return rows[0] ?? null;
 }
 
+export async function hasActiveTrialEntitlement(nodeId: string) {
+  const rows = await query<{ c: string }>(
+    `select count(*)::text as c
+     from trial_entitlements
+     where node_id = $1
+       and starts_at <= now()
+       and ends_at > now()`,
+    [nodeId],
+  );
+  return Number(rows[0]?.c ?? 0) > 0;
+}
+
+export async function getTrialEntitlement(nodeId: string) {
+  const rows = await query<any>('select * from trial_entitlements where node_id=$1 limit 1', [nodeId]);
+  return rows[0] ?? null;
+}
+
 export async function updateMe(nodeId: string, displayName: string | null | undefined, email: string | null | undefined) {
   const rows = await query<any>(
     `update nodes
@@ -144,6 +169,117 @@ export async function createResource(kind: 'units'|'requests', nodeId: string, p
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
       [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.need_by,payload.accept_substitutions ?? true,payload.tags,payload.category_ids,payload.public_summary]);
+  return rows[0];
+}
+
+export async function createUnitWithUploadTrial(
+  nodeId: string,
+  payload: any,
+  options: { threshold: number; trialDays: number; trialCreditGrant: number },
+) {
+  const rows = await query<any>(`
+    with inserted_unit as (
+      insert into units(
+        node_id,title,description,type,condition,quantity,measure,custom_measure,
+        scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,
+        dest_region,service_region,delivery_format,tags,category_ids,public_summary
+      )
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      returning
+        id,
+        node_id,
+        case when published_at is null then 'draft' else 'published' end as publish_status,
+        created_at,
+        updated_at,
+        row_version as version
+    ),
+    upload_count as (
+      select (count(*)::int + 1) as c
+      from units
+      where node_id = $1
+    ),
+    insert_trial as (
+      insert into trial_entitlements(node_id, source, threshold_count, upload_count_at_grant, starts_at, ends_at)
+      select
+        $1,
+        'unit_upload_count',
+        $20,
+        upload_count.c,
+        now(),
+        now() + make_interval(days => $21::int)
+      from upload_count
+      where upload_count.c >= $20
+      on conflict (node_id) do nothing
+      returning node_id, starts_at, ends_at, upload_count_at_grant
+    ),
+    insert_credit as (
+      insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+      select
+        $1,
+        'grant_trial',
+        $22,
+        jsonb_build_object(
+          'reason', 'upload_threshold_trial',
+          'threshold', $20,
+          'upload_count', insert_trial.upload_count_at_grant,
+          'trial_ends_at', insert_trial.ends_at
+        ),
+        'trial_upload_threshold'
+      from insert_trial
+      on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
+      returning id
+    ),
+    insert_trial_event as (
+      insert into trial_entitlement_events(node_id, event_type, meta)
+      select
+        $1,
+        'granted',
+        jsonb_build_object(
+          'source', 'unit_upload_count',
+          'threshold', $20,
+          'upload_count', insert_trial.upload_count_at_grant,
+          'trial_starts_at', insert_trial.starts_at,
+          'trial_ends_at', insert_trial.ends_at,
+          'credits_granted', $22
+        )
+      from insert_trial
+      returning id
+    )
+    select
+      iu.id,
+      iu.node_id,
+      iu.publish_status,
+      iu.created_at,
+      iu.updated_at,
+      iu.version,
+      (select c from upload_count) as upload_count,
+      exists(select 1 from insert_trial) as trial_granted,
+      (select ends_at from insert_trial limit 1) as trial_ends_at
+    from inserted_unit iu
+  `, [
+    nodeId,
+    payload.title,
+    payload.description,
+    payload.type,
+    payload.condition,
+    payload.quantity,
+    payload.measure,
+    payload.custom_measure,
+    payload.scope_primary,
+    payload.scope_secondary,
+    payload.scope_notes,
+    payload.location_text_public,
+    payload.origin_region,
+    payload.dest_region,
+    payload.service_region,
+    payload.delivery_format,
+    payload.tags,
+    payload.category_ids,
+    payload.public_summary,
+    options.threshold,
+    options.trialDays,
+    options.trialCreditGrant,
+  ]);
   return rows[0];
 }
 
@@ -474,6 +610,59 @@ export async function countTopupPurchasesSince(nodeId: string, sinceIso: string)
 export async function getReferralClaim(nodeId: string) {
   const rows = await query<any>("select * from referral_claims where claimer_node_id=$1 and status='claimed' order by claimed_at asc limit 1", [nodeId]);
   return rows[0] ?? null;
+}
+
+export async function awardReferralFirstPaid(
+  claimerNodeId: string,
+  awardCredits: number,
+  paymentReference: string,
+  meta: { invoice_id: string | null; stripe_subscription_id: string | null } = { invoice_id: null, stripe_subscription_id: null },
+) {
+  const idempotencyKey = `referral:first_paid:${claimerNodeId}:${paymentReference}`;
+  const rows = await query<{
+    claim_marked_awarded: boolean;
+    credit_granted: boolean;
+    claim_id: string | null;
+    issuer_node_id: string | null;
+  }>(
+    `with claim as (
+       update referral_claims
+       set status='awarded', awarded_at=now()
+       where claimer_node_id=$1
+         and status='claimed'
+       returning id, issuer_node_id, claimer_node_id
+     ),
+     credit as (
+       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+       select
+         claim.issuer_node_id,
+         'grant_referral',
+         $2,
+         jsonb_build_object(
+           'claimer_node_id', claim.claimer_node_id,
+           'claim_id', claim.id,
+           'payment_reference', $3::text,
+           'invoice_id', $4::text,
+           'stripe_subscription_id', $5::text
+         ),
+         $6::text
+       from claim
+       on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
+       returning id
+     )
+     select
+       exists(select 1 from claim) as claim_marked_awarded,
+       exists(select 1 from credit) as credit_granted,
+       (select id from claim limit 1) as claim_id,
+       (select issuer_node_id from claim limit 1) as issuer_node_id`,
+    [claimerNodeId, awardCredits, paymentReference, meta.invoice_id, meta.stripe_subscription_id, idempotencyKey],
+  );
+  return rows[0] ?? {
+    claim_marked_awarded: false,
+    credit_granted: false,
+    claim_id: null,
+    issuer_node_id: null,
+  };
 }
 
 export async function markReferralAwarded(claimId: string) {

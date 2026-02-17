@@ -64,6 +64,29 @@ async function activateBasicSubscriber(app, nodeId, eventIdPrefix = 'evt_subscri
   return app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 }
 
+function unitPayload(title, scopeNotes = 'unit-scope') {
+  return {
+    title,
+    description: 'test unit',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    measure: 'EA',
+    custom_measure: null,
+    scope_primary: 'OTHER',
+    scope_secondary: [],
+    scope_notes: scopeNotes,
+    location_text_public: null,
+    origin_region: null,
+    dest_region: null,
+    service_region: null,
+    delivery_format: null,
+    tags: [],
+    category_ids: [],
+    public_summary: title,
+  };
+}
+
 function sign(body) {
   const t = Math.floor(Date.now() / 1000);
   const raw = JSON.stringify(body);
@@ -294,6 +317,41 @@ test('GET /v1/auth/keys returns masked prefix format', async () => {
   await app.close();
 });
 
+test('revoked api key is rejected with 403 forbidden', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-revoke-key-auth');
+  const primaryKey = b.json().api_key.api_key;
+
+  const minted = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${primaryKey}`, 'idempotency-key': 'mint-revoked-key' },
+    payload: { label: 'revoke-me' },
+  });
+  assert.equal(minted.statusCode, 200);
+  const revokedKey = minted.json().api_key;
+  const revokedKeyId = minted.json().key_id;
+
+  const revoke = await app.inject({
+    method: 'DELETE',
+    url: `/v1/auth/keys/${revokedKeyId}`,
+    headers: { authorization: `ApiKey ${primaryKey}`, 'idempotency-key': 'revoke-key-now' },
+    payload: {},
+  });
+  assert.equal(revoke.statusCode, 200);
+  assert.equal(revoke.json().ok, true);
+
+  const revokedRes = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${revokedKey}` },
+  });
+  assert.equal(revokedRes.statusCode, 403);
+  assert.equal(revokedRes.json().error.code, 'forbidden');
+  assert.equal(revokedRes.json().error.message, 'API key is revoked');
+  await app.close();
+});
+
 test('suspended node api key is rejected at auth middleware', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-suspend-auth');
@@ -381,6 +439,121 @@ test('subscriber-gated endpoints stay blocked for non-subscribers even with cred
 
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter, balBefore);
+  await app.close();
+});
+
+test('unit upload threshold grants one trial entitlement and one credit grant', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-upload-trial-once');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const beforeTrial = await repo.getTrialEntitlement(nodeId);
+  assert.equal(beforeTrial, null);
+  const balanceBeforeTenth = await repo.creditBalance(nodeId);
+
+  for (let i = 0; i < 9; i += 1) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/units',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${i}` },
+      payload: unitPayload(`Trial unit ${i}`, `trial-upload-${i}`),
+    });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const stillNoTrial = await repo.getTrialEntitlement(nodeId);
+  assert.equal(stillNoTrial, null);
+
+  const tenth = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-unit-9' },
+    payload: unitPayload('Trial unit 9', 'trial-upload-9'),
+  });
+  assert.equal(tenth.statusCode, 200);
+
+  const entitlement = await repo.getTrialEntitlement(nodeId);
+  assert.equal(Boolean(entitlement), true);
+  assert.equal(entitlement.ends_at instanceof Date || typeof entitlement.ends_at === 'string', true);
+
+  const balanceAfterTenth = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterTenth - balanceBeforeTenth, config.uploadTrialCreditGrant);
+
+  const eleventh = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-unit-10' },
+    payload: unitPayload('Trial unit 10', 'trial-upload-10'),
+  });
+  assert.equal(eleventh.statusCode, 200);
+
+  const balanceAfterEleventh = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterEleventh, balanceAfterTenth);
+
+  const trialCount = await query("select count(*)::text as c from trial_entitlements where node_id=$1", [nodeId]);
+  const trialEventCount = await query("select count(*)::text as c from trial_entitlement_events where node_id=$1 and event_type='granted'", [nodeId]);
+  const trialGrantCount = await query("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_trial'", [nodeId]);
+  assert.equal(Number(trialCount[0].c), 1);
+  assert.equal(Number(trialEventCount[0].c), 1);
+  assert.equal(Number(trialGrantCount[0].c), 1);
+  await app.close();
+});
+
+test('active upload trial allows metered search, then expiry blocks spend until subscribed', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-upload-trial-expiry');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  for (let i = 0; i < 10; i += 1) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/units',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-exp-unit-${i}` },
+      payload: unitPayload(`Trial expiry unit ${i}`, `trial-exp-${i}`),
+    });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const entitlement = await repo.getTrialEntitlement(nodeId);
+  assert.equal(Boolean(entitlement), true);
+
+  const trialSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-active' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(trialSearch.statusCode, 200);
+
+  await query(
+    "update trial_entitlements set starts_at = now() - interval '8 days', ends_at = now() - interval '1 second' where node_id=$1",
+    [nodeId],
+  );
+
+  const balanceBeforeDenied = await repo.creditBalance(nodeId);
+  const expiredSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-expired' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(expiredSearch.statusCode, 403);
+  assert.equal(expiredSearch.json().error.code, 'subscriber_required');
+  const balanceAfterDenied = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterDenied, balanceBeforeDenied);
+
+  const activated = await activateBasicSubscriber(app, nodeId, 'evt_trial_to_sub');
+  assert.equal(activated.statusCode, 200);
+
+  const subscribedSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-subscriber' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(subscribedSearch.statusCode, 200);
   await app.close();
 });
 
@@ -886,6 +1059,80 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
 
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter - balBefore, 1500);
+  await app.close();
+});
+
+test('webhook awards referral credits once on first paid invoice and dedupes by payment reference', async () => {
+  const app = buildApp();
+  const referrer = await bootstrap(app, 'boot-referrer-first-paid', { display_name: 'Referrer', email: null, referral_code: null });
+  const referrerNodeId = referrer.json().node.id;
+  const refCode = `REF-FIRST-${referrerNodeId.slice(0, 8)}`;
+  await repo.ensureReferralCode(refCode, referrerNodeId);
+
+  const referred = await bootstrap(app, 'boot-referred-first-paid', { display_name: 'Referred', email: null, referral_code: refCode });
+  const referredNodeId = referred.json().node.id;
+
+  const referrerBalanceBefore = await repo.creditBalance(referrerNodeId);
+  const invoiceId = `in_ref_first_paid_${referredNodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_ref_first_paid_${referredNodeId.slice(0, 8)}`;
+  const nowUnix = Math.floor(Date.now() / 1000);
+
+  const invoiceObject = {
+    id: invoiceId,
+    metadata: { node_id: referredNodeId },
+    customer: `cus_ref_first_paid_${referredNodeId.slice(0, 8)}`,
+    subscription: subscriptionId,
+    billing_reason: 'subscription_create',
+    period_start: nowUnix,
+    period_end: nowUnix + (30 * 24 * 3600),
+    lines: { data: [{ price: { id: 'price_basic_test' } }] },
+  };
+
+  const eventA = { id: `evt_ref_first_paid_a_${referredNodeId.slice(0, 8)}`, type: 'invoice.paid', data: { object: invoiceObject } };
+  const eventB = { id: `evt_ref_first_paid_b_${referredNodeId.slice(0, 8)}`, type: 'invoice.paid', data: { object: invoiceObject } };
+  const eventSecondInvoice = {
+    id: `evt_ref_second_invoice_${referredNodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        ...invoiceObject,
+        id: `in_ref_second_paid_${referredNodeId.slice(0, 8)}`,
+      },
+    },
+  };
+
+  const sigA = sign(eventA);
+  const sigB = sign(eventB);
+  const sigSecond = sign(eventSecondInvoice);
+
+  const resA = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sigA.header }, payload: sigA.raw });
+  const resB = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sigB.header }, payload: sigB.raw });
+  const resSecond = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sigSecond.header }, payload: sigSecond.raw });
+  assert.equal(resA.statusCode, 200);
+  assert.equal(resB.statusCode, 200);
+  assert.equal(resSecond.statusCode, 200);
+
+  const referrerBalanceAfter = await repo.creditBalance(referrerNodeId);
+  assert.equal(referrerBalanceAfter - referrerBalanceBefore, 100);
+
+  const referralRows = await query(
+    "select status, awarded_at from referral_claims where claimer_node_id=$1 order by claimed_at asc limit 1",
+    [referredNodeId],
+  );
+  assert.equal(referralRows[0].status, 'awarded');
+  assert.equal(referralRows[0].awarded_at instanceof Date || typeof referralRows[0].awarded_at === 'string', true);
+
+  const referralGrantRows = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_referral' and (meta->>'claimer_node_id')=$2",
+    [referrerNodeId, referredNodeId],
+  );
+  assert.equal(Number(referralGrantRows[0].c), 1);
+
+  const referralGrantMeta = await query(
+    "select idempotency_key, meta from credit_ledger where node_id=$1 and type='grant_referral' and (meta->>'claimer_node_id')=$2 order by created_at desc limit 1",
+    [referrerNodeId, referredNodeId],
+  );
+  assert.match(String(referralGrantMeta[0].idempotency_key ?? ''), new RegExp(`invoice:${invoiceId}`));
   await app.close();
 });
 

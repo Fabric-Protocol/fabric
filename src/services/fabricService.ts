@@ -210,7 +210,23 @@ export const fabricService = {
     return quote;
   },
   async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); return { entries, next_cursor: entries.length === limit ? entries[entries.length - 1].created_at : null }; },
-  createUnit(nodeId: string, payload: any) { return repo.createResource('units', nodeId, payload).then((unit) => ({ unit })); },
+  async createUnit(nodeId: string, payload: any) {
+    const created = await repo.createUnitWithUploadTrial(nodeId, payload, {
+      threshold: config.uploadTrialThreshold,
+      trialDays: config.uploadTrialDurationDays,
+      trialCreditGrant: config.uploadTrialCreditGrant,
+    });
+    return {
+      unit: {
+        id: created.id,
+        node_id: created.node_id,
+        publish_status: created.publish_status,
+        created_at: created.created_at,
+        updated_at: created.updated_at,
+        version: created.version,
+      },
+    };
+  },
   listUnits(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('units', nodeId, limit, cursor); },
   getUnit(nodeId: string, id: string) { return repo.getResource('units', nodeId, id); },
   patchUnit(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('units', nodeId, id, version, payload); },
@@ -234,8 +250,8 @@ export const fabricService = {
     return kind === 'units' ? { projection: { kind: 'listing', source_unit_id: id, published_at: new Date().toISOString() } } : { projection: { kind: 'request', source_request_id: id, published_at: new Date().toISOString() } };
   },
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
-  async search(nodeId: string, kind: 'listings' | 'requests', isSubscriber: boolean, body: any, idemKey: string) {
-    if (!isSubscriber) return { forbidden: true };
+  async search(nodeId: string, kind: 'listings' | 'requests', hasSpendEntitlement: boolean, body: any, idemKey: string) {
+    if (!hasSpendEntitlement) return { forbidden: true };
     const cost = config.searchCreditCost + (body.broadening?.level ?? 0);
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
@@ -244,8 +260,8 @@ export const fabricService = {
     await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, body.broadening?.level ?? 0, cost);
     return { search_id: crypto.randomUUID(), scope: body.scope, limit: body.limit ?? 20, cursor: body.cursor ?? null, broadening: body.broadening ?? { level: 0, allow: false }, applied_filters: body.filters ?? {}, items: rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } })), has_more: rows.length === (body.limit ?? 20) };
   },
-  async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', isSubscriber: boolean, limit: number, cursor: string | null) {
-    if (!isSubscriber) return { forbidden: true };
+  async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', hasSpendEntitlement: boolean, limit: number, cursor: string | null) {
+    if (!hasSpendEntitlement) return { forbidden: true };
     const cost = config.searchCreditCost;
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
@@ -1045,11 +1061,13 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
       );
     }
 
-    const claim = await repo.getReferralClaim(nodeId);
-    if (claim) {
-      await repo.addCredit(claim.issuer_node_id, 'grant_referral', 100, { claimer_node_id: nodeId, claim_id: claim.id });
-      await repo.markReferralAwarded(claim.id);
-    }
+    const referralPaymentReference = invoiceId
+      ? `invoice:${invoiceId}`
+      : (stripeSubscriptionId ? `subscription:${stripeSubscriptionId}` : `event:${String(event.id ?? 'unknown')}`);
+    await repo.awardReferralFirstPaid(nodeId, 100, referralPaymentReference, {
+      invoice_id: invoiceId ?? null,
+      stripe_subscription_id: stripeSubscriptionId ?? null,
+    });
     return {
       mapped: true,
       node_id: nodeId,

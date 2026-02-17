@@ -91,14 +91,14 @@ Hard prohibitions:
 
 ---
 
-## 4) Search (two endpoints, metered, subscriber-only)
+## 4) Search (two endpoints, metered, entitled-spender-only)
 
 - Search is split by intent:
   - `POST /v1/search/listings`
   - `POST /v1/search/requests`
 - Search is:
   - authenticated
-  - subscriber-only
+  - entitled-spender-only (`active subscription` OR `active trial`)
   - credit-metered
   - cursor-paginated
 
@@ -259,7 +259,7 @@ GET /v1/public/nodes/{node_id}/requests
 
 Rules:
 
-subscriber-only
+entitled-spender-only (`active subscription` OR `active trial`)
 
 credit-metered
 

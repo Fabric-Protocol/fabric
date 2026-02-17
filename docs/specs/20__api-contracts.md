@@ -9,13 +9,14 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 ## Common rules used below
 
 - **Auth**: unless noted, endpoints are authenticated via `Authorization: ApiKey <api_key>`.
+- **Auth key state**: revoked API keys return `403 forbidden`; missing/invalid keys return `401 unauthorized`.
 - **Admin auth**: endpoints under `/v1/admin/*` require `X-Admin-Key: <admin_key>`.
 - **Idempotency-Key**: required on all non-GET endpoints except webhooks.
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Subscriber gating**: subscriber-only endpoints remain subscription-only even when credits are available.
+- **Gating**: spend-gated endpoints allow active subscription OR active trial entitlement; offer/reveal gating remains subscriber-only.
 
 ---
 
@@ -342,7 +343,7 @@ Response 200
     {
       "id": "uuid",
       "node_id": "uuid",
-      "type": "grant_subscription_monthly|grant_referral|debit_search|debit_search_page|debit_broadening|adjustment_manual|reversal|grant_signup|topup_purchase",
+      "type": "grant_signup|grant_trial|grant_subscription_monthly|grant_referral|topup_purchase|debit_search|debit_search_page|debit_broadening|adjustment_manual|reversal",
       "amount": -2,
       "created_at": "iso",
       "meta": {}
@@ -801,16 +802,16 @@ Response 200
 
 8) Search (metered) — TWO ENDPOINTS (LOCKED)
 
-Search is subscriber-only + metered and requires Idempotency-Key.
+Search is entitled-spender-only (`active subscription` OR `active trial`) + metered and requires Idempotency-Key.
 
 POST /v1/search/listings
 Auth
 
 Required
 
-Subscriber-only
+Entitled spender-only
 
-Yes (403 subscriber_required)
+Yes (active subscription OR active trial; otherwise 403 subscriber_required)
 
 Idempotency-Key
 
@@ -903,16 +904,16 @@ Same contract as /v1/search/listings, but returns SearchRequestsResponse.
 
 9) Node “inventory expansion” after a hit (metered)
 
-These are metered reads (credit spend), subscriber-only, and require Idempotency-Key.
+These are metered reads (credit spend), entitled-spender-only (subscription or active trial), and require Idempotency-Key.
 
 GET /v1/public/nodes/{node_id}/listings
 Auth
 
 Required
 
-Subscriber-only
+Entitled spender-only
 
-Yes
+Yes (active subscription OR active trial)
 
 Idempotency-Key
 

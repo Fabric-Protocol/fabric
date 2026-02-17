@@ -29,7 +29,7 @@ If any requirement conflicts, resolve in this order:
 - **Request**: canonical private object representing demand/need; parallel to Units; publishable and searchable.
 - **Projection**: deterministic derived public record from canonical private objects when explicitly published (e.g., `public_listings`, `public_requests`).
 - **Public Listing / Public Request**: allowlisted public projection payload derived from Unit/Request. Never includes precise geo or contact.
-- **Search**: authenticated, subscriber-only, credit-metered query over projections (two endpoints: listings vs requests).
+- **Search**: authenticated, entitled-spender-only (`active subscription` OR `active trial`), credit-metered query over projections (two endpoints: listings vs requests).
 - **Offer**: structured negotiation action targeting either a Unit or a Request (MVP offers are unit-based via `unit_ids` lines); includes state machine, holds summary, concurrency version.
 - **Hold**: reservation record created on offer creation (partial holds allowed); released/committed/expired by offer lifecycle rules.
 - **Contact reveal**: controlled handoff returning contact fields only after mutual acceptance and subscriber gating.
@@ -45,6 +45,7 @@ Vision line (non-functional): **Fabric is the shared substrate of allocatable re
 
 ### 2.1 Auth headers
 - **Primary auth (all non-webhook endpoints):** `Authorization: ApiKey <api_key>`
+- Revoked API key: `403 forbidden`; missing/invalid key: `401 unauthorized`.
   - `401` if missing/invalid.
   - API keys are scoped to a single Node.
 - **Admin auth:** `X-Admin-Key: <admin_key>` → `401` if missing/invalid.
@@ -174,6 +175,6 @@ No in-platform messaging in MVP; use structured actions + controlled contact han
 
 Contact reveal only after mutual acceptance and fails until both parties are subscribers.
 
-Search is subscriber-only, credit-metered, and split into two endpoints (/search/listings and /search/requests).
+Search is entitled-spender-only (`active subscription` OR `active trial`), credit-metered, and split into two endpoints (/search/listings and /search/requests).
 
 Referral credits are awarded only after first paid subscription invoice (via webhook mechanics).

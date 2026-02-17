@@ -84,7 +84,7 @@ Notes:
   - **Requests search** (seller/provider intent): `POST /v1/search/requests`
 - Brokers can do both searches and burn credits for both.
 - Implementation: **Postgres FTS + filters** on projection tables.
-- Search is **subscriber-only** and **credit-metered**.
+- Search is **entitled-spender-only** (`active subscription` OR `active trial`) and **credit-metered**.
 - Metered endpoints are covered by the global write-safety rule:
   - **Idempotency-Key REQUIRED** to avoid double-charges on retries.
 
@@ -254,7 +254,7 @@ Notes:
 
 1. Node A bootstraps (Node created, API key issued, 200 credits granted once).
 2. Node A creates a Request and publishes it (projection created). (Free allowed.)
-3. Node B (subscriber) runs a paid search and receives results (credits deducted per-page with current broadenings).
+3. Node B (active subscriber or active trial) runs a paid search and receives results (credits deducted per-page with current broadenings).
    - This is done via `POST /v1/search/requests` when Node B is looking to fulfill requests,
    - and/or `POST /v1/search/listings` when Node B is looking to acquire listings.
 4. Node B opens the hit and can view Node A’s other public Requests/Listings via node expansion (metered/rate-limited).

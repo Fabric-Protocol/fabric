@@ -6,13 +6,13 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 
 ## Coverage matrix
 
-| Endpoint(s) | Auth | Subscriber gate | Credits meter | Rate limit rule | Primary non-2xx codes |
+| Endpoint(s) | Auth | Gate | Credits meter | Rate limit rule | Primary non-2xx codes |
 |---|---|---|---|---|---|
 | `POST /v1/bootstrap` | None | No | No | `bootstrap` (per IP, hourly) | `422 validation_error`, `422 legal_required`, `422 legal_version_mismatch`, `409 idempotency_key_reuse_conflict`, `429 rate_limit_exceeded` |
-| `POST /v1/search/listings` | ApiKey | Yes | Yes (200 only) | `search` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
-| `POST /v1/search/requests` | ApiKey | Yes | Yes (200 only) | `search` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
-| `GET /v1/public/nodes/:id/listings` | ApiKey | Yes | Yes (200 only) | `inventory_expand` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `429 rate_limit_exceeded` |
-| `GET /v1/public/nodes/:id/requests` | ApiKey | Yes | Yes (200 only) | `inventory_expand` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `429 rate_limit_exceeded` |
+| `POST /v1/search/listings` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `search` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
+| `POST /v1/search/requests` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `search` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
+| `GET /v1/public/nodes/:id/listings` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `inventory_expand` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `429 rate_limit_exceeded` |
+| `GET /v1/public/nodes/:id/requests` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `inventory_expand` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `429 rate_limit_exceeded` |
 | `POST /v1/offers` | ApiKey | Yes | No | `offer_write` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `409 conflict`, `422 validation_error`, `429 rate_limit_exceeded` |
 | `POST /v1/offers/:id/counter` | ApiKey | Yes | No | `offer_write` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `404 not_found`, `422 validation_error`, `429 rate_limit_exceeded` |
 | `POST /v1/offers/:id/accept` | ApiKey | Yes | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `404 not_found`, `409 invalid_state_transition`, `429 rate_limit_exceeded` |
@@ -23,6 +23,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 
 ## Notes
 
-- Subscriber-gated endpoints are subscription-only by design; credits do not bypass subscriber checks.
+- Spend-gated endpoints require active subscription or active trial; credits alone do not bypass gating.
+- Revoked API keys return `403 forbidden` (distinct from missing/invalid key `401 unauthorized`).
 - Metered endpoints charge credits only on successful HTTP 200 responses.
 - Rate limit values are configurable via environment variables and default to MVP baseline values in `src/config.ts`.

@@ -90,7 +90,7 @@ MVP note:
   - pagination
   - broadening
   - node inventory expansion
-- Search **MUST** be subscriber-only (credits required).
+- Search **MUST** require spend entitlement (`active subscription` OR `active trial`) and credits.
 - Search **MUST** be split by intent (no combined search):
   - `POST /v1/search/listings` (buyer/acquirer intent)
   - `POST /v1/search/requests` (seller/provider intent)

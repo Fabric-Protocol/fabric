@@ -12,7 +12,8 @@
     "test": "npm run build && node --test tests/**/*.test.mjs",
     "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",
     "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1",
-    "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js"
+    "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js",
+    "mcp:readonly": "npm run build && node dist/scripts/mcp-readonly-server.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
