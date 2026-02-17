@@ -8,37 +8,38 @@ Last updated: 2026-02-17
 - Target branch: `main`
 
 ## Current git snapshot
-- Last commit: `a3bad2d` (`billing: add checkout-session endpoint + e2e smoke; guard non-entitlement webhooks`)
+- Last commit: `9b4b31c` (`db:bootstrap: make trigger creation idempotent`)
 - Working tree: clean (`git status --short` empty)
 
 ## What just changed
-- Net-new paid onboarding was validated end-to-end on Cloud Run:
-  - `POST /v1/billing/checkout-session` -> Stripe Checkout -> webhook `checkout.session.completed` -> `/v1/me` paid state (`subscription.status=active`, `subscription.plan=plus`, `credits_balance=1700`).
-- Non-entitlement Stripe event behavior was validated:
-  - `customer.created` processed without mutating subscription/credits.
-- Billing endpoint, tests, and docs updates were committed and pushed to `main` at `a3bad2d`.
-- Runbook now explicitly notes Cloud Run invoke access requirement for smoke/bootstrap.
+- Local DB bootstrap rerun failure was fixed:
+  - Root cause was non-idempotent `CREATE TRIGGER` statements in `docs/specs/21__db-ddl.sql`.
+  - Triggers now use `DROP TRIGGER IF EXISTS ... ON ...` before `CREATE TRIGGER` for `nodes`, `subscriptions`, `units`, `requests`, `offers`.
+- Validation completed:
+  - `netstat -ano | findstr ":5432"` showed LISTENING on `0.0.0.0:5432` and `[::]:5432`.
+  - `psql --version` returned `psql (PostgreSQL) 17.8`.
+  - `npm run db:bootstrap` succeeded twice in a row.
+  - `npm test` passed (`17/17`).
 
 ## Current blocker
 - No active blocker.
-- Only unavoidable manual action in future smoke runs: Stripe checkout completion in browser.
+- Next operational step is thread switch bookkeeping only.
 
 ## Operator preferences captured from thread-notes
-- Command response format: immediate next commands first; then short follow-up.
-- Responsibility split: Codex does all executable local/CLI work; user only handles unavoidable UI/credential actions.
+- Use explicit one-block Codex instruction headers (repo/branch/mode/execution/model/reasoning/permissions/context).
+- Prefer run-to-completion checklists with SUCCESS/BLOCKED outcome.
+- Keep instructions to next 1-2 concrete steps; leave later steps as placeholders.
+- Codex executes all local/CLI actions; user only handles unavoidable UI/credential work.
 
 ## Exact next command sequence
 1. `git switch main`
 2. `git pull`
 3. `git status --short`
-4. `npm test`
-5. `$env:PATH="C:\Users\trade\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin;$env:PATH"`
-6. `gcloud config set project fabric-487608 | Out-Null`
-7. `gcloud run services describe fabric-api --region us-west1 --format="value(status.latestReadyRevisionName,status.url)"`
-8. `gcloud run services add-iam-policy-binding fabric-api --region us-west1 --member="allUsers" --role="roles/run.invoker"`
-9. `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "https://fabric-api-393345198409.us-west1.run.app" -BillingPath "/v1/billing/checkout-session" -PlanCode "plus"`
-10. `# User step: open returned checkout_url and complete Stripe test checkout (Stripe Link code: 000000 if prompted).`
-11. `$filter='resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api"'; $raw=gcloud logging read "$filter" --project fabric-487608 --freshness=6h --limit 500 --format=json; $logs=$raw | ConvertFrom-Json; $logs | Where-Object { $_.jsonPayload.msg -eq "Stripe webhook processed" } | Sort-Object timestamp -Descending | Select-Object -First 10 | ForEach-Object { "{0}`t{1}`t{2}" -f $_.timestamp, $_.jsonPayload.event_id, $_.jsonPayload.event_type }`
+4. `npm run db:bootstrap`
+5. `npm run db:bootstrap`
+6. `npm test`
+7. `powershell -ExecutionPolicy Bypass -File .\scripts\thread-switch.ps1 -Slug "bootstrap-idempotent"`
+8. `# Start a new ChatGPT thread and paste only docs/project-files/thread-handoff.md`
 
 ## Handoff objective for next thread
-- Re-run paid onboarding smoke on demand and confirm webhook processing plus paid `/v1/me` state remain stable.
+- Continue from clean `main` after thread switch and execute the next bounded task with the operator protocol above.

@@ -2,6 +2,16 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Local DB bootstrap DDL trigger creation is idempotent
+Decision: For bootstrap DDL, recreate triggers using `DROP TRIGGER IF EXISTS ... ON <table>; CREATE TRIGGER ...` across `nodes`, `subscriptions`, `units`, `requests`, and `offers`.
+Reason: Re-running `npm run db:bootstrap` failed with Postgres `42710` (`trigger already exists`).
+Impact: Local bootstrap is rerunnable; `npm run db:bootstrap` now succeeds on repeated runs against an already-initialized DB.
+
+## 2026-02-17 - Project-files update cadence is thread-switch only
+Decision: Do not manually update `docs/project-files/*` during normal coding work; update them only in the dedicated thread-switch step and separate project-files commit.
+Reason: Keep product/code changes decoupled from handoff bookkeeping and maintain consistent thread transitions.
+Impact: Day-to-day commits stay focused on code/spec changes; thread-switch handles synchronized TODO/decision/handoff refresh.
+
 ## 2026-02-17 - Cloud Run smoke flow requires public invoke access
 Decision: For the current smoke/bootstrap flow, Cloud Run must allow invoke for unauthenticated callers; if deployed with `--no-allow-unauthenticated`, add `allUsers` `roles/run.invoker` before running smoke.
 Reason: `scripts/smoke-stripe-subscription.ps1` starts at unauthenticated `POST /v1/bootstrap`, which fails when invoke is restricted.
