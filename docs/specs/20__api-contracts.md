@@ -1097,7 +1097,59 @@ Request
 Response 200
 { "ok": true, "referrer_node_id": "uuid" }
 
-14) Stripe webhooks (idempotent; locked)
+14) Billing checkout session (subscription onboarding)
+POST /v1/billing/checkout-session
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Create a Stripe Checkout Session in subscription mode for the authenticated Node.
+
+Request
+{
+  "node_id": "uuid",
+  "plan_code": "basic|plus|pro|business",
+  "success_url": "https://...",
+  "cancel_url": "https://..."
+}
+
+Rules / side effects
+
+node_id must match the authenticated Node.
+
+Server resolves Stripe Price ID from configured plan mapping.
+
+Creates Stripe Checkout Session in subscription mode and sets:
+
+metadata.node_id + metadata.plan_code on Checkout Session
+
+subscription_data.metadata.node_id + subscription_data.metadata.plan_code on Subscription
+
+Response 200
+{
+  "node_id": "uuid",
+  "plan_code": "basic|plus|pro|business",
+  "checkout_session_id": "cs_...",
+  "checkout_url": "https://checkout.stripe.com/..."
+}
+
+Errors
+
+403 forbidden (node_id mismatch)
+
+422 validation_error
+
+15) Stripe webhooks (idempotent; locked)
 POST /v1/webhooks/stripe
 Auth
 
@@ -1142,7 +1194,7 @@ Signature verification with 5-minute tolerance.
 Response 200
 { "ok": true }
 
-15) Admin (minimal)
+16) Admin (minimal)
 POST /v1/admin/takedown
 Auth
 

@@ -46,6 +46,46 @@ export const fabricService = {
     const key = await repo.createApiKey(nodeId, label);
     return { api_key: key.api_key, key_id: key.id, created_at: key.created_at };
   },
+  async createBillingCheckoutSession(
+    authedNodeId: string,
+    payload: { node_id: string; plan_code: string; success_url: string; cancel_url: string },
+    idempotencyKey: string | null,
+  ) {
+    if (payload.node_id !== authedNodeId) return { forbidden: true };
+    const planCode = normalizePlanCode(payload.plan_code);
+    if (!planCode || !paidPlanCodeSet.has(planCode)) return { validationError: 'unsupported_plan_code' };
+    const stripePriceId = firstConfiguredStripePriceId(planCode);
+    if (!stripePriceId) return { validationError: 'missing_price_mapping', plan_code: planCode };
+    if (!config.stripeSecretKey) return { validationError: 'stripe_not_configured' };
+
+    const checkoutSession = await createStripeCheckoutSession({
+      nodeId: authedNodeId,
+      planCode,
+      priceId: stripePriceId,
+      successUrl: payload.success_url,
+      cancelUrl: payload.cancel_url,
+      idempotencyKey,
+    });
+    if (!checkoutSession.ok) {
+      return {
+        validationError: 'stripe_checkout_failed',
+        stripe_status: checkoutSession.status,
+      };
+    }
+
+    const checkoutSessionId = nonEmptyString(checkoutSession.session?.id);
+    const checkoutUrl = nonEmptyString(checkoutSession.session?.url);
+    if (!checkoutSessionId || !checkoutUrl) {
+      return { validationError: 'stripe_checkout_missing_url' };
+    }
+
+    return {
+      node_id: authedNodeId,
+      plan_code: planCode,
+      checkout_session_id: checkoutSessionId,
+      checkout_url: checkoutUrl,
+    };
+  },
   listAuthKeys(nodeId: string) { return repo.listKeys(nodeId).then((keys) => ({ keys })); },
   revokeAuthKey(nodeId: string, keyId: string) { return repo.revokeKey(nodeId, keyId); },
   async me(nodeId: string) {
@@ -249,6 +289,14 @@ const stripePricePlanMap: Record<string, string[]> = {
   pro: config.stripePriceIdsPro,
   business: config.stripePriceIdsBusiness,
 };
+const paidPlanCodes = ['basic', 'plus', 'pro', 'business'] as const;
+const paidPlanCodeSet = new Set<string>(paidPlanCodes);
+
+function firstConfiguredStripePriceId(planCode: string) {
+  const priceIds = stripePricePlanMap[planCode];
+  if (!Array.isArray(priceIds) || priceIds.length === 0) return null;
+  return priceIds[0];
+}
 
 function mappingKeysPresentByPlan() {
   return Object.fromEntries(Object.entries(stripePricePlanMap).map(([plan, ids]) => [plan, ids.length]));
@@ -367,6 +415,45 @@ async function resolvePlanCode(nodeId: string, event: any, fallback: string, opt
   }
   if (existingPlan) return existingPlan;
   return normalizePlanCode(fallback) ?? fallback;
+}
+
+async function createStripeCheckoutSession(payload: {
+  nodeId: string;
+  planCode: string;
+  priceId: string;
+  successUrl: string;
+  cancelUrl: string;
+  idempotencyKey: string | null;
+}) {
+  const form = new URLSearchParams();
+  form.set('mode', 'subscription');
+  form.set('line_items[0][price]', payload.priceId);
+  form.set('line_items[0][quantity]', '1');
+  form.set('success_url', payload.successUrl);
+  form.set('cancel_url', payload.cancelUrl);
+  form.set('client_reference_id', payload.nodeId);
+  form.set('metadata[node_id]', payload.nodeId);
+  form.set('metadata[plan_code]', payload.planCode);
+  form.set('subscription_data[metadata][node_id]', payload.nodeId);
+  form.set('subscription_data[metadata][plan_code]', payload.planCode);
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${config.stripeSecretKey}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  if (payload.idempotencyKey) headers['Idempotency-Key'] = `fabric_checkout:${payload.nodeId}:${payload.idempotencyKey}`;
+
+  try {
+    const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers,
+      body: form.toString(),
+    });
+    const session = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, session };
+  } catch {
+    return { ok: false, status: 0, session: null };
+  }
 }
 
 async function fetchStripeJson(path: string) {

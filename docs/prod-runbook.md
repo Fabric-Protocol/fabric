@@ -59,9 +59,12 @@
 ## Stripe subscription smoke test (PowerShell)
 - Run:
   - `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "https://<api-host>" -BillingPath "/v1/billing/checkout-session" -PlanCode "basic"`
+- Cloud Run access note: smoke flow needs unauthenticated invoke for `/v1/bootstrap`.
+- If service was deployed with `--no-allow-unauthenticated`, grant invoker: `gcloud run services add-iam-policy-binding fabric-api --region us-west1 --member="allUsers" --role="roles/run.invoker"`
 - Flow:
   - Bootstraps a node and captures `api_key`
-  - Calls configured billing checkout endpoint (if present)
+  - Calls `POST /v1/billing/checkout-session` with `node_id`, `plan_code`, `success_url`, `cancel_url`
+  - Server creates Stripe Checkout Session in `subscription` mode and attaches `metadata.node_id` + `metadata.plan_code` (session + subscription)
   - Prompts you to complete Stripe test checkout
   - Verifies `GET /v1/me` and checks subscription status
 

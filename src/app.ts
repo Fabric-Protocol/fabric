@@ -235,6 +235,31 @@ export function buildApp() {
     const q = req.query as any;
     return fabricService.creditsLedger((req as AuthedRequest).nodeId!, Number(q.limit ?? 20), q.cursor ?? null);
   });
+  app.post('/v1/billing/checkout-session', async (req, reply) => {
+    const parsed = z.object({
+      node_id: z.string().uuid(),
+      plan_code: z.enum(['basic', 'plus', 'pro', 'business']),
+      success_url: z.string().url(),
+      cancel_url: z.string().url(),
+    }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
+    const out = await fabricService.createBillingCheckoutSession(
+      (req as AuthedRequest).nodeId!,
+      parsed.data,
+      (req as AuthedRequest).idem?.key ?? null,
+    );
+    if ((out as any).forbidden) {
+      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create checkout session for another node'));
+    }
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create checkout session', {
+        reason: (out as any).validationError,
+        stripe_status: (out as any).stripe_status ?? undefined,
+        plan_code: (out as any).plan_code ?? parsed.data.plan_code,
+      }));
+    }
+    return out;
+  });
 
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);

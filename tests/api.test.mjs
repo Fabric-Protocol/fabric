@@ -13,6 +13,7 @@ process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
+process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
 
 const { buildApp } = await import('../dist/src/app.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
@@ -85,6 +86,77 @@ test('GET /v1/auth/keys returns masked prefix format', async () => {
   const res = await app.inject({ method: 'GET', url: '/v1/auth/keys', headers: { authorization: `ApiKey ${key}` } });
   assert.equal(res.statusCode, 200);
   assert.match(res.json().keys[0].prefix, /^.{4,8}\.\.\.$/);
+  await app.close();
+});
+
+test('billing checkout-session creates a Stripe session and respects idempotency', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-billing');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const idemKey = 'bill-checkout-1';
+  let fetchCalls = 0;
+
+  await withMockFetch(async (url, init = {}) => {
+    fetchCalls += 1;
+    assert.equal(String(url), 'https://api.stripe.com/v1/checkout/sessions');
+    const headers = new Headers(init.headers);
+    assert.match(headers.get('Authorization') ?? '', /^Bearer /);
+    assert.match(headers.get('Idempotency-Key') ?? '', /^fabric_checkout:/);
+
+    const form = new URLSearchParams(String(init.body ?? ''));
+    assert.equal(form.get('mode'), 'subscription');
+    assert.equal(form.get('line_items[0][price]'), 'price_plus_test');
+    assert.equal(form.get('metadata[node_id]'), nodeId);
+    assert.equal(form.get('metadata[plan_code]'), 'plus');
+    assert.equal(form.get('subscription_data[metadata][node_id]'), nodeId);
+    assert.equal(form.get('subscription_data[metadata][plan_code]'), 'plus');
+
+    return jsonResponse(200, {
+      id: 'cs_test_123',
+      url: 'https://checkout.stripe.com/c/pay/cs_test_123',
+      mode: 'subscription',
+    });
+  }, async () => {
+    const payload = {
+      node_id: nodeId,
+      plan_code: 'plus',
+      success_url: 'https://example.com/success',
+      cancel_url: 'https://example.com/cancel',
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload,
+    });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.json().node_id, nodeId);
+    assert.equal(first.json().plan_code, 'plus');
+    assert.equal(first.json().checkout_session_id, 'cs_test_123');
+    assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_test_123');
+
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload,
+    });
+    assert.equal(replay.statusCode, 200);
+    assert.deepEqual(replay.json(), first.json());
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload: { ...payload, plan_code: 'basic' },
+    });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+  });
+
+  assert.equal(fetchCalls, 1);
   await app.close();
 });
 
@@ -175,6 +247,31 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
 
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter - balBefore, 1500);
+  await app.close();
+});
+
+test('webhook customer.created does not mutate subscription or credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-customer-created');
+  const nodeId = b.json().node.id;
+  const balanceBefore = await repo.creditBalance(nodeId);
+  const meBefore = await repo.getMe(nodeId);
+  const body = {
+    id: `evt_customer_created_${nodeId.slice(0, 8)}`,
+    type: 'customer.created',
+    data: { object: { id: `cus_created_${nodeId.slice(0, 8)}`, metadata: { node_id: nodeId } } },
+  };
+  const sig = sign(body);
+  const first = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  const second = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
+
+  const balanceAfter = await repo.creditBalance(nodeId);
+  const meAfter = await repo.getMe(nodeId);
+  assert.equal(balanceAfter, balanceBefore);
+  assert.equal(meAfter.sub_status, meBefore.sub_status);
+  assert.equal(meAfter.plan_code, meBefore.plan_code);
   await app.close();
 });
 
