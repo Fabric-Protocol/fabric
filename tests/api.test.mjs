@@ -90,22 +90,40 @@ test('canonical error envelope for unauthorized', async () => {
 
 test('GET /v1/meta returns required legal version and legal URLs', async () => {
   const app = buildApp();
-  const res = await app.inject({ method: 'GET', url: '/v1/meta' });
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/meta',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
   assert.equal(res.statusCode, 200);
   const body = res.json();
   assert.equal(body.api_version, 'v1');
   assert.equal(body.required_legal_version, REQUIRED_LEGAL_VERSION);
-  assert.match(body.openapi_url, /\/openapi\.json$/);
-  assert.match(body.legal_urls.terms, /\/legal\/terms$/);
-  assert.match(body.legal_urls.privacy, /\/legal\/privacy$/);
-  assert.match(body.legal_urls.aup, /\/legal\/aup$/);
-  assert.match(body.support_url, /\/support$/);
+  assert.equal(body.openapi_url, 'https://fabric.example/openapi.json');
+  assert.equal(body.legal_urls.terms, 'https://fabric.example/legal/terms');
+  assert.equal(body.legal_urls.privacy, 'https://fabric.example/legal/privacy');
+  assert.equal(body.legal_urls.aup, 'https://fabric.example/legal/acceptable-use');
+  assert.equal(body.support_url, 'https://fabric.example/support');
+  assert.equal(body.docs_urls.agents_url, 'https://fabric.example/docs/agents');
+  assert.match(body.openapi_url, /^https:\/\//);
+  assert.match(body.docs_urls.agents_url, /^https:\/\//);
+  assert.match(body.docs_urls.agents_url, /\/docs\/agents$/);
   await app.close();
 });
 
 test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const app = buildApp();
-  const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+  const meta = await app.inject({
+    method: 'GET',
+    url: '/v1/meta',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  const openapiUrl = new URL(meta.json().openapi_url);
+  const res = await app.inject({
+    method: 'GET',
+    url: openapiUrl.pathname,
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type'] ?? ''), /^application\/json/);
   const body = res.json();
@@ -125,12 +143,19 @@ test('GET /legal/terms returns HTML', async () => {
 
 test('GET /docs/agents returns quickstart HTML content', async () => {
   const app = buildApp();
-  const res = await app.inject({ method: 'GET', url: '/docs/agents' });
+  const res = await app.inject({
+    method: 'GET',
+    url: '/docs/agents',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
   assert.match(res.body, /Fabric Agent Quickstart/);
   assert.match(res.body, /Authorization: ApiKey/);
-  assert.match(res.body, /required_legal_version/);
+  assert.match(res.body, /Idempotency-Key/);
+  assert.match(res.body, /If-Match/);
+  assert.match(res.body, /https:\/\/fabric\.example\/openapi\.json/);
+  assert.match(res.body, /\/v1\/offers/);
   await app.close();
 });
 
@@ -141,6 +166,25 @@ test('GET /support returns abuse/security guidance', async () => {
   assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
   assert.match(res.body, /security/i);
   assert.match(res.body, /abuse/i);
+  await app.close();
+});
+
+test('GET legal and support placeholder routes return 200 HTML', async () => {
+  const app = buildApp();
+  const routes = [
+    '/legal/terms',
+    '/legal/privacy',
+    '/legal/acceptable-use',
+    '/legal/refunds',
+    '/legal/agents',
+    '/support',
+  ];
+  for (const route of routes) {
+    const res = await app.inject({ method: 'GET', url: route });
+    assert.equal(res.statusCode, 200);
+    assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
+    assert.match(res.body, /PLACEHOLDER - replace with final legal text before public go-live/i);
+  }
   await app.close();
 });
 

@@ -38,7 +38,7 @@ Machine-readable service metadata for legal gating and support discovery.
   "legal_urls": {
     "terms": "https://<host>/legal/terms",
     "privacy": "https://<host>/legal/privacy",
-    "aup": "https://<host>/legal/aup"
+    "aup": "https://<host>/legal/acceptable-use"
   },
   "support_url": "https://<host>/support",
   "docs_urls": {
@@ -60,6 +60,9 @@ Serve OpenAPI 3.x JSON on the same origin as the API.
 
 ## GET /legal/terms
 ## GET /legal/privacy
+## GET /legal/acceptable-use
+## GET /legal/refunds
+## GET /legal/agents
 ## GET /legal/aup
 ## GET /support
 ## GET /docs/agents
@@ -69,6 +72,7 @@ None
 
 ### Purpose
 Serve public legal/support pages and an agent quickstart page from the same service origin as the API.
+`/legal/aup` is a compatibility alias for `/legal/acceptable-use`.
 
 ### Response 200
 `text/html`

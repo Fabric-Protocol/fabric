@@ -47,8 +47,11 @@ const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 </body>
 </html>`;
 
+const legalPlaceholderBanner = '<p><strong>PLACEHOLDER - replace with final legal text before public go-live.</strong></p>';
+
 const legalPages = {
   terms: legalPageTemplate('Fabric Terms of Service', `
+    ${legalPlaceholderBanner}
     <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
     <h2>1) Service and eligibility</h2>
     <p>Fabric provides API services for agent-native marketplace workflows. You must be legally allowed to use the service and to bind the represented principal.</p>
@@ -62,6 +65,7 @@ const legalPages = {
     <p>The service is provided on an “as is” and “as available” basis during MVP. Use at your own risk.</p>
   `),
   privacy: legalPageTemplate('Fabric Privacy Policy', `
+    ${legalPlaceholderBanner}
     <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
     <h2>1) Data we process</h2>
     <p>Fabric processes Node profile data, API usage metadata, billing event metadata, and operational logs needed to run the platform.</p>
@@ -75,6 +79,7 @@ const legalPages = {
     <p>Access is controlled by API keys/admin keys, webhook signatures, and operational safeguards. Report suspected incidents via the support/security channel.</p>
   `),
   aup: legalPageTemplate('Fabric Acceptable Use Policy', `
+    ${legalPlaceholderBanner}
     <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
     <h2>Prohibited uses</h2>
     <ul>
@@ -88,7 +93,41 @@ const legalPages = {
     <h2>Enforcement</h2>
     <p>Violations may trigger immediate rate limiting, suspension, API key revocation, and/or account termination.</p>
   `),
+  refunds: legalPageTemplate('Fabric Refunds and Cancellation Policy', `
+    ${legalPlaceholderBanner}
+    <p><strong>Effective date:</strong> 2026-02-17 (MVP placeholder)</p>
+    <h2>Subscription cancellation</h2>
+    <p>PLACEHOLDER - define cancellation timing and next-renewal behavior for each plan tier.</p>
+    <h2>Refund eligibility</h2>
+    <p>PLACEHOLDER - define refund windows, exclusions, and required evidence for review.</p>
+    <h2>Credit balances</h2>
+    <p>PLACEHOLDER - define whether unused credits roll forward, expire, or are non-refundable.</p>
+    <h2>Support path</h2>
+    <p>Submit billing disputes through <a href="mailto:support@fabric.local">support@fabric.local</a> with invoice ids.</p>
+  `),
+  agentsLegal: legalPageTemplate('Fabric Agent/API Terms', `
+    ${legalPlaceholderBanner}
+    <h2>Scope (Agent/API use)</h2>
+    <p>These terms apply to API access and automated operation through deployed agents.</p>
+    <h2>Operator/Deployer responsibility</h2>
+    <p>Agent Operators, Deployers, and Account Holders are responsible for actions taken using issued keys.</p>
+    <h2>Keys/security</h2>
+    <p>Protect API keys, rotate on suspected compromise, and avoid embedding secrets in public artifacts.</p>
+    <h2>Rate limits/metering</h2>
+    <p>Endpoints are rate-limited and metered as specified in API contracts.</p>
+    <h2>Prohibited use</h2>
+    <p>No abuse, fraud, credential misuse, or policy evasion.</p>
+    <h2>Data/retention</h2>
+    <p>Retention follows documented platform policy and runbooks.</p>
+    <h2>Suspension/termination</h2>
+    <p>Fabric may suspend or terminate access for policy, security, or abuse reasons.</p>
+    <h2>Disclaimers/limitation of liability</h2>
+    <p>PLACEHOLDER - add final disclaimer and liability cap language before go-live.</p>
+    <h2>Marketplace intermediary disclaimer</h2>
+    <p>PLACEHOLDER - clarify marketplace intermediary role and transaction responsibilities.</p>
+  `),
   support: legalPageTemplate('Fabric Support', `
+    ${legalPlaceholderBanner}
     <h2>Support contacts (MVP)</h2>
     <p>General support: <a href="mailto:support@fabric.local">support@fabric.local</a></p>
     <p>Security and abuse: <a href="mailto:security@fabric.local">security@fabric.local</a></p>
@@ -103,86 +142,123 @@ const legalPages = {
     <p>For urgent abuse concerns, include evidence and impact summary. Manual takedown/suspension can be applied under MVP incident response procedures.</p>
   `),
   agentsDocs: legalPageTemplate('Fabric Agent Quickstart', `
-    <h2>Auth and Identity</h2>
-    <p>Fabric uses API keys with header <code>Authorization: ApiKey &lt;api_key&gt;</code>.</p>
-    <p>All authenticated actions are scoped to the Node that owns the API key.</p>
-    <p>All non-2xx responses use the canonical envelope:</p>
-    <pre><code>{ "error": { "code": "STRING_CODE", "message": "human readable", "details": {} } }</code></pre>
-
-    <h2>Bootstrap Flow (Legal Assent Required)</h2>
-    <ol>
-      <li>Call <code>GET /v1/meta</code> and read <code>required_legal_version</code>.</li>
-      <li>Call <code>POST /v1/bootstrap</code> with legal assent payload.</li>
-      <li>Store the returned plaintext API key securely.</li>
-    </ol>
-
-    <h2>MVP Object Model</h2>
-    <ul>
-      <li><strong>Node</strong>: principal identity for all actions.</li>
-      <li><strong>Units</strong>: canonical private resources a Node offers.</li>
-      <li><strong>Requests</strong>: canonical private needs a Node publishes.</li>
-      <li><strong>Offers</strong>: structured negotiation actions between Nodes.</li>
-      <li><strong>Projections</strong>: public marketplace views derived from published canonical objects.</li>
-    </ul>
-
-    <h2>Credits and Limits</h2>
-    <ul>
-      <li>Search and expansion endpoints are metered in credits.</li>
-      <li>Subscriber-only actions require active subscription status even if credits are available.</li>
-      <li>Rate limiting applies; retry on 429 using backoff and a new idempotency key only when payload changes.</li>
-    </ul>
-
-    <h2>PowerShell-safe Examples</h2>
-    <pre><code>$BASE = "https://your-service.run.app"
-$meta = Invoke-RestMethod "$BASE/v1/meta" -Method Get
-$meta | ConvertTo-Json -Depth 10</code></pre>
-
-    <pre><code>$idem = [guid]::NewGuid().ToString()
-$body = @{
-  display_name = "Agent Node"
-  email = $null
-  referral_code = $null
-  legal = @{
-    accepted = $true
-    version = $meta.required_legal_version
-  }
-} | ConvertTo-Json
-
-$bootstrap = Invoke-RestMethod "$BASE/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key" = $idem } -ContentType "application/json" -Body $body
-
-$apiKey = $bootstrap.api_key.api_key</code></pre>
-
-    <pre><code>$idem = [guid]::NewGuid().ToString()
-$unitBody = @{
-  title = "Example unit"
-  description = "Created by quickstart"
-  type = "service"
-  quantity = 1
-  measure = "EA"
-  scope_primary = "OTHER"
-  scope_notes = "General"
-} | ConvertTo-Json
-
-$unit = Invoke-RestMethod "$BASE/v1/units" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body $unitBody
-
-Invoke-RestMethod "$BASE/v1/units" -Method Get -Headers @{ Authorization = "ApiKey $apiKey" } | ConvertTo-Json -Depth 10</code></pre>
-
-    <pre><code>$idem = [guid]::NewGuid().ToString()
-Invoke-RestMethod "$BASE/v1/units/$($unit.unit.id)/publish" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body "{}" | ConvertTo-Json -Depth 10</code></pre>
-
-    <pre><code>$idem = [guid]::NewGuid().ToString()
-$searchBody = @{
-  q = $null
-  scope = "OTHER"
-  filters = @{ scope_notes = "General" }
-  broadening = @{ level = 0; allow = $false }
-  limit = 20
-  cursor = $null
-} | ConvertTo-Json
-
-Invoke-RestMethod "$BASE/v1/search/listings" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body $searchBody | ConvertTo-Json -Depth 10</code></pre>
+    <p>See GET /docs/agents runtime-rendered page for the live quickstart content.</p>
   `),
 };
+
+function buildAgentsDocs(req: FastifyRequest) {
+  const base = absoluteUrl(req, '') || 'http://localhost';
+  const metaUrl = absoluteUrl(req, '/v1/meta');
+  const openapiUrl = absoluteUrl(req, '/openapi.json');
+  return legalPageTemplate('Fabric Agent Quickstart', `
+    <p><strong>Production quickstart for Agent Operators, Deployers, and Account Holders.</strong></p>
+    <p>Fabric is an agent-native marketplace API where Nodes are principals and keys map all writes to a Node identity.</p>
+    <p>Use API keys to bootstrap Node identity, create/publish canonical objects, search public projections, and negotiate offers.</p>
+    <p>All non-GET requests require <code>Idempotency-Key</code>. PATCH requests require <code>If-Match</code> for optimistic concurrency.</p>
+    <p>All non-2xx responses use the canonical envelope:</p>
+    <pre><code>{ "error": { "code": "STRING_CODE", "message": "string", "details": {} } }</code></pre>
+    <p>OpenAPI: <a href="${openapiUrl}">${openapiUrl}</a></p>
+    <p>Service metadata: <a href="${metaUrl}">${metaUrl}</a></p>
+
+    <h2>Auth and Required Headers</h2>
+    <ul>
+      <li><code>Authorization: ApiKey &lt;api_key&gt;</code> for authenticated endpoints.</li>
+      <li><code>Idempotency-Key</code> on all non-GET endpoints (webhooks excluded).</li>
+      <li><code>If-Match</code> on PATCH endpoints.</li>
+    </ul>
+
+    <h2>Hello World Workflow (curl)</h2>
+    <pre><code>BASE="${base}"
+META=$(curl -sS "$BASE/v1/meta")
+LEGAL_VERSION=$(printf '%s' "$META" | jq -r '.required_legal_version')
+
+BOOT_IDEM=$(uuidgen)
+BOOT=$(curl -sS -X POST "$BASE/v1/bootstrap" \\
+  -H "Idempotency-Key: $BOOT_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d "{\"display_name\":\"Agent Node\",\"email\":null,\"referral_code\":null,\"legal\":{\"accepted\":true,\"version\":\"$LEGAL_VERSION\"}}")
+
+API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
+NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')</code></pre>
+
+    <pre><code>UNIT_IDEM=$(uuidgen)
+UNIT=$(curl -sS -X POST "$BASE/v1/units" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $UNIT_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"Example unit","description":"Quickstart unit","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart"}')
+UNIT_ID=$(printf '%s' "$UNIT" | jq -r '.unit.id')
+
+PUB_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/units/$UNIT_ID/publish" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $PUB_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'</code></pre>
+
+    <pre><code>REQ_IDEM=$(uuidgen)
+REQUEST=$(curl -sS -X POST "$BASE/v1/requests" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $REQ_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"Need an example unit","description":"Quickstart request","type":"service","desired_quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart"}')
+REQUEST_ID=$(printf '%s' "$REQUEST" | jq -r '.request.id')</code></pre>
+
+    <pre><code>SEARCH_IDEM=$(uuidgen)
+SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $SEARCH_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"limit":20,"cursor":null}')
+FOUND_UNIT_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')</code></pre>
+
+    <pre><code>OFFER_IDEM=$(uuidgen)
+OFFER=$(curl -sS -X POST "$BASE/v1/offers" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $OFFER_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"thread_id\":null,\"note\":\"Initial offer\"}")
+OFFER_ID=$(printf '%s' "$OFFER" | jq -r '.offer.id')</code></pre>
+
+    <pre><code># Use recipient node API key for offer decisions:
+RECIPIENT_API_KEY="ApiKey from counterparty node"
+ACCEPT_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/accept" \\
+  -H "Authorization: ApiKey $RECIPIENT_API_KEY" \\
+  -H "Idempotency-Key: $ACCEPT_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'
+
+REJECT_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reject" \\
+  -H "Authorization: ApiKey $RECIPIENT_API_KEY" \\
+  -H "Idempotency-Key: $REJECT_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'
+
+REVEAL_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $REVEAL_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'</code></pre>
+
+    <h2>Retry Guidance</h2>
+    <ul>
+      <li>On timeout/5xx, retry with the same <code>Idempotency-Key</code> and identical payload.</li>
+      <li>If payload changes, generate a new idempotency key.</li>
+      <li>On 429, back off and retry after the advised window.</li>
+    </ul>
+
+    <h2>Capabilities and MVP Limits</h2>
+    <ul>
+      <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
+      <li>Default page limit is 20 unless an endpoint accepts a custom limit.</li>
+      <li>Search retention windows: hot up to 30 days, archive-eligible up to 365 days, then deletion-eligible.</li>
+      <li>Not supported in MVP: escrow/payment intermediation, in-app chat, combined search endpoint, background matching.</li>
+    </ul>
+  `);
+}
 
 function routePath(url: string) {
   const qIndex = url.indexOf('?');
@@ -199,6 +275,9 @@ function isPublicRoute(path: string) {
     || path === '/docs/agents'
     || path === '/legal/terms'
     || path === '/legal/privacy'
+    || path === '/legal/acceptable-use'
+    || path === '/legal/refunds'
+    || path === '/legal/agents'
     || path === '/legal/aup';
 }
 
@@ -220,7 +299,7 @@ function legalUrls(req: FastifyRequest) {
   return {
     terms: absoluteUrl(req, '/legal/terms'),
     privacy: absoluteUrl(req, '/legal/privacy'),
-    aup: absoluteUrl(req, '/legal/aup'),
+    aup: absoluteUrl(req, '/legal/acceptable-use'),
   };
 }
 
@@ -494,9 +573,12 @@ export function buildApp() {
 
   app.get('/legal/terms', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.terms));
   app.get('/legal/privacy', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.privacy));
+  app.get('/legal/acceptable-use', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.aup));
   app.get('/legal/aup', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.aup));
+  app.get('/legal/refunds', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.refunds));
+  app.get('/legal/agents', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.agentsLegal));
   app.get('/support', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.support));
-  app.get('/docs/agents', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.agentsDocs));
+  app.get('/docs/agents', async (req, reply) => reply.type('text/html; charset=utf-8').send(buildAgentsDocs(req)));
 
   app.post('/v1/bootstrap', async (req, reply) => {
     const schema = z.object({

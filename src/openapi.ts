@@ -44,13 +44,64 @@ export const openApiDocument = {
                     api_version: { type: 'string' },
                     required_legal_version: { type: 'string' },
                     openapi_url: { type: 'string' },
+                    legal_urls: { type: 'object' },
+                    support_url: { type: 'string' },
+                    docs_urls: { type: 'object' },
                   },
-                  required: ['api_version', 'required_legal_version', 'openapi_url'],
+                  required: ['api_version', 'required_legal_version', 'openapi_url', 'legal_urls', 'support_url', 'docs_urls'],
                 },
               },
             },
           },
         },
+      },
+    },
+    '/legal/terms': {
+      get: {
+        summary: 'Terms of Service page',
+        responses: { '200': { description: 'HTML terms page', content: { 'text/html': {} } } },
+      },
+    },
+    '/legal/privacy': {
+      get: {
+        summary: 'Privacy policy page',
+        responses: { '200': { description: 'HTML privacy page', content: { 'text/html': {} } } },
+      },
+    },
+    '/legal/acceptable-use': {
+      get: {
+        summary: 'Acceptable use policy page',
+        responses: { '200': { description: 'HTML acceptable-use page', content: { 'text/html': {} } } },
+      },
+    },
+    '/legal/aup': {
+      get: {
+        summary: 'Compatibility alias for acceptable use policy',
+        responses: { '200': { description: 'HTML acceptable-use page', content: { 'text/html': {} } } },
+      },
+    },
+    '/legal/refunds': {
+      get: {
+        summary: 'Refunds and cancellation policy page',
+        responses: { '200': { description: 'HTML refunds page', content: { 'text/html': {} } } },
+      },
+    },
+    '/legal/agents': {
+      get: {
+        summary: 'Agent/API terms page',
+        responses: { '200': { description: 'HTML agent terms page', content: { 'text/html': {} } } },
+      },
+    },
+    '/support': {
+      get: {
+        summary: 'Support and abuse contacts page',
+        responses: { '200': { description: 'HTML support page', content: { 'text/html': {} } } },
+      },
+    },
+    '/docs/agents': {
+      get: {
+        summary: 'Agent quickstart documentation page',
+        responses: { '200': { description: 'HTML quickstart page', content: { 'text/html': {} } } },
       },
     },
     '/openapi.json': {
