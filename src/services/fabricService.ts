@@ -68,7 +68,10 @@ export const fabricService = {
     if (!planCode || !paidPlanCodeSet.has(planCode)) return { validationError: 'unsupported_plan_code' };
     const stripePriceId = firstConfiguredStripePriceId(planCode);
     if (!stripePriceId) return { validationError: 'missing_price_mapping', plan_code: planCode };
-    if (!config.stripeSecretKey) return { validationError: 'stripe_not_configured' };
+    const missingStripeEnvVars = missingStripeCheckoutCoreEnvVars();
+    if (missingStripeEnvVars.length > 0) {
+      return { validationError: 'stripe_not_configured', missing: missingStripeEnvVars };
+    }
 
     const checkoutSession = await createStripeCheckoutSession({
       nodeId: authedNodeId,
@@ -107,7 +110,10 @@ export const fabricService = {
     const pack = creditPackQuoteByCode(payload.pack_code);
     if (!pack) return { validationError: 'unsupported_pack_code' };
     if (!pack.stripe_price_id) return { validationError: 'missing_topup_price_mapping', pack_code: pack.pack_code };
-    if (!config.stripeSecretKey) return { validationError: 'stripe_not_configured' };
+    const missingStripeEnvVars = missingStripeCheckoutCoreEnvVars();
+    if (missingStripeEnvVars.length > 0) {
+      return { validationError: 'stripe_not_configured', missing: missingStripeEnvVars };
+    }
 
     const checkoutSession = await createStripeTopupCheckoutSession({
       nodeId: authedNodeId,
@@ -138,6 +144,9 @@ export const fabricService = {
       checkout_session_id: checkoutSessionId,
       checkout_url: checkoutUrl,
     };
+  },
+  stripeDiagnostics() {
+    return stripeDiagnosticsSnapshot();
   },
   listAuthKeys(nodeId: string) { return repo.listKeys(nodeId).then((keys) => ({ keys })); },
   revokeAuthKey(nodeId: string, keyId: string) { return repo.revokeKey(nodeId, keyId); },
@@ -440,8 +449,67 @@ const stripePricePlanMap: Record<string, string[]> = {
   pro: config.stripePriceIdsPro,
   business: config.stripePriceIdsBusiness,
 };
+const stripePlanEnvVarNames: Record<string, { ids: string; single: string }> = {
+  basic: { ids: 'STRIPE_PRICE_IDS_BASIC', single: 'STRIPE_PRICE_BASIC' },
+  plus: { ids: 'STRIPE_PRICE_IDS_PLUS', single: 'STRIPE_PRICE_PLUS' },
+  pro: { ids: 'STRIPE_PRICE_IDS_PRO', single: 'STRIPE_PRICE_PRO' },
+  business: { ids: 'STRIPE_PRICE_IDS_BUSINESS', single: 'STRIPE_PRICE_BUSINESS' },
+};
 const paidPlanCodes = ['basic', 'plus', 'pro', 'business'] as const;
 const paidPlanCodeSet = new Set<string>(paidPlanCodes);
+
+function stripePriceIdCountsByPlan() {
+  return {
+    basic: config.stripePriceIdsBasic.length,
+    plus: config.stripePriceIdsPlus.length,
+    pro: config.stripePriceIdsPro.length,
+    business: config.stripePriceIdsBusiness.length,
+  };
+}
+
+function stripeSecretKeyPresent() {
+  return Boolean(nonEmptyString(config.stripeSecretKey));
+}
+
+function stripeWebhookSecretPresent() {
+  return Boolean(nonEmptyString(config.stripeWebhookSecret));
+}
+
+function missingStripeCheckoutCoreEnvVars() {
+  const missing: string[] = [];
+  if (!stripeSecretKeyPresent()) missing.push('STRIPE_SECRET_KEY');
+  return missing;
+}
+
+function stripeDiagnosticsSnapshot() {
+  const missing = new Set<string>();
+  const stripeSecretConfigured = stripeSecretKeyPresent();
+  const stripeWebhookConfigured = stripeWebhookSecretPresent();
+  const planCounts = stripePriceIdCountsByPlan();
+
+  if (!stripeSecretConfigured) missing.add('STRIPE_SECRET_KEY');
+  if (!stripeWebhookConfigured) missing.add('STRIPE_WEBHOOK_SECRET');
+
+  for (const [planCode, count] of Object.entries(planCounts)) {
+    if (count > 0) continue;
+    const names = stripePlanEnvVarNames[planCode];
+    if (!names) continue;
+    missing.add(names.ids);
+    missing.add(names.single);
+  }
+
+  if (!nonEmptyString(config.stripeTopupPrice100)) missing.add('STRIPE_TOPUP_PRICE_100');
+  if (!nonEmptyString(config.stripeTopupPrice300)) missing.add('STRIPE_TOPUP_PRICE_300');
+  if (!nonEmptyString(config.stripeTopupPrice1000)) missing.add('STRIPE_TOPUP_PRICE_1000');
+
+  return {
+    stripe_configured: missing.size === 0,
+    missing: [...missing].sort(),
+    price_id_counts_by_plan: planCounts,
+    stripe_secret_key_present: stripeSecretConfigured,
+    stripe_webhook_secret_present: stripeWebhookConfigured,
+  };
+}
 
 function firstConfiguredStripePriceId(planCode: string) {
   const priceIds = stripePricePlanMap[planCode];

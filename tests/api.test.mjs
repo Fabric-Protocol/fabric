@@ -25,6 +25,7 @@ process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 
 const { buildApp } = await import('../dist/src/app.js');
+const { config } = await import('../dist/src/config.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
 const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
@@ -77,6 +78,21 @@ async function withMockFetch(mockFetch, fn) {
     return await fn();
   } finally {
     globalThis.fetch = originalFetch;
+  }
+}
+
+async function withConfigOverrides(overrides, fn) {
+  const originals = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    originals[key] = config[key];
+    config[key] = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(originals)) {
+      config[key] = value;
+    }
   }
 }
 
@@ -601,6 +617,41 @@ test('billing topups checkout-session creates payment mode session and respects 
   });
 
   assert.equal(fetchCalls, 1);
+  await app.close();
+});
+
+test('billing checkout-session returns stripe_not_configured with missing env vars and does not call Stripe when key is absent', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-billing-missing-stripe-key');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  let fetchCalls = 0;
+  await withConfigOverrides({ stripeSecretKey: '' }, async () => {
+    await withMockFetch(async () => {
+      fetchCalls += 1;
+      throw new Error('Stripe should not be called when stripe key is not configured');
+    }, async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/billing/checkout-session',
+        headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bill-missing-stripe-key-1' },
+        payload: {
+          node_id: nodeId,
+          plan_code: 'plus',
+          success_url: 'https://example.com/success',
+          cancel_url: 'https://example.com/cancel',
+        },
+      });
+
+      assert.equal(res.statusCode, 422);
+      assert.equal(res.json().error.code, 'validation_error');
+      assert.equal(res.json().error.details.reason, 'stripe_not_configured');
+      assert.deepEqual(res.json().error.details.missing, ['STRIPE_SECRET_KEY']);
+    });
+  });
+
+  assert.equal(fetchCalls, 0);
   await app.close();
 });
 
@@ -1365,6 +1416,43 @@ test('admin can mint an api key for an existing node and rejects unknown node', 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${minted.json().api_key}` } });
   assert.equal(me.statusCode, 200);
   assert.equal(me.json().node.id, nodeId);
+  await app.close();
+});
+
+test('admin stripe diagnostics endpoint requires admin auth and returns safe config diagnostics', async () => {
+  const app = buildApp();
+
+  const unauth = await app.inject({
+    method: 'GET',
+    url: '/v1/admin/diagnostics/stripe',
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const ok = await app.inject({
+    method: 'GET',
+    url: '/v1/admin/diagnostics/stripe',
+    headers: {
+      'x-admin-key': 'admin-test',
+      host: 'fabric.example',
+      'x-forwarded-host': 'fabric-forwarded.example',
+      'x-forwarded-proto': 'https',
+    },
+  });
+  assert.equal(ok.statusCode, 200);
+  const body = ok.json();
+  assert.equal(typeof body.stripe_configured, 'boolean');
+  assert.equal(Array.isArray(body.missing), true);
+  assert.equal(typeof body.price_id_counts_by_plan.basic, 'number');
+  assert.equal(typeof body.price_id_counts_by_plan.plus, 'number');
+  assert.equal(typeof body.price_id_counts_by_plan.pro, 'number');
+  assert.equal(typeof body.price_id_counts_by_plan.business, 'number');
+  assert.equal(body.price_id_counts_by_plan.basic, 1);
+  assert.equal(body.price_id_counts_by_plan.plus, 1);
+  assert.equal(body.stripe_secret_key_present, true);
+  assert.equal(body.stripe_webhook_secret_present, true);
+  assert.equal(body.active_base_url, 'fabric-forwarded.example');
+  assert.match(body.active_base_url, /^[a-z0-9.-]+$/i);
   await app.close();
 });
 

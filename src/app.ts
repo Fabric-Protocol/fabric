@@ -295,6 +295,12 @@ function absoluteUrl(req: FastifyRequest, path: string) {
   return `${proto}://${host}${path}`;
 }
 
+function activeBaseHost(req: FastifyRequest) {
+  const forwardedHost = firstHeaderValue(req.headers['x-forwarded-host'] as string | string[] | undefined).split(',')[0].trim();
+  const host = forwardedHost || firstHeaderValue(req.headers.host as string | string[] | undefined).trim();
+  return host || null;
+}
+
 function legalUrls(req: FastifyRequest) {
   return {
     terms: absoluteUrl(req, '/legal/terms'),
@@ -673,10 +679,22 @@ export function buildApp() {
       return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create checkout session for another node'));
     }
     if ((out as any).validationError) {
+      const missing = Array.isArray((out as any).missing) ? (out as any).missing : undefined;
+      if ((out as any).validationError === 'stripe_not_configured') {
+        req.log.warn(
+          {
+            reason: 'stripe_not_configured',
+            missing: missing ?? [],
+            endpoint: '/v1/billing/checkout-session',
+          },
+          'Stripe checkout blocked by configuration',
+        );
+      }
       return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create checkout session', {
         reason: (out as any).validationError,
         stripe_status: (out as any).stripe_status ?? undefined,
         plan_code: (out as any).plan_code ?? parsed.data.plan_code,
+        missing,
       }));
     }
     return out;
@@ -698,10 +716,22 @@ export function buildApp() {
       return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create topup checkout session for another node'));
     }
     if ((out as any).validationError) {
+      const missing = Array.isArray((out as any).missing) ? (out as any).missing : undefined;
+      if ((out as any).validationError === 'stripe_not_configured') {
+        req.log.warn(
+          {
+            reason: 'stripe_not_configured',
+            missing: missing ?? [],
+            endpoint: '/v1/billing/topups/checkout-session',
+          },
+          'Stripe checkout blocked by configuration',
+        );
+      }
       return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create topup checkout session', {
         reason: (out as any).validationError,
         stripe_status: (out as any).stripe_status ?? undefined,
         pack_code: (out as any).pack_code ?? parsed.data.pack_code,
+        missing,
       }));
     }
     return out;
@@ -993,6 +1023,12 @@ export function buildApp() {
     const dbType = parsed.data.target_type === 'public_listing' ? 'listing' : parsed.data.target_type === 'public_request' ? 'request' : 'node';
     await query('insert into takedowns(target_type,target_id,reason) values($1,$2,$3)', [dbType, parsed.data.target_id, parsed.data.reason]);
     return { ok: true };
+  });
+  app.get('/v1/admin/diagnostics/stripe', async (req) => {
+    return {
+      ...fabricService.stripeDiagnostics(),
+      active_base_url: activeBaseHost(req),
+    };
   });
   app.post('/v1/admin/credits/adjust', async (req, reply) => {
     const parsed = z.object({ node_id: z.string(), delta: z.number(), reason: z.string() }).safeParse(req.body);
