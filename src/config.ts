@@ -27,7 +27,6 @@ export const config = {
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? '',
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
   stripePriceIdsBasic: parsePriceIds(process.env.STRIPE_PRICE_IDS_BASIC, process.env.STRIPE_PRICE_BASIC),
-  stripePriceIdsPlus: parsePriceIds(process.env.STRIPE_PRICE_IDS_PLUS, process.env.STRIPE_PRICE_PLUS),
   stripePriceIdsPro: parsePriceIds(process.env.STRIPE_PRICE_IDS_PRO, process.env.STRIPE_PRICE_PRO),
   stripePriceIdsBusiness: parsePriceIds(process.env.STRIPE_PRICE_IDS_BUSINESS, process.env.STRIPE_PRICE_BUSINESS),
   stripeTopupPrice100: process.env.STRIPE_TOPUP_PRICE_100 ?? '',

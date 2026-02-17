@@ -88,7 +88,6 @@ function Get-PlanPriceVarCandidates {
   param([Parameter(Mandatory = $true)][string]$PlanCode)
   switch ($PlanCode.Trim().ToLowerInvariant()) {
     "basic" { return @("STRIPE_PRICE_BASIC", "STRIPE_PRICE_IDS_BASIC") }
-    "plus" { return @("STRIPE_PRICE_PLUS", "STRIPE_PRICE_IDS_PLUS") }
     "pro" { return @("STRIPE_PRICE_PRO", "STRIPE_PRICE_IDS_PRO") }
     "business" { return @("STRIPE_PRICE_BUSINESS", "STRIPE_PRICE_IDS_BUSINESS") }
     default { return @() }
@@ -230,7 +229,7 @@ if ($hostName -in @("localhost", "127.0.0.1") -and $BillingPath -eq "/v1/billing
 
   $priceVarCandidates = Get-PlanPriceVarCandidates -PlanCode $PlanCode
   if ($priceVarCandidates.Count -eq 0) {
-    Write-Host "[FAIL] Unsupported PlanCode '$PlanCode' for checkout-session smoke. Use basic|plus|pro|business."
+    Write-Host "[FAIL] Unsupported PlanCode '$PlanCode' for checkout-session smoke. Use basic|pro|business."
     exit 1
   }
   if (-not (HasAnyConfigValue -Names $priceVarCandidates -DotEnv $dotEnv)) {

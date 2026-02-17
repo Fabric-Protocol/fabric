@@ -68,12 +68,10 @@ limit 1;
 | `STRIPE_WEBHOOK_SECRET` | Required for webhook signature verification | `whsec_...` | `src/config.ts:28`, `src/app.ts:834`, `src/app.ts:839` |
 | `STRIPE_PRICE_IDS_BASIC` | Required if plan `basic` is sold (or use `STRIPE_PRICE_BASIC`) | `price_abc,price_def` | `src/config.ts:29`, `src/services/fabricService.ts:435`, `src/services/fabricService.ts:443` |
 | `STRIPE_PRICE_BASIC` | Optional alias for `basic` single price id | `price_abc` | `src/config.ts:29`, `src/services/fabricService.ts:435`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_IDS_PLUS` | Required if plan `plus` is sold (or use `STRIPE_PRICE_PLUS`) | `price_abc,price_def` | `src/config.ts:30`, `src/services/fabricService.ts:436`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_PLUS` | Optional alias for `plus` single price id | `price_abc` | `src/config.ts:30`, `src/services/fabricService.ts:436`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_IDS_PRO` | Required if plan `pro` is sold (or use `STRIPE_PRICE_PRO`) | `price_abc,price_def` | `src/config.ts:31`, `src/services/fabricService.ts:437`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_PRO` | Optional alias for `pro` single price id | `price_abc` | `src/config.ts:31`, `src/services/fabricService.ts:437`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_IDS_BUSINESS` | Required if plan `business` is sold (or use `STRIPE_PRICE_BUSINESS`) | `price_abc,price_def` | `src/config.ts:32`, `src/services/fabricService.ts:438`, `src/services/fabricService.ts:443` |
-| `STRIPE_PRICE_BUSINESS` | Optional alias for `business` single price id | `price_abc` | `src/config.ts:32`, `src/services/fabricService.ts:438`, `src/services/fabricService.ts:443` |
+| `STRIPE_PRICE_IDS_PRO` | Required if plan `pro` is sold (or use `STRIPE_PRICE_PRO`) | `price_abc,price_def` | `src/config.ts:30`, `src/services/fabricService.ts:446`, `src/services/fabricService.ts:452` |
+| `STRIPE_PRICE_PRO` | Optional alias for `pro` single price id | `price_abc` | `src/config.ts:30`, `src/services/fabricService.ts:446`, `src/services/fabricService.ts:452` |
+| `STRIPE_PRICE_IDS_BUSINESS` | Required if plan `business` is sold (or use `STRIPE_PRICE_BUSINESS`) | `price_abc,price_def` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
+| `STRIPE_PRICE_BUSINESS` | Optional alias for `business` single price id | `price_abc` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
 | `STRIPE_TOPUP_PRICE_100` | Required if `credits_100` top-up is enabled | `price_abc` | `src/config.ts:33`, `src/services/fabricService.ts:400` |
 | `STRIPE_TOPUP_PRICE_300` | Required if `credits_300` top-up is enabled | `price_abc` | `src/config.ts:34`, `src/services/fabricService.ts:407` |
 | `STRIPE_TOPUP_PRICE_1000` | Required if `credits_1000` top-up is enabled | `price_abc` | `src/config.ts:35`, `src/services/fabricService.ts:414` |

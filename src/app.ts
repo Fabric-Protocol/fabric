@@ -665,7 +665,7 @@ export function buildApp() {
   app.post('/v1/billing/checkout-session', async (req, reply) => {
     const parsed = z.object({
       node_id: z.string().uuid(),
-      plan_code: z.enum(['basic', 'plus', 'pro', 'business']),
+      plan_code: z.enum(['basic', 'pro', 'business']),
       success_url: z.string().url(),
       cancel_url: z.string().url(),
     }).safeParse(req.body);

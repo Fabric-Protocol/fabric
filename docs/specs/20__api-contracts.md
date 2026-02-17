@@ -368,7 +368,7 @@ Response 200
 {
   "node_id": "uuid",
   "subscription": {
-    "plan": "free|basic|plus|pro|business",
+    "plan": "free|basic|pro|business",
     "status": "none|active|past_due|canceled"
   },
   "credits_balance": 123,
@@ -391,7 +391,7 @@ Response 200
     }
   ],
   "plans": [
-    { "plan_code": "basic|plus|pro|business", "monthly_credits": 500 }
+    { "plan_code": "basic|pro|business", "monthly_credits": 500 }
   ]
 }
 
@@ -1270,7 +1270,7 @@ Create a Stripe Checkout Session in subscription mode for the authenticated Node
 Request
 {
   "node_id": "uuid",
-  "plan_code": "basic|plus|pro|business",
+  "plan_code": "basic|pro|business",
   "success_url": "https://...",
   "cancel_url": "https://..."
 }
@@ -1290,7 +1290,7 @@ subscription_data.metadata.node_id + subscription_data.metadata.plan_code on Sub
 Response 200
 {
   "node_id": "uuid",
-  "plan_code": "basic|plus|pro|business",
+  "plan_code": "basic|pro|business",
   "checkout_session_id": "cs_...",
   "checkout_url": "https://checkout.stripe.com/..."
 }

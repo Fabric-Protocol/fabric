@@ -389,7 +389,7 @@ export async function offerSummary(offer: any) {
   return { ok: true, referrer_node_id: code.issuer_node_id };
 };
 
-const planCredits: Record<string, number> = { free: 0, basic: 500, plus: 1500, pro: 1500, business: 5000 };
+const planCredits: Record<string, number> = { free: 0, basic: 500, pro: 1500, business: 5000 };
 const freeLikePlans = new Set(['free', 'none']);
 const creditsQuoteCache = new Map<string, { expiresAtMs: number; value: any }>();
 const CREDITS_QUOTE_CACHE_TTL_MS = 60 * 1000;
@@ -437,7 +437,6 @@ function creditPackQuoteByCode(packCode: string | null | undefined) {
 function paidPlanQuotes() {
   return [
     { plan_code: 'basic', monthly_credits: planCredits.basic },
-    { plan_code: 'plus', monthly_credits: planCredits.plus },
     { plan_code: 'pro', monthly_credits: planCredits.pro },
     { plan_code: 'business', monthly_credits: planCredits.business },
   ];
@@ -445,23 +444,21 @@ function paidPlanQuotes() {
 
 const stripePricePlanMap: Record<string, string[]> = {
   basic: config.stripePriceIdsBasic,
-  plus: config.stripePriceIdsPlus,
   pro: config.stripePriceIdsPro,
   business: config.stripePriceIdsBusiness,
 };
 const stripePlanEnvVarNames: Record<string, { ids: string; single: string }> = {
   basic: { ids: 'STRIPE_PRICE_IDS_BASIC', single: 'STRIPE_PRICE_BASIC' },
-  plus: { ids: 'STRIPE_PRICE_IDS_PLUS', single: 'STRIPE_PRICE_PLUS' },
   pro: { ids: 'STRIPE_PRICE_IDS_PRO', single: 'STRIPE_PRICE_PRO' },
   business: { ids: 'STRIPE_PRICE_IDS_BUSINESS', single: 'STRIPE_PRICE_BUSINESS' },
 };
-const paidPlanCodes = ['basic', 'plus', 'pro', 'business'] as const;
+const paidPlanCodes = ['basic', 'pro', 'business'] as const;
 const paidPlanCodeSet = new Set<string>(paidPlanCodes);
+const canonicalPlanCodes = new Set<string>(['free', ...paidPlanCodes]);
 
 function stripePriceIdCountsByPlan() {
   return {
     basic: config.stripePriceIdsBasic.length,
-    plus: config.stripePriceIdsPlus.length,
     pro: config.stripePriceIdsPro.length,
     business: config.stripePriceIdsBusiness.length,
   };
@@ -596,18 +593,16 @@ function planFromStripePrices(stripePriceIds: string[]) {
 }
 
 function planCodeForStorage(planCode: string) {
-  return planCode === 'plus' ? 'pro' : planCode;
+  return planCode;
 }
 
 function planCodeForResponse(planCode: string) {
-  if (planCode === 'pro' && config.stripePriceIdsPlus.length > 0 && config.stripePriceIdsPro.length === 0) return 'plus';
   return planCode;
 }
 
 const planOrder: Record<string, number> = {
   free: 0,
   basic: 1,
-  plus: 2,
   pro: 2,
   business: 3,
 };
@@ -619,7 +614,7 @@ function planRank(planCode: string | null | undefined) {
 
 function normalizePlanForComparison(planCode: string | null | undefined) {
   const normalized = normalizePlanCode(planCode);
-  if (!normalized) return 'free';
+  if (!normalized || !(normalized in planOrder)) return 'free';
   return normalized;
 }
 
@@ -644,7 +639,7 @@ async function invoiceObjectWithLines(event: any) {
 
 async function resolvePlanCode(nodeId: string, event: any, fallback: string, options: { preferStripePriceMap?: boolean; avoidFreeFallback?: boolean } = {}) {
   const explicitPlan = normalizePlanCode(event.data?.object?.metadata?.plan_code ?? event.data?.object?.plan_code ?? null);
-  if (explicitPlan) return explicitPlan;
+  if (explicitPlan && canonicalPlanCodes.has(explicitPlan)) return explicitPlan;
 
   let stripePriceIds: string[] = [];
   if (options.preferStripePriceMap) {
@@ -659,7 +654,8 @@ async function resolvePlanCode(nodeId: string, event: any, fallback: string, opt
   }
 
   const me = await repo.getMe(nodeId);
-  const existingPlan = normalizePlanCode(me?.plan_code);
+  const existingPlanRaw = normalizePlanCode(me?.plan_code);
+  const existingPlan = existingPlanRaw && canonicalPlanCodes.has(existingPlanRaw) ? existingPlanRaw : null;
   if (options.avoidFreeFallback && existingPlan && !freeLikePlans.has(existingPlan)) return existingPlan;
   if (options.preferStripePriceMap && stripePriceIds.length > 0) {
     console.warn(JSON.stringify({
@@ -671,7 +667,9 @@ async function resolvePlanCode(nodeId: string, event: any, fallback: string, opt
     }));
   }
   if (existingPlan) return existingPlan;
-  return normalizePlanCode(fallback) ?? fallback;
+  const normalizedFallback = normalizePlanCode(fallback);
+  if (normalizedFallback && canonicalPlanCodes.has(normalizedFallback)) return normalizedFallback;
+  return fallback;
 }
 
 async function createStripeCheckoutSession(payload: {

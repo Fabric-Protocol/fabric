@@ -63,12 +63,11 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 ## 4) Plans (MVP)
 - Free: 0 monthly credits, non-subscriber.
 - Basic: 500 monthly credits.
-- Pro/Plus: 1,500 monthly credits.
+- Pro: 1,500 monthly credits.
 - Business: 5,000 monthly credits.
 
 Implementation note:
 - Internal storage remains `free|basic|pro|business`.
-- API responses may present `plus` when Stripe plus mapping is configured.
 
 ## 5) Credit top-ups (enabled in MVP)
 - Endpoint: `POST /v1/billing/topups/checkout-session`

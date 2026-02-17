@@ -6,8 +6,6 @@ delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
-delete process.env.STRIPE_PRICE_PLUS;
-delete process.env.STRIPE_PRICE_IDS_PLUS;
 delete process.env.STRIPE_TOPUP_PRICE_100;
 delete process.env.STRIPE_TOPUP_PRICE_300;
 delete process.env.STRIPE_TOPUP_PRICE_1000;
@@ -15,14 +13,23 @@ delete process.env.STRIPE_TOPUP_PRICE_1000;
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
-process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
+process.env.STRIPE_PRICE_PRO = 'price_pro_test';
+process.env.STRIPE_PRICE_BUSINESS = 'price_business_test';
 process.env.STRIPE_TOPUP_PRICE_100 = 'price_topup_100_test';
 process.env.STRIPE_TOPUP_PRICE_300 = 'price_topup_300_test';
 process.env.STRIPE_TOPUP_PRICE_1000 = 'price_topup_1000_test';
 process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
+const LIVE_PRICE_IDS = {
+  basic: 'price_1T1tO2K3gJAgZl81QzBXfPIf',
+  pro: 'price_1T1wL1K3gJAgZl81IYKvjCsD',
+  business: 'price_1T1wLgK3gJAgZl81450PfCc3',
+  topup100: 'price_1T1wMGK3gJAgZl817t4OWdnM',
+  topup300: 'price_1T1wMbK3gJAgZl81uWQJtoqH',
+  topup1000: 'price_1T1wNBK3gJAgZl81ixDfggz3',
+};
 
 const { buildApp } = await import('../dist/src/app.js');
 const { config } = await import('../dist/src/config.js');
@@ -495,11 +502,11 @@ test('billing checkout-session creates a Stripe session and respects idempotency
 
     const form = new URLSearchParams(String(init.body ?? ''));
     assert.equal(form.get('mode'), 'subscription');
-    assert.equal(form.get('line_items[0][price]'), 'price_plus_test');
+    assert.equal(form.get('line_items[0][price]'), 'price_pro_test');
     assert.equal(form.get('metadata[node_id]'), nodeId);
-    assert.equal(form.get('metadata[plan_code]'), 'plus');
+    assert.equal(form.get('metadata[plan_code]'), 'pro');
     assert.equal(form.get('subscription_data[metadata][node_id]'), nodeId);
-    assert.equal(form.get('subscription_data[metadata][plan_code]'), 'plus');
+    assert.equal(form.get('subscription_data[metadata][plan_code]'), 'pro');
 
     return jsonResponse(200, {
       id: 'cs_test_123',
@@ -509,7 +516,7 @@ test('billing checkout-session creates a Stripe session and respects idempotency
   }, async () => {
     const payload = {
       node_id: nodeId,
-      plan_code: 'plus',
+      plan_code: 'pro',
       success_url: 'https://example.com/success',
       cancel_url: 'https://example.com/cancel',
     };
@@ -522,7 +529,7 @@ test('billing checkout-session creates a Stripe session and respects idempotency
     });
     assert.equal(first.statusCode, 200);
     assert.equal(first.json().node_id, nodeId);
-    assert.equal(first.json().plan_code, 'plus');
+    assert.equal(first.json().plan_code, 'pro');
     assert.equal(first.json().checkout_session_id, 'cs_test_123');
     assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_test_123');
 
@@ -620,6 +627,65 @@ test('billing topups checkout-session creates payment mode session and respects 
   await app.close();
 });
 
+test('billing checkout-session accepts basic/pro/business and rejects plus', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-billing-plan-validation');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const expectedPriceByPlan = {
+    basic: 'price_basic_test',
+    pro: 'price_pro_test',
+    business: 'price_business_test',
+  };
+
+  let fetchCalls = 0;
+  await withMockFetch(async (_url, init = {}) => {
+    fetchCalls += 1;
+    const form = new URLSearchParams(String(init.body ?? ''));
+    const planCode = form.get('metadata[plan_code]');
+    assert.ok(planCode === 'basic' || planCode === 'pro' || planCode === 'business');
+    assert.equal(form.get('line_items[0][price]'), expectedPriceByPlan[planCode]);
+    return jsonResponse(200, {
+      id: `cs_${planCode}_test_123`,
+      url: `https://checkout.stripe.com/c/pay/cs_${planCode}_test_123`,
+      mode: 'subscription',
+    });
+  }, async () => {
+    for (const planCode of ['basic', 'pro', 'business']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/billing/checkout-session',
+        headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `bill-plan-${planCode}-1` },
+        payload: {
+          node_id: nodeId,
+          plan_code: planCode,
+          success_url: 'https://example.com/success',
+          cancel_url: 'https://example.com/cancel',
+        },
+      });
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.json().plan_code, planCode);
+    }
+
+    const plusRes = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bill-plan-plus-1' },
+      payload: {
+        node_id: nodeId,
+        plan_code: 'plus',
+        success_url: 'https://example.com/success',
+        cancel_url: 'https://example.com/cancel',
+      },
+    });
+    assert.equal(plusRes.statusCode, 422);
+    assert.equal(plusRes.json().error.code, 'validation_error');
+  });
+
+  assert.equal(fetchCalls, 3);
+  await app.close();
+});
+
 test('billing checkout-session returns stripe_not_configured with missing env vars and does not call Stripe when key is absent', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-billing-missing-stripe-key');
@@ -638,7 +704,7 @@ test('billing checkout-session returns stripe_not_configured with missing env va
         headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bill-missing-stripe-key-1' },
         payload: {
           node_id: nodeId,
-          plan_code: 'plus',
+          plan_code: 'pro',
           success_url: 'https://example.com/success',
           cancel_url: 'https://example.com/cancel',
         },
@@ -848,20 +914,20 @@ test('webhook customer.created does not mutate subscription or credits', async (
   await app.close();
 });
 
-test('webhook maps invoice.paid price id to plus plan', async () => {
+test('webhook maps invoice.paid price id to pro plan', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-wh-plus-plan');
+  const b = await bootstrap(app, 'boot-wh-pro-plan');
   const nodeId = b.json().node.id;
   const balBefore = await repo.creditBalance(nodeId);
 
   const invoiceEvent = {
-    id: `evt_plus_invoice_${nodeId.slice(0, 8)}`,
+    id: `evt_pro_invoice_${nodeId.slice(0, 8)}`,
     type: 'invoice.paid',
     data: {
       object: {
-        id: `in_plus_${nodeId.slice(0, 8)}`,
-        customer: `cus_plus_${nodeId.slice(0, 8)}`,
-        subscription: `sub_plus_${nodeId.slice(0, 8)}`,
+        id: `in_pro_${nodeId.slice(0, 8)}`,
+        customer: `cus_pro_${nodeId.slice(0, 8)}`,
+        subscription: `sub_pro_${nodeId.slice(0, 8)}`,
         period_start: 1735689600,
         period_end: 1738368000,
         metadata: { node_id: nodeId },
@@ -871,7 +937,7 @@ test('webhook maps invoice.paid price id to plus plan', async () => {
               amount: 1999,
               pricing: {
                 type: 'price_details',
-                price_details: { price: 'price_plus_test' },
+                price_details: { price: 'price_pro_test' },
                 unit_amount_decimal: '1999',
               },
             },
@@ -886,7 +952,7 @@ test('webhook maps invoice.paid price id to plus plan', async () => {
 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
   assert.equal(me.statusCode, 200);
-  assert.equal(me.json().subscription.plan, 'plus');
+  assert.equal(me.json().subscription.plan, 'pro');
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter - balBefore, 1500);
   await app.close();
@@ -894,7 +960,7 @@ test('webhook maps invoice.paid price id to plus plan', async () => {
 
 test('invoice.paid credits grant ignores prior zero-credit grant for same period', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-wh-plus-regrant');
+  const b = await bootstrap(app, 'boot-wh-pro-regrant');
   const nodeId = b.json().node.id;
   const periodStart = 1735689600;
   const periodEnd = 1738368000;
@@ -919,16 +985,16 @@ test('invoice.paid credits grant ignores prior zero-credit grant for same period
 
   const beforePaid = await repo.creditBalance(nodeId);
   const secondEvent = {
-    id: `evt_plus_after_zero_${nodeId.slice(0, 8)}`,
+    id: `evt_pro_after_zero_${nodeId.slice(0, 8)}`,
     type: 'invoice.paid',
     data: {
       object: {
-        id: `in_plus_after_zero_${nodeId.slice(0, 8)}`,
+        id: `in_pro_after_zero_${nodeId.slice(0, 8)}`,
         customer: `cus_zero_${nodeId.slice(0, 8)}`,
         subscription: `sub_zero_${nodeId.slice(0, 8)}`,
         period_start: periodStart,
         period_end: periodEnd,
-        metadata: { node_id: nodeId, plan_code: 'plus' },
+        metadata: { node_id: nodeId, plan_code: 'pro' },
       },
     },
   };
@@ -938,7 +1004,7 @@ test('invoice.paid credits grant ignores prior zero-credit grant for same period
 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
   assert.equal(me.statusCode, 200);
-  assert.equal(me.json().subscription.plan, 'plus');
+  assert.equal(me.json().subscription.plan, 'pro');
   const afterPaid = await repo.creditBalance(nodeId);
   assert.equal(afterPaid - beforePaid, 1500);
   await app.close();
@@ -990,7 +1056,7 @@ test('invoice.paid upgrade proration grants plan-difference credits once per inv
     period_start: periodStart,
     period_end: periodEnd,
     billing_reason: 'subscription_update',
-    metadata: { node_id: nodeId, plan_code: 'plus' },
+    metadata: { node_id: nodeId, plan_code: 'pro' },
     lines: { data: [{ proration: true, amount: 1000 }] },
   };
 
@@ -1008,7 +1074,7 @@ test('invoice.paid upgrade proration grants plan-difference credits once per inv
 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
   assert.equal(me.statusCode, 200);
-  assert.equal(me.json().subscription.plan, 'plus');
+  assert.equal(me.json().subscription.plan, 'pro');
   await app.close();
 });
 
@@ -1022,34 +1088,34 @@ test('invoice.paid downgrade on subscription_update is deferred until renewal in
   const periodEnd = 1738368000;
   const nextPeriodEnd = 1740787200;
 
-  const activatePlus = {
+  const activatePro = {
     id: `evt_downgrade_activate_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'plus' }, customer: customerId, subscription: subscriptionId } },
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
   };
-  const activateSig = sign(activatePlus);
+  const activateSig = sign(activatePro);
   const activateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
   assert.equal(activateRes.statusCode, 200);
 
-  const plusInvoice = {
-    id: `evt_downgrade_plus_monthly_${nodeId.slice(0, 8)}`,
+  const proInvoice = {
+    id: `evt_downgrade_pro_monthly_${nodeId.slice(0, 8)}`,
     type: 'invoice.paid',
     data: {
       object: {
-        id: `in_plus_monthly_${nodeId.slice(0, 8)}`,
+        id: `in_pro_monthly_${nodeId.slice(0, 8)}`,
         customer: customerId,
         subscription: subscriptionId,
         period_start: periodStart,
         period_end: periodEnd,
         billing_reason: 'subscription_cycle',
-        metadata: { node_id: nodeId, plan_code: 'plus' },
+        metadata: { node_id: nodeId, plan_code: 'pro' },
       },
     },
   };
-  const plusSig = sign(plusInvoice);
-  const plusRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': plusSig.header }, payload: plusSig.raw });
-  assert.equal(plusRes.statusCode, 200);
-  const balAfterPlus = await repo.creditBalance(nodeId);
+  const proSig = sign(proInvoice);
+  const proRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': proSig.header }, payload: proSig.raw });
+  assert.equal(proRes.statusCode, 200);
+  const balAfterPro = await repo.creditBalance(nodeId);
 
   const downgradeUpdateInvoice = {
     id: `evt_downgrade_update_${nodeId.slice(0, 8)}`,
@@ -1073,9 +1139,9 @@ test('invoice.paid downgrade on subscription_update is deferred until renewal in
 
   const meAfterUpdate = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
   assert.equal(meAfterUpdate.statusCode, 200);
-  assert.equal(meAfterUpdate.json().subscription.plan, 'plus');
+  assert.equal(meAfterUpdate.json().subscription.plan, 'pro');
   const balAfterUpdate = await repo.creditBalance(nodeId);
-  assert.equal(balAfterUpdate, balAfterPlus);
+  assert.equal(balAfterUpdate, balAfterPro);
 
   const downgradeRenewalInvoice = {
     id: `evt_downgrade_renewal_${nodeId.slice(0, 8)}`,
@@ -1444,15 +1510,50 @@ test('admin stripe diagnostics endpoint requires admin auth and returns safe con
   assert.equal(typeof body.stripe_configured, 'boolean');
   assert.equal(Array.isArray(body.missing), true);
   assert.equal(typeof body.price_id_counts_by_plan.basic, 'number');
-  assert.equal(typeof body.price_id_counts_by_plan.plus, 'number');
   assert.equal(typeof body.price_id_counts_by_plan.pro, 'number');
   assert.equal(typeof body.price_id_counts_by_plan.business, 'number');
   assert.equal(body.price_id_counts_by_plan.basic, 1);
-  assert.equal(body.price_id_counts_by_plan.plus, 1);
+  assert.equal(body.price_id_counts_by_plan.pro, 1);
+  assert.equal(body.price_id_counts_by_plan.business, 1);
+  assert.equal(Object.hasOwn(body.price_id_counts_by_plan, 'plus'), false);
+  assert.equal(body.missing.includes('STRIPE_PRICE_PLUS'), false);
+  assert.equal(body.missing.includes('STRIPE_PRICE_IDS_PLUS'), false);
   assert.equal(body.stripe_secret_key_present, true);
   assert.equal(body.stripe_webhook_secret_present, true);
   assert.equal(body.active_base_url, 'fabric-forwarded.example');
   assert.match(body.active_base_url, /^[a-z0-9.-]+$/i);
+  await app.close();
+});
+
+test('admin stripe diagnostics reports configured=true for supported live sku set and ignores plus vars', async () => {
+  const app = buildApp();
+
+  await withConfigOverrides({
+    stripeSecretKey: 'sk_live_configured_test',
+    stripeWebhookSecret: 'whsec_live_configured_test',
+    stripePriceIdsBasic: [LIVE_PRICE_IDS.basic],
+    stripePriceIdsPro: [LIVE_PRICE_IDS.pro],
+    stripePriceIdsBusiness: [LIVE_PRICE_IDS.business],
+    stripeTopupPrice100: LIVE_PRICE_IDS.topup100,
+    stripeTopupPrice300: LIVE_PRICE_IDS.topup300,
+    stripeTopupPrice1000: LIVE_PRICE_IDS.topup1000,
+  }, async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/admin/diagnostics/stripe',
+      headers: { 'x-admin-key': 'admin-test', host: 'fabric.example' },
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.stripe_configured, true);
+    assert.deepEqual(body.missing, []);
+    assert.equal(body.price_id_counts_by_plan.basic, 1);
+    assert.equal(body.price_id_counts_by_plan.pro, 1);
+    assert.equal(body.price_id_counts_by_plan.business, 1);
+    assert.equal(Object.hasOwn(body.price_id_counts_by_plan, 'plus'), false);
+    assert.equal(body.active_base_url, 'fabric.example');
+  });
+
   await app.close();
 });
 
