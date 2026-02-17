@@ -2,6 +2,16 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Stripe invoice price-id mapping is canonical for paid plan resolution
+Decision: Resolve `invoice.paid` plan from Stripe line-item price IDs via env mapping (`STRIPE_PRICE_*` / `STRIPE_PRICE_IDS_*`), with the $19.99 price mapped to internal `plus`.
+Reason: Real `invoice.paid` payloads did not consistently carry `metadata.plan_code`, causing fallback to `free`.
+Impact: Paid invoice processing now maps to the intended paid plan deterministically and `/v1/me` reflects paid-state plan results for mapped prices.
+
+## 2026-02-17 - Billing compatibility rule: store plus as pro + ignore zero-amount monthly grants in dedupe
+Decision: Keep DB compatibility by storing `plus` as `pro` in `subscriptions.plan_code` while returning `plus` in API response when plus mapping is configured; monthly grant dedupe treats only prior positive `grant_subscription_monthly` rows as already granted.
+Reason: Current DB check constraint excludes `plus`, and historical zero-amount monthly grants blocked later paid grants for the same billing period.
+Impact: No immediate schema migration required for this rollout; paid-node plan/credits now converge correctly and replayed paid events remain idempotent.
+
 ## 2026-02-16 - Enforce strict DB TLS with secret-backed CA pinning on Cloud Run
 Decision: Production DB connections use explicit TLS verification (`rejectUnauthorized: true`) with `DATABASE_SSL_CA` injected from GCP Secret Manager; SSL query params are stripped from `DATABASE_URL` before pg Pool config so runtime TLS settings are deterministic.
 Reason: Stripe webhook processing on Cloud Run was failing at DB insert with `SELF_SIGNED_CERT_IN_CHAIN` despite valid `DATABASE_URL`.

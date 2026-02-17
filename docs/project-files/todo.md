@@ -1,6 +1,6 @@
 ﻿# Fabric - TODO (thread-active)
 
-Last updated: 2026-02-16
+Last updated: 2026-02-17
 
 ## P0 - Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
@@ -45,16 +45,20 @@ Last updated: 2026-02-16
   - Done: webhook destination + event selection + webhook secret configured
   - Done: deterministic Node mapping for subscription/invoice lifecycle updates
   - Done: production TLS trust chain fix for Supabase Postgres (`DATABASE_SSL_CA`) eliminated webhook 500 TLS failures
-- [ ] Run post-deploy smoke tests:
+- [x] Run post-deploy smoke tests:
   - Done: bootstrap + `GET /v1/me`, admin projections rebuild, webhook signature 200 deliveries
   - Done: real Stripe webhook deliveries return 200 after TLS CA pinning; DB webhook insert path succeeds in Cloud Run
-  - Remaining: verify `/v1/me` subscription state + credits transitions on live mapped paid events
+  - Done: paid-node verification after `invoice.paid` replay shows `/v1/me` `subscription.plan=plus`, `subscription.status=active`, `credits_balance=1700`
+  - Done: idempotency verification after re-resend of same `invoice.paid` event left paid-node `/v1/me` unchanged (`credits_balance` remained `1700`)
 
 ## P1 - Backend branch follow-ups
 - [x] Merge backend API contract/test gap work into `main` (PR #1 merged).
 - [ ] If new backend changes are needed, branch from updated `main` and rerun:
   - `npm run typecheck`
   - `npm test`
+- [ ] Validate full production flow for a brand-new node:
+  - New node bootstrap -> start checkout/payment -> Stripe customer/subscription creation -> webhook mapping to node -> `/v1/me` paid state
+- [ ] Resend a non-entitlement Stripe event (for example `customer.created`) and confirm no subscription/credits mutation.
 
 ## P1 - Repo hygiene
 - [ ] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
