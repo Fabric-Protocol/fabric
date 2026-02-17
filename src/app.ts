@@ -7,6 +7,7 @@ import { fabricService } from './services/fabricService.js';
 import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
+import { openApiDocument } from './openapi.js';
 
 type AuthedRequest = FastifyRequest & { nodeId?: string; plan?: string; isSubscriber?: boolean; idem?: { key: string; hash: string; keyScope: string } };
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
@@ -76,6 +77,7 @@ function isPublicRoute(path: string) {
   return path === '/v1/bootstrap'
     || path === '/v1/webhooks/stripe'
     || path === '/healthz'
+    || path === '/openapi.json'
     || path === '/v1/meta'
     || path === '/support'
     || path === '/docs/agents'
@@ -110,6 +112,7 @@ function buildMetaPayload(req: FastifyRequest) {
   return {
     api_version: config.apiVersion,
     required_legal_version: config.requiredLegalVersion,
+    openapi_url: absoluteUrl(req, '/openapi.json'),
     legal_urls: legalUrls(req),
     support_url: absoluteUrl(req, '/support'),
     docs_urls: {
@@ -305,6 +308,7 @@ export function buildApp() {
     return payload;
   });
 
+  app.get('/openapi.json', async (_req, reply) => reply.type('application/json; charset=utf-8').send(openApiDocument));
   app.get('/v1/meta', async (req) => buildMetaPayload(req));
 
   app.get('/legal/terms', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.terms));

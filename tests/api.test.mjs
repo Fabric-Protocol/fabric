@@ -72,10 +72,22 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   const body = res.json();
   assert.equal(body.api_version, 'v1');
   assert.equal(body.required_legal_version, REQUIRED_LEGAL_VERSION);
+  assert.match(body.openapi_url, /\/openapi\.json$/);
   assert.match(body.legal_urls.terms, /\/legal\/terms$/);
   assert.match(body.legal_urls.privacy, /\/legal\/privacy$/);
   assert.match(body.legal_urls.aup, /\/legal\/aup$/);
   assert.match(body.support_url, /\/support$/);
+  await app.close();
+});
+
+test('GET /openapi.json returns valid OpenAPI JSON', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/openapi.json' });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type'] ?? ''), /^application\/json/);
+  const body = res.json();
+  assert.equal(typeof body.openapi, 'string');
+  assert.match(body.openapi, /^3\./);
   await app.close();
 });
 

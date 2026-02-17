@@ -32,6 +32,7 @@ Machine-readable service metadata for legal gating and support discovery.
 {
   "api_version": "v1",
   "required_legal_version": "2026-02-17",
+  "openapi_url": "https://<host>/openapi.json",
   "legal_urls": {
     "terms": "https://<host>/legal/terms",
     "privacy": "https://<host>/legal/privacy",
@@ -43,6 +44,17 @@ Machine-readable service metadata for legal gating and support discovery.
   }
 }
 ```
+
+## GET /openapi.json
+
+### Auth
+None
+
+### Purpose
+Serve OpenAPI 3.x JSON on the same origin as the API.
+
+### Response 200
+`application/json` (must include top-level `openapi` field)
 
 ## GET /legal/terms
 ## GET /legal/privacy
