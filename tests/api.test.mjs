@@ -578,6 +578,20 @@ test('webhook accepts valid signature when stripe-signature has multiple v1 valu
   await app.close();
 });
 
+test('webhook returns stripe_signature_invalid when signature verification fails', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-bad-sig');
+  const nodeId = b.json().node.id;
+  const body = { id: 'evt_bad_sig', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: 'cus_bad', subscription: 'sub_bad' } } };
+  const sig = sign(body);
+  const badHeader = `t=${sig.t},v1=${'0'.repeat(64)}`;
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': badHeader }, payload: sig.raw });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'stripe_signature_invalid');
+  assert.equal(res.json().error.details.reason, 'signature_mismatch');
+  await app.close();
+});
+
 test('webhook maps subscription events by stored stripe_customer_id when node metadata is absent', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-map-sub');

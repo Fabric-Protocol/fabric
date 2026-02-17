@@ -1,38 +1,55 @@
 # Stripe Webhook Troubleshooting and Replay (MVP)
 
 ## Common symptoms
-- `400 validation_error` with signature failure.
-- `200 { ok: true }` but no subscription/credit updates.
-- Delayed processing after deploy.
+- Checkout session is created, but `GET /v1/me` remains `subscription.status="none"`.
+- Webhook endpoint returns `400` with `error.code="stripe_signature_invalid"`.
+- Cloud/local logs show `Stripe webhook processed without node mapping`.
 
-## Quick checks
-1. Verify runtime secrets are configured:
-- `STRIPE_WEBHOOK_SECRET`
-- `STRIPE_SECRET_KEY`
-2. Confirm endpoint URL matches deployed service:
-- `https://<service>/v1/webhooks/stripe`
-3. Confirm Cloud Run logs include:
-- `Stripe webhook signature verified`
-- `Stripe webhook processed`
+## Fast local workflow
+1. Start local forwarding to your API:
+```powershell
+stripe listen --forward-to http://localhost:3000/v1/webhooks/stripe
+```
+2. Copy the printed signing secret (`whsec_...`) into local `.env` as:
+```
+STRIPE_WEBHOOK_SECRET=whsec_...
+```
+3. Restart the API process after changing `.env`.
+4. Re-run smoke (reuse existing node/key to avoid bootstrap limits):
+```powershell
+.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "http://localhost:3000" -PlanCode "basic" -SkipBootstrap
+```
 
-## Signature failures
-- Ensure raw request body is used for verification.
-- Ensure Stripe dashboard endpoint secret matches `STRIPE_WEBHOOK_SECRET`.
-- Re-send from Stripe Dashboard:
-  - Developers -> Webhooks -> endpoint -> event -> Resend.
+## What to check in logs
+Look for these lines in order:
+- `Stripe webhook received` (event arrived)
+- `Stripe webhook signature verified` (signature passed)
+- `Stripe subscription activated` (node/plan transition happened)
+- `Stripe webhook processed` (event processing finished)
 
-## Mapping failures
-- Check event payload for node mapping fields:
-  - `metadata.node_id`
-  - customer/subscription ids (`cus_...`, `sub_...`)
-- Verify stored mapping in DB subscriptions table for target node.
+If signature fails, you should see:
+- `Stripe webhook signature verification failed`
+- HTTP `400` with `error.code="stripe_signature_invalid"`
 
 ## Replay guidance
-1. Prefer replaying a known event id from Stripe dashboard.
-2. Confirm idempotency behavior in logs:
-   - event should be processed without duplicate side effects.
-3. For invoice events, verify resulting ledger rows by invoice/payment key.
+Resend a known event id:
+```powershell
+stripe events resend <evt_id>
+```
+Then re-check webhook logs and `GET /v1/me` for the same node.
 
-## Post-replay validation
-- `GET /v1/me` using the affected node key.
-- Verify subscription status/plan and credits balance expectations.
+## Quick checks
+1. Runtime env vars exist:
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+2. Endpoint is correct for environment:
+- local: `http://localhost:3000/v1/webhooks/stripe`
+- deployed: `https://<service>/v1/webhooks/stripe`
+3. Mapping exists or metadata is present:
+- `metadata.node_id`, or stored `stripe_customer_id` / `stripe_subscription_id`
+
+## Official references
+- Stripe CLI `listen` forwarding + webhook signing secret output:
+  https://docs.stripe.com/stripe-cli/use-cli
+- Stripe CLI resend command reference:
+  https://docs.stripe.com/cli/events/resend

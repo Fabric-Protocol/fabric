@@ -181,6 +181,7 @@ $port = if ($baseUri.IsDefaultPort) {
 } else {
   $baseUri.Port
 }
+$localWebhookSecretPresent = $true
 
 Write-Host "[STEP] Connectivity preflight..."
 if ($baseUri.Scheme -eq "https") {
@@ -235,11 +236,20 @@ if ($hostName -in @("localhost", "127.0.0.1") -and $BillingPath -eq "/v1/billing
   if (-not (HasAnyConfigValue -Names $priceVarCandidates -DotEnv $dotEnv)) {
     $missing += ($priceVarCandidates -join " or ")
   }
+  if ([string]::IsNullOrWhiteSpace((Get-ConfigValue -Name "STRIPE_WEBHOOK_SECRET" -DotEnv $dotEnv))) {
+    $localWebhookSecretPresent = $false
+    $missing += "STRIPE_WEBHOOK_SECRET"
+  }
 
   if ($missing.Count -gt 0) {
     Write-Host "[FAIL] Local Stripe config preflight failed."
     foreach ($item in $missing) {
       Write-Host "  - missing: $item"
+    }
+    if (-not $localWebhookSecretPresent) {
+      Write-Host "[NEXT] Start forwarding Stripe webhooks and set STRIPE_WEBHOOK_SECRET from stripe listen output:"
+      Write-Host "       stripe listen --forward-to $BaseUrl/v1/webhooks/stripe"
+      Write-Host "       (copy the shown whsec_... value into .env, then restart API)"
     }
     Write-Host "[NEXT] Set these in .env (or environment), restart API, then re-run smoke."
     exit 1
@@ -441,4 +451,12 @@ if ($me.subscription.status -eq "active") {
 }
 
 Write-Host "[WARN] Subscription is not active yet (status=$($me.subscription.status))."
+if ($hostName -in @("localhost", "127.0.0.1")) {
+  Write-Host "[NEXT] Stripe webhook likely not delivered/verified yet."
+  Write-Host "  1) Run: stripe listen --forward-to $BaseUrl/v1/webhooks/stripe"
+  Write-Host "  2) Copy the shown whsec_... into STRIPE_WEBHOOK_SECRET in .env"
+  Write-Host "  3) Restart the API server"
+  Write-Host "  4) Complete checkout again or resend with: stripe events resend <evt_id>"
+  Write-Host "  5) Re-run this smoke script with -SkipBootstrap"
+}
 exit 1

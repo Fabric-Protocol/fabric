@@ -858,7 +858,21 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     const storedPlanCode = planCodeForStorage(planCode);
     const status = type === 'customer.subscription.deleted' ? 'canceled' : (object.status ?? 'active');
     await repo.upsertSubscription(nodeId, storedPlanCode, status, stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
-    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
+    const subscriptionActivated = status === 'active'
+      ? {
+          node_id: nodeId,
+          plan_code: planCodeForResponse(storedPlanCode),
+          invoice_id: null,
+          stripe_subscription_id: stripeSubscriptionId,
+        }
+      : null;
+    return {
+      mapped: true,
+      node_id: nodeId,
+      mapping_source: mapping.source,
+      event_type: type,
+      ...(subscriptionActivated ? { subscription_activated: subscriptionActivated } : {}),
+    };
   }
 
   if (type === 'checkout.session.completed') {
@@ -879,7 +893,18 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     const planCode = await resolvePlanCode(nodeId, event, 'basic');
     const storedPlanCode = planCodeForStorage(planCode);
     await repo.upsertSubscription(nodeId, storedPlanCode, 'active', stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
-    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
+    return {
+      mapped: true,
+      node_id: nodeId,
+      mapping_source: mapping.source,
+      event_type: type,
+      subscription_activated: {
+        node_id: nodeId,
+        plan_code: planCodeForResponse(storedPlanCode),
+        invoice_id: invoiceIdForIdempotency(object),
+        stripe_subscription_id: stripeSubscriptionId,
+      },
+    };
   }
 
   if (type === 'invoice.paid') {
@@ -956,7 +981,18 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
       await repo.addCredit(claim.issuer_node_id, 'grant_referral', 100, { claimer_node_id: nodeId, claim_id: claim.id });
       await repo.markReferralAwarded(claim.id);
     }
-    return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
+    return {
+      mapped: true,
+      node_id: nodeId,
+      mapping_source: mapping.source,
+      event_type: type,
+      subscription_activated: {
+        node_id: nodeId,
+        plan_code: effectivePlan,
+        invoice_id: invoiceId,
+        stripe_subscription_id: stripeSubscriptionId,
+      },
+    };
   }
 
   if (type === 'invoice.payment_failed') {

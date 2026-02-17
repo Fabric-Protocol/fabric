@@ -394,6 +394,12 @@ export function buildApp() {
   if (!startupDbEnvCheckLogged) {
     startupDbEnvCheckLogged = true;
     app.log.info({ ...getSafeDbEnvDiagnostics(), check_point: 'startup' }, 'db env check');
+    if (!config.stripeWebhookSecret) {
+      app.log.warn(
+        { stripe_webhook_secret_present: false, env_var: 'STRIPE_WEBHOOK_SECRET' },
+        'Stripe webhook signature verification will fail until STRIPE_WEBHOOK_SECRET is set',
+      );
+    }
   }
 
   app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => {
@@ -802,29 +808,31 @@ export function buildApp() {
         stripe_signature_present: hasStripeSignatureHeader(req),
       });
       try {
+        const signatureFailure = (reason: string, message: string, eventType: string | null = null, eventId: string | null = null) => {
+          webhookApp.log.warn(
+            { signature_verified: false, reason, event_type: eventType, event_id: eventId },
+            'Stripe webhook signature verification failed',
+          );
+          return reply.status(400).send(errorEnvelope('stripe_signature_invalid', message, { reason }));
+        };
         const sigHeader = (req.headers['stripe-signature'] as string | undefined) ?? '';
         if (!sigHeader) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'missing_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Missing Stripe-Signature'));
+          return signatureFailure('missing_signature_header', 'Missing Stripe-Signature');
         }
         const parsedSig = parseStripeSignature(sigHeader);
         if (!parsedSig) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'invalid_signature_header', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid Stripe-Signature'));
+          return signatureFailure('invalid_signature_header', 'Invalid Stripe-Signature');
         }
         const { t, v1Values } = parsedSig;
         if (Math.abs(Math.floor(Date.now() / 1000) - t) > 300) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'timestamp_out_of_tolerance', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature timestamp out of tolerance'));
+          return signatureFailure('timestamp_out_of_tolerance', 'Stripe signature timestamp out of tolerance');
         }
         const bodyBuffer = rawBodyBuffer(req.body);
         if (bodyBuffer === null) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'invalid_raw_body', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
+          return signatureFailure('invalid_raw_body', 'Invalid webhook payload');
         }
         if (!config.stripeWebhookSecret) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'missing_webhook_secret', event_type: null, event_id: null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+          return signatureFailure('missing_webhook_secret', 'Stripe webhook secret is not configured');
         }
 
         const payload = Buffer.concat([Buffer.from(String(t), 'utf8'), Buffer.from('.', 'utf8'), bodyBuffer]);
@@ -842,9 +850,9 @@ export function buildApp() {
         const eventId = String(event.id ?? '');
         const eventType = String(event.type ?? 'unknown');
         setStripeWebhookLogContext(req, { event_id: eventId || null, event_type: eventType || null });
+        webhookApp.log.info({ event_type: eventType, event_id: eventId || null, stripe_signature_present: true }, 'Stripe webhook received');
         if (!signatureVerified) {
-          webhookApp.log.warn({ signature_verified: false, reason: 'signature_mismatch', event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verification failed');
-          return reply.status(400).send(errorEnvelope('validation_error', 'Stripe signature verification failed'));
+          return signatureFailure('signature_mismatch', 'Stripe signature verification failed', eventType, eventId || null);
         }
         webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verified');
 
@@ -852,6 +860,20 @@ export function buildApp() {
         await repo.insertStripeEvent(eventId, eventType, event);
         try {
           const processing = await (fabricService as any).processStripeEvent(event);
+          if (processing?.subscription_activated) {
+            webhookApp.log.info(
+              {
+                signature_verified: true,
+                event_type: eventType,
+                event_id: eventId,
+                node_id: processing.subscription_activated.node_id,
+                plan_code: processing.subscription_activated.plan_code,
+                invoice_id: processing.subscription_activated.invoice_id ?? null,
+                stripe_subscription_id: processing.subscription_activated.stripe_subscription_id ?? null,
+              },
+              'Stripe subscription activated',
+            );
+          }
           await repo.markStripeProcessed(eventId);
           if (processing?.mapped === false && processing?.reason === 'unmapped_stripe_customer') {
             webhookApp.log.warn(
