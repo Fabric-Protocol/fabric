@@ -2,13 +2,13 @@
 
 Last updated: 2026-02-17
 
-## P0 - Post-merge decisions and hygiene
+## ✅ Completed (P0) — Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
   - Policy chosen: commit it and keep it updated.
 - [x] Apply the chosen lockfile policy in a clean follow-up PR (merged to `main`).
 - [x] Keep local-only project-files artifacts out of git using `.git/info/exclude` (done in this thread).
 
-## P0 - Keep local verification baseline healthy
+## ✅ Completed (P0) — Keep local verification baseline healthy
 - [x] Sync `main` and verify status is clean:
   - `git switch main`
   - `git pull`
@@ -22,11 +22,10 @@ Last updated: 2026-02-17
 - [x] Validate repo `.env` values for local DB remain correct:
   - `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
   - `ADMIN_KEY=<non-empty>`
-  - Verified in-thread (`git check-ignore -v .env`; redacted parse showed host=`localhost`, port=`5432`, db=`fabric`, `ADMIN_KEY` non-empty)
 - [x] Make local bootstrap rerunnable:
   - `npm run db:bootstrap` succeeded twice after idempotent trigger fix in `docs/specs/21__db-ddl.sql` (commit `9b4b31c`)
 
-## P0 - Productionization execution (Supabase + Cloud Run)
+## ✅ Completed (P0) — Productionization execution (Supabase + Cloud Run)
 - [x] Lock production decisions in-thread:
   - Supabase Postgres as provider
   - Direct connection string (non-pooler)
@@ -54,15 +53,85 @@ Last updated: 2026-02-17
   - Done: paid-node verification after `invoice.paid` replay shows `/v1/me` `subscription.plan=plus`, `subscription.status=active`, `credits_balance=1700`
   - Done: idempotency verification after re-resend of same `invoice.paid` event left paid-node `/v1/me` unchanged (`credits_balance` remained `1700`)
 
-## P1 - Backend branch follow-ups
-- [x] Merge backend API contract/test gap work into `main` (PR #1 merged).
-- [ ] If new backend changes are needed, branch from updated `main` and rerun:
-  - `npm run typecheck`
-  - `npm test`
-- [x] Validate full production flow for a brand-new node:
-  - New node bootstrap -> start checkout/payment -> Stripe customer/subscription creation -> webhook mapping to node -> `/v1/me` paid state
-- [x] Resend a non-entitlement Stripe event (for example `customer.created`) and confirm no subscription/credits mutation.
+## ✅ Completed (P0) — Legal/meta/bootstrap gating (A1+B1)
+- [x] Decision: host legal/docs same-origin on Cloud Run; require legal assent during `POST /v1/bootstrap`.
+- [x] Implement public HTML routes:
+  - `GET /legal/terms`, `GET /legal/privacy`, `GET /legal/aup`, `GET /support`, `GET /docs/agents` (placeholder)
+- [x] Implement unauthenticated `GET /v1/meta` returning:
+  - `api_version`, `required_legal_version` (`2026-02-17`), absolute `legal_urls`, `support_url`, `docs_urls.agents_url`
+- [x] Gate `POST /v1/bootstrap` on explicit legal assent/version:
+  - `legal_required`, `legal_version_mismatch`
+  - persist `legal_accepted_at`, `legal_version`, optional `legal_ip`, `legal_user_agent`
+- [x] Update Stripe smoke script to fetch `/v1/meta` and send legal assent.
+- [x] Verify: typecheck PASS; db:bootstrap PASS; tests PASS.
 
-## P1 - Repo hygiene
-- [x] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
-  - Verified in-thread; normalized to `coverage/` in commit `c115f6b`
+## Phase 0.5 — Go-live ASAP (next threads)
+### Docs + legal + operability
+- [ ] Publish OpenAPI on same origin:
+  - add `GET /openapi.json` (or `/docs/openapi.json`)
+  - add `openapi_url` to `GET /v1/meta`
+  - keep consistent with `docs/specs/20__api-contracts.md`
+- [ ] Upgrade `/docs/agents` from placeholder → real Agent Quickstart:
+  - bootstrap → create unit/request → publish → search → offer → accept/reject → contact reveal
+  - include canonical error envelope, idempotency/retries, credits exhausted behavior
+- [ ] Legal content pass (documents still need real text):
+  - ToS / Privacy / AUP / Developer-Agent policy text (not placeholders)
+  - document how `required_legal_version` changes
+- [ ] Support page content pass:
+  - support contact, billing support, abuse/takedown instructions, security reporting instructions
+- [ ] Ops minimum runbook (docs-only):
+  - key rotation procedure
+  - manual suspension procedure
+  - incident basics (logs, triage)
+
+### Implementation verification vs specs (must confirm real enforcement)
+- [ ] Verify trial/gating enforcement in code matches `docs/specs/25__plans-credits-gating.md` and `docs/specs/20__api-contracts.md`; implement missing gates + tests.
+- [ ] Verify rate-limit enforcement in code matches `docs/specs/10__invariants.md`; implement missing limits + tests.
+- [ ] Verify audit/ledger retention behavior is implemented; if not automated, document as ops policy.
+
+### Suspension (MVP approach)
+- [ ] Implement/document manual suspension (recommended):
+  - set `nodes.suspended_at`
+  - revoke node API keys
+  - ensure suspended nodes cannot call authed endpoints
+  - ensure suspended nodes are excluded from projections/search
+  - document unsuspend steps
+
+### Decisions locked
+- Subscription-only gating (credits do not unlock subscriber-gated actions).
+
+## Phase 1 — Near-term product completeness
+### Credits UX
+- [ ] Add server-side quote endpoint (no search execution):
+  - `POST /v1/credits/quote` accepts same params as search
+  - returns `estimated_cost` + breakdown; does not depend on result count
+  - free but rate-limited + cached (short TTL)
+
+### Top-ups (credit packs)
+- [ ] Specify + implement 3 credit packs:
+  - pricing rule: ~2× subscription implied cost-per-credit (incentivize subscription)
+  - Stripe Checkout flow + webhook grant into credits ledger (invoice/session idempotency)
+  - velocity limits (anti-fraud) + refund/chargeback policy
+
+### Plan changes + credits (decision locked)
+- [ ] Upgrade credits are difference-based and granted immediately on paid upgrade invoice:
+  - on upgrade, create proration invoice; on `invoice.paid`, grant credit difference for the cycle
+  - enforce idempotency by invoice id
+- [ ] Define downgrade semantics (recommended: apply at next renewal)
+
+## Phase 2 — Agent adoption acceleration
+- [ ] SDKs (full): TS + Python, versioned, CI publish, examples
+- [ ] MCP server (official): hosted on Cloud Run; discoverable via `/v1/meta`
+- [ ] Docs portal expansion: `/docs/api`, `/docs/errors`, `/docs/security`, `/docs/credits`, `/docs/webhooks`
+
+## Phase 3 — Hardening / abuse / trust
+- [ ] Abuse controls: tiered limits by plan; anomaly detection; automated suspension triggers + review
+- [ ] Admin endpoints for suspension (optional later)
+- [ ] Audit & compliance: retention enforcement, deletion/export flows, security disclosure policy
+- [ ] Backups / restore drill: documented restore; periodic verification
+
+## Consolidated phased list (canonical)
+- Phase 0.5: OpenAPI publish, real /docs/agents, legal/support content, ops runbooks, verify gating + rate limits + retention, manual suspension
+- Phase 1: /v1/credits/quote, credit packs top-ups, plan-change credit semantics
+- Phase 2: SDKs + MCP + expanded docs
+- Phase 3: hardening + admin endpoints + anomaly detection + compliance

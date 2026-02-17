@@ -2,6 +2,15 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 — Go-live ASAP follow-ons (post P0 legal/meta/bootstrap)
+- **Docs/hosting:** Publish OpenAPI on the same origin as the API (Cloud Run), exposed at `GET /openapi.json` (or `/docs/openapi.json`) and linked from `GET /v1/meta` as `openapi_url`.
+- **Gating rule (confirmed):** Subscriber-gated actions remain **subscription-only** (credits balance does not unlock gated actions). Rationale: simplest UX + strongest subscription incentive.
+- **Upgrade credits (plan change semantics):** On upgrade, grant **difference-based credits immediately** when the **upgrade/proration invoice is paid** (ledger idempotency keyed by `invoice_id`). Downgrades apply at next renewal (MVP).
+- **Suspension (MVP ops):** Use **manual suspension** initially (set `nodes.suspended_at`, revoke keys) with a documented runbook; defer admin suspension endpoints to later hardening.
+- **Verification TODOs:** Audit that (a) plan/gating enforcement and (b) rate limits are actually implemented everywhere required by `10__invariants.md` and `25__plans-credits-gating.md`; implement missing coverage + tests.
+- **Top-ups:** Implement **3 credit-pack top-ups** (priced ~2× subscription implied cost-per-credit) as Phase 1, with Stripe Checkout + webhook credit grants + velocity limits.
+
+
 ## 2026-02-17 - Codex operational protocol: run-to-completion with bounded retries
 Decision: Operational Codex tasks should run to completion with a bounded diagnose/fix/retry loop (up to 3 cycles per failing step), and stop only for true human-only blockers (UI/credentials/2FA). Avoid non-required cosmetic edits; only change files needed to satisfy TODOs or fix failing verification.
 Reason: Reduce avoidable back-and-forth during CLI-heavy setup/deploy verification and keep diffs focused.
