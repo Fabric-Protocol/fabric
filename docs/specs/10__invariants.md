@@ -134,6 +134,8 @@ MVP lock (explicit mechanics):
   - Hot retention: 30 days queryable in primary DB.
   - Archive: up to 1 year (access-controlled; not in primary DB).
   - Delete after 1 year (no indefinite retention of event logs).
+- Operational enforcement:
+  - Run `npm run retention:search-logs` on a schedule to archive rows older than 30 days and delete rows older than 1 year.
 
 Write safety (concurrency/idempotency):
 - Canonical error envelope (all non-2xx):

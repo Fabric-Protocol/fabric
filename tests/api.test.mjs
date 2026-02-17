@@ -20,6 +20,7 @@ const REQUIRED_LEGAL_VERSION = '2026-02-17';
 
 const { buildApp } = await import('../dist/src/app.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
+const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 
 async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', email: null, referral_code: null }) {
   const requestPayload = {
@@ -120,6 +121,13 @@ test('GET /support returns abuse/security guidance', async () => {
   assert.match(res.body, /security/i);
   assert.match(res.body, /abuse/i);
   await app.close();
+});
+
+test('search log retention policy classification is deterministic', async () => {
+  const now = new Date('2026-02-17T00:00:00.000Z');
+  assert.equal(retentionPolicy.classifySearchLogRetention('2026-02-10T00:00:00.000Z', now), 'hot');
+  assert.equal(retentionPolicy.classifySearchLogRetention('2025-12-01T00:00:00.000Z', now), 'archive');
+  assert.equal(retentionPolicy.classifySearchLogRetention('2024-12-01T00:00:00.000Z', now), 'delete');
 });
 
 test('POST /v1/bootstrap without legal assent returns legal_required', async () => {
