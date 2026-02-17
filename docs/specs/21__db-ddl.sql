@@ -47,10 +47,12 @@ create table if not exists nodes (
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 
+drop trigger if exists nodes_set_updated_at on nodes;
 create trigger nodes_set_updated_at
 before update on nodes
 for each row execute function set_updated_at();
 
+drop trigger if exists nodes_bump_row_version on nodes;
 create trigger nodes_bump_row_version
 before update on nodes
 for each row execute function bump_row_version();
@@ -121,6 +123,7 @@ create table if not exists subscriptions (
 create unique index if not exists subscriptions_node_unique on subscriptions(node_id);
 create unique index if not exists subscriptions_stripe_sub_unique on subscriptions(stripe_subscription_id);
 
+drop trigger if exists subscriptions_set_updated_at on subscriptions;
 create trigger subscriptions_set_updated_at
 before update on subscriptions
 for each row execute function set_updated_at();
@@ -201,10 +204,12 @@ create index if not exists units_node_idx on units(node_id) where deleted_at is 
 create index if not exists units_published_idx on units(published_at desc) where deleted_at is null;
 create index if not exists units_scope_idx on units(scope_primary) where deleted_at is null;
 
+drop trigger if exists units_set_updated_at on units;
 create trigger units_set_updated_at
 before update on units
 for each row execute function set_updated_at();
 
+drop trigger if exists units_bump_row_version on units;
 create trigger units_bump_row_version
 before update on units
 for each row execute function bump_row_version();
@@ -253,10 +258,12 @@ create index if not exists requests_node_idx on requests(node_id) where deleted_
 create index if not exists requests_published_idx on requests(published_at desc) where deleted_at is null;
 create index if not exists requests_scope_idx on requests(scope_primary) where deleted_at is null;
 
+drop trigger if exists requests_set_updated_at on requests;
 create trigger requests_set_updated_at
 before update on requests
 for each row execute function set_updated_at();
 
+drop trigger if exists requests_bump_row_version on requests;
 create trigger requests_bump_row_version
 before update on requests
 for each row execute function bump_row_version();
@@ -328,10 +335,12 @@ create index if not exists offers_thread_idx on offers(thread_id, created_at);
 create index if not exists offers_to_status_idx on offers(to_node_id, status) where deleted_at is null;
 create index if not exists offers_from_status_idx on offers(from_node_id, status) where deleted_at is null;
 
+drop trigger if exists offers_set_updated_at on offers;
 create trigger offers_set_updated_at
 before update on offers
 for each row execute function set_updated_at();
 
+drop trigger if exists offers_bump_row_version on offers;
 create trigger offers_bump_row_version
 before update on offers
 for each row execute function bump_row_version();
