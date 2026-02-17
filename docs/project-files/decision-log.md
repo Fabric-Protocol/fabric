@@ -2,6 +2,26 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Canonical paid-plan surface excludes plus
+Decision: Canonical plan set is `free|basic|pro|business`; remove legacy `plus` from backend plan enums, Stripe diagnostics requirements, and checkout validation.
+Reason: `docs/specs/00__read-first.md` defines canonical plans without `plus`, and live diagnostics showed `plus` env drift causing operational confusion.
+Where captured:
+- `docs/project-files/thread-notes.md` (Plan surface cleanup section)
+- code/spec updates merged in commit `f155980`
+Impact:
+- `/v1/billing/checkout-session` accepts only `basic|pro|business`.
+- Stripe diagnostics now report required env vars/counts for supported SKUs only.
+- Existing legacy decisions referencing `plus` are superseded by this canonical rule.
+
+## 2026-02-17 - Suspension enforcement boundary is runtime, not procedural
+Decision: Suspension must be enforced in runtime paths: auth middleware, publish path, and public projection/search visibility.
+Reason: Manual suspension existed operationally but was previously inconsistent in code enforcement.
+Where captured:
+- `docs/project-files/thread-notes.md` (Manual suspension enforcement section)
+Impact:
+- Suspended API keys receive `403`.
+- Suspended nodes are blocked from publish paths and excluded from public search/listings and rebuild outputs.
+
 ## 2026-02-17 - Production schema drift handling for legal assent columns
 Decision: Treat `nodes` legal assent columns as required production schema and remediate drift with an idempotent SQL patch (`add column if not exists` + backfill + not-null/default) before rerunning smoke.
 Reason: Cloud Run `/v1/bootstrap` and `/v1/me` paths failed when `legal_accepted_at` / related columns were missing in Supabase.

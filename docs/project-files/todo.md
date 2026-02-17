@@ -50,11 +50,20 @@ Last updated: 2026-02-17
 - [x] Run post-deploy smoke tests:
   - Done: bootstrap + `GET /v1/me`, admin projections rebuild, webhook signature 200 deliveries
   - Done: real Stripe webhook deliveries return 200 after TLS CA pinning; DB webhook insert path succeeds in Cloud Run
-  - Done: paid-node verification after `invoice.paid` replay shows `/v1/me` `subscription.plan=plus`, `subscription.status=active`, `credits_balance=1700`
+  - Done (historical pre-plan-cleanup): paid-node verification after `invoice.paid` replay showed `/v1/me` active paid state with `credits_balance=1700`
   - Done: idempotency verification after re-resend of same `invoice.paid` event left paid-node `/v1/me` unchanged (`credits_balance` remained `1700`)
 - [x] Resolve production schema drift and confirm deployed smoke:
   - Done: Supabase schema updated for `nodes.legal_accepted_at`, `nodes.legal_version`, `nodes.legal_ip`, `nodes.legal_user_agent`
   - Done: deployed smoke on `https://fabric-api-393345198409.us-west1.run.app` progressed end-to-end to active subscription after checkout completion
+
+## ✅ Completed (P0) — Stripe diagnostics + canonical plan cleanup
+- [x] Diagnose live checkout failures with actionable env visibility:
+  - Added `GET /v1/admin/diagnostics/stripe` and included safe `missing[]` env names for `stripe_not_configured`.
+  - Added tests for diagnostics shape/auth and checkout missing-list behavior.
+- [x] Remove legacy `plus` plan and align to canonical plans:
+  - Enforced plan surface as `free|basic|pro|business` in code and docs/specs.
+  - Updated Stripe diagnostics to supported SKUs only (no plus vars/counts).
+  - Updated tests and smoke tooling; `npm test` passed (`45/45`).
 
 ## ✅ Completed (P0) — Legal/meta/bootstrap gating (A1+B1)
 - [x] Decision: host legal/docs same-origin on Cloud Run; require legal assent during `POST /v1/bootstrap`.
@@ -94,12 +103,27 @@ Last updated: 2026-02-17
 - [x] Search: exclude caller node’s own published listings/requests by default (opt-in `include_self` flag if needed later).
 
 ### Suspension (MVP approach)
-- [ ] Implement/document manual suspension (recommended):
+- [x] Implement/document manual suspension (recommended):
   - set `nodes.suspended_at`
   - revoke node API keys
   - ensure suspended nodes cannot call authed endpoints
   - ensure suspended nodes are excluded from projections/search
   - document unsuspend steps
+
+### Live Stripe SKU wiring + smoke (current blocker)
+- [ ] Set Cloud Run Stripe price env vars for supported live SKUs:
+  - `STRIPE_PRICE_IDS_BASIC=price_1T1tO2K3gJAgZl81QzBXfPIf`
+  - `STRIPE_PRICE_IDS_PRO=price_1T1wL1K3gJAgZl81IYKvjCsD`
+  - `STRIPE_PRICE_IDS_BUSINESS=price_1T1wLgK3gJAgZl81450PfCc3`
+  - `STRIPE_TOPUP_PRICE_100=price_1T1wMGK3gJAgZl817t4OWdnM`
+  - `STRIPE_TOPUP_PRICE_300=price_1T1wMbK3gJAgZl81uWQJtoqH`
+  - `STRIPE_TOPUP_PRICE_1000=price_1T1wNBK3gJAgZl81ixDfggz3`
+- [ ] Verify diagnostics after deploy:
+  - `GET /v1/admin/diagnostics/stripe` should return `stripe_configured=true` and `missing=[]`.
+- [ ] Run live checkout smoke for subscriptions and top-ups:
+  - subscriptions: `basic`, `pro`, `business`
+  - top-ups: `credits_100`, `credits_300`, `credits_1000`
+  - verify webhook deliveries are 2xx and `/v1/me` reflects active subscriber state.
 
 ### Decisions locked
 - Subscription-only gating (credits do not unlock subscriber-gated actions).
