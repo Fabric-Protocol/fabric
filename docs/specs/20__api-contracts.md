@@ -14,6 +14,8 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
+- **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
+- **Subscriber gating**: subscriber-only endpoints remain subscription-only even when credits are available.
 
 ---
 

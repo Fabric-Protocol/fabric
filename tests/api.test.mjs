@@ -14,6 +14,7 @@ process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
+process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 
@@ -184,6 +185,64 @@ test('GET /v1/auth/keys returns masked prefix format', async () => {
   const res = await app.inject({ method: 'GET', url: '/v1/auth/keys', headers: { authorization: `ApiKey ${key}` } });
   assert.equal(res.statusCode, 200);
   assert.match(res.json().keys[0].prefix, /^.{4,8}\.\.\.$/);
+  await app.close();
+});
+
+test('subscriber-gated endpoints stay blocked for non-subscribers even with credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-subscriber-gate');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const balBefore = await repo.creditBalance(nodeId);
+  assert.equal(balBefore > 0, true);
+
+  const search = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'sg-1' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(search.statusCode, 403);
+  assert.equal(search.json().error.code, 'subscriber_required');
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'sg-2' },
+    payload: { unit_ids: ['00000000-0000-0000-0000-000000000001'], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 403);
+  assert.equal(offer.json().error.code, 'subscriber_required');
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter, balBefore);
+  await app.close();
+});
+
+test('rate limit returns canonical envelope with rate_limit_exceeded', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-rate-limit');
+  const apiKey = b.json().api_key.api_key;
+
+  for (let i = 0; i < 10; i += 1) {
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/keys',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `rl-auth-keys-${i}` },
+      payload: { label: `key-${i}` },
+    });
+    assert.equal(ok.statusCode, 200);
+  }
+
+  const limited = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'rl-auth-keys-over' },
+    payload: { label: 'overflow' },
+  });
+  assert.equal(limited.statusCode, 429);
+  assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+  assert.equal(limited.json().error.details.rule, 'auth_key_issue');
   await app.close();
 });
 
@@ -562,6 +621,35 @@ test('metering only charges on HTTP 200 for search', async () => {
   assert.equal(ok.statusCode, 200);
   const bal3 = await repo.creditBalance(nodeId);
   assert.equal(bal3 < bal2, true);
+  await app.close();
+});
+
+test('search returns credits_exhausted for subscriber with insufficient credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-insufficient');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const activateBody = {
+    id: `evt_subscriber_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
+  };
+  const activateSig = sign(activateBody);
+  const activated = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
+  assert.equal(activated.statusCode, 200);
+
+  const current = await repo.creditBalance(nodeId);
+  await repo.addCredit(nodeId, 'adjustment_manual', -(current + 1), { reason: 'test_drain' }, `drain-${nodeId}`);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-insufficient' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'credits_exhausted');
   await app.close();
 });
 

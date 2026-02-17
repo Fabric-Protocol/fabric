@@ -16,6 +16,9 @@ type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeW
 const nonGet = new Set(['POST', 'PATCH', 'DELETE', 'PUT']);
 const anonIdem = new Map<string, { hash: string; status: number; response: unknown }>();
 let startupDbEnvCheckLogged = false;
+type RateLimitSubject = 'ip' | 'node' | 'global';
+type RateLimitRule = { name: string; limit: number; windowSeconds: number; subject: RateLimitSubject };
+const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
 
 const resourceSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
@@ -208,6 +211,53 @@ function extractUserAgent(req: FastifyRequest) {
   return ua || null;
 }
 
+function selectRateLimitRule(method: string, path: string): RateLimitRule | null {
+  if (method === 'POST' && path === '/v1/bootstrap') return { name: 'bootstrap', limit: config.rateLimitBootstrapPerHour, windowSeconds: 3600, subject: 'ip' };
+  if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && /^\/v1\/offers\/[^/]+\/reveal-contact$/.test(path)) return { name: 'reveal_contact', limit: config.rateLimitRevealContactPerHour, windowSeconds: 3600, subject: 'node' };
+  if (method === 'POST' && path === '/v1/auth/keys') return { name: 'auth_key_issue', limit: config.rateLimitApiKeyIssuePerDay, windowSeconds: 86400, subject: 'node' };
+  return null;
+}
+
+function rateLimitSubjectValue(req: FastifyRequest, rule: RateLimitRule) {
+  if (rule.subject === 'ip') return extractClientIp(req) ?? 'unknown_ip';
+  if (rule.subject === 'node') return (req as AuthedRequest).nodeId ?? 'anon_node';
+  return 'global';
+}
+
+function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
+  const now = Date.now();
+  const subject = rateLimitSubjectValue(req, rule);
+  const key = `${rule.name}:${subject}`;
+  let state = rateLimitState.get(key);
+  if (!state || now >= state.resetAtMs) {
+    state = { count: 0, resetAtMs: now + (rule.windowSeconds * 1000) };
+    rateLimitState.set(key, state);
+  }
+
+  const remainingBefore = Math.max(rule.limit - state.count, 0);
+  const retryAfterSeconds = Math.max(0, Math.ceil((state.resetAtMs - now) / 1000));
+  reply.header('X-RateLimit-Limit', String(rule.limit));
+  reply.header('X-RateLimit-Remaining', String(Math.max(remainingBefore - 1, 0)));
+  reply.header('X-RateLimit-Reset', String(Math.floor(state.resetAtMs / 1000)));
+
+  if (state.count >= rule.limit) {
+    reply.header('Retry-After', String(retryAfterSeconds));
+    reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Rate limit exceeded', {
+      limit: rule.limit,
+      window_seconds: rule.windowSeconds,
+      retry_after_seconds: retryAfterSeconds,
+      rule: rule.name,
+    }));
+    return false;
+  }
+  state.count += 1;
+  return true;
+}
+
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
@@ -318,6 +368,8 @@ export function buildApp() {
   });
 
   app.addHook('onRequest', async (req, reply) => {
+    const path = routePath(req.url);
+    const rateLimitRule = selectRateLimitRule(req.method, path);
     reply.header('X-RateLimit-Limit', String(config.defaultRateLimitLimit));
     reply.header('X-RateLimit-Remaining', String(config.defaultRateLimitLimit));
     reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + 60));
@@ -325,9 +377,14 @@ export function buildApp() {
     reply.header('X-Credits-Charged', '0');
     reply.header('X-Credits-Plan', 'unknown');
 
-    if (isPublicRoute(routePath(req.url))) return;
+    if (path === '/v1/bootstrap') {
+      if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
+      return;
+    }
 
-    if (req.url.startsWith('/v1/admin/')) {
+    if (isPublicRoute(path)) return;
+
+    if (path.startsWith('/v1/admin/')) {
       if (req.headers['x-admin-key'] !== config.adminKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
       return;
     }
@@ -341,6 +398,8 @@ export function buildApp() {
     (req as AuthedRequest).isSubscriber = found.status === 'active';
     reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
     reply.header('X-Credits-Remaining', String(await repo.creditBalance(found.node_id)));
+
+    if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
   });
 
   app.addHook('preHandler', async (req, reply) => {
