@@ -13,6 +13,41 @@
 - Stripe Products/Prices already exist for the plans/packs you want to sell.
 - `gcloud` and PowerShell available locally.
 
+## Supabase Schema Apply (Human-Only)
+- Why: deployed code reads/writes `nodes.legal_accepted_at`, `nodes.legal_version`, `nodes.legal_ip`, `nodes.legal_user_agent`.
+- Run this SQL in Supabase SQL Editor (same SQL is also in `docs/runbooks/sql/2026-02-17_nodes_legal_assent_columns.sql`):
+
+```sql
+begin;
+
+alter table public.nodes add column if not exists legal_accepted_at timestamptz;
+alter table public.nodes add column if not exists legal_version text;
+alter table public.nodes add column if not exists legal_ip text;
+alter table public.nodes add column if not exists legal_user_agent text;
+
+update public.nodes
+set legal_accepted_at = coalesce(legal_accepted_at, created_at, now()),
+    legal_version = coalesce(nullif(legal_version, ''), 'legacy')
+where legal_accepted_at is null
+   or legal_version is null
+   or legal_version = '';
+
+alter table public.nodes alter column legal_accepted_at set default now();
+alter table public.nodes alter column legal_version set default 'legacy';
+alter table public.nodes alter column legal_accepted_at set not null;
+alter table public.nodes alter column legal_version set not null;
+
+commit;
+```
+
+- Verification query:
+
+```sql
+select id, legal_accepted_at, legal_version, legal_ip, legal_user_agent
+from public.nodes
+limit 1;
+```
+
 ## Env Var Manifest (Source of Truth: `src/config.ts`)
 
 ### A) Core app/runtime
