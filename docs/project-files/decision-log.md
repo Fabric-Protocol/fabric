@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Cloud Run smoke flow requires public invoke access
+Decision: For the current smoke/bootstrap flow, Cloud Run must allow invoke for unauthenticated callers; if deployed with `--no-allow-unauthenticated`, add `allUsers` `roles/run.invoker` before running smoke.
+Reason: `scripts/smoke-stripe-subscription.ps1` starts at unauthenticated `POST /v1/bootstrap`, which fails when invoke is restricted.
+Impact: Deployment/runbook steps now include an explicit invoker-permission check/fix before smoke validation.
+
 ## 2026-02-17 - Stripe invoice price-id mapping is canonical for paid plan resolution
 Decision: Resolve `invoice.paid` plan from Stripe line-item price IDs via env mapping (`STRIPE_PRICE_*` / `STRIPE_PRICE_IDS_*`), with the $19.99 price mapped to internal `plus`.
 Reason: Real `invoice.paid` payloads did not consistently carry `metadata.plan_code`, causing fallback to `free`.

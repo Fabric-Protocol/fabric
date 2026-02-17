@@ -56,9 +56,9 @@ Last updated: 2026-02-17
 - [ ] If new backend changes are needed, branch from updated `main` and rerun:
   - `npm run typecheck`
   - `npm test`
-- [ ] Validate full production flow for a brand-new node:
+- [x] Validate full production flow for a brand-new node:
   - New node bootstrap -> start checkout/payment -> Stripe customer/subscription creation -> webhook mapping to node -> `/v1/me` paid state
-- [ ] Resend a non-entitlement Stripe event (for example `customer.created`) and confirm no subscription/credits mutation.
+- [x] Resend a non-entitlement Stripe event (for example `customer.created`) and confirm no subscription/credits mutation.
 
 ## P1 - Repo hygiene
 - [ ] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
