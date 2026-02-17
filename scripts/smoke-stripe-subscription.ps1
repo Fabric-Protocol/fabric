@@ -3,10 +3,16 @@ param(
   [string]$BillingPath = "/v1/billing/checkout-session",
   [string]$PlanCode = "basic",
   [string]$SuccessUrl = "https://example.com/success",
-  [string]$CancelUrl = "https://example.com/cancel"
+  [string]$CancelUrl = "https://example.com/cancel",
+  [string]$NodeId,
+  [string]$ApiKey,
+  [switch]$SkipBootstrap
 )
 
 $ErrorActionPreference = "Stop"
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$BootstrapCacheFilename = ".smoke-bootstrap.json"
+$BootstrapCachePath = Join-Path $RepoRoot $BootstrapCacheFilename
 
 function New-IdempotencyKey {
   return [guid]::NewGuid().ToString()
@@ -87,6 +93,68 @@ function Get-PlanPriceVarCandidates {
     "business" { return @("STRIPE_PRICE_BUSINESS", "STRIPE_PRICE_IDS_BUSINESS") }
     default { return @() }
   }
+}
+
+function Get-BootstrapCache {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path $Path)) { return $null }
+  try {
+    $raw = Get-Content -Path $Path -Raw
+    $obj = $raw | ConvertFrom-Json
+    $cachedNodeId = [string]$obj.node_id
+    $cachedApiKey = [string]$obj.api_key
+    if ([string]::IsNullOrWhiteSpace($cachedNodeId) -or [string]::IsNullOrWhiteSpace($cachedApiKey)) {
+      Write-Host "[WARN] Ignoring invalid bootstrap cache file: $Path"
+      return $null
+    }
+    return @{ node_id = $cachedNodeId; api_key = $cachedApiKey }
+  } catch {
+    Write-Host "[WARN] Failed to parse bootstrap cache file: $Path"
+    return $null
+  }
+}
+
+function Ensure-CacheIgnoredLocally {
+  param(
+    [Parameter(Mandatory = $true)][string]$RepoRootPath,
+    [Parameter(Mandatory = $true)][string]$CacheFileName
+  )
+  try {
+    $null = & git -C $RepoRootPath rev-parse --is-inside-work-tree 2>$null
+    if ($LASTEXITCODE -ne 0) { return }
+    & git -C $RepoRootPath check-ignore -q $CacheFileName
+    if ($LASTEXITCODE -eq 0) { return }
+    $gitDirRel = (& git -C $RepoRootPath rev-parse --git-dir).Trim()
+    if ([string]::IsNullOrWhiteSpace($gitDirRel)) { return }
+    $gitDirPath = Join-Path $RepoRootPath $gitDirRel
+    $excludePath = Join-Path $gitDirPath "info/exclude"
+    if (-not (Test-Path $excludePath)) { return }
+    $lines = Get-Content $excludePath -ErrorAction SilentlyContinue
+    if ($lines -contains $CacheFileName) { return }
+    $raw = Get-Content -Path $excludePath -Raw -ErrorAction SilentlyContinue
+    if ($null -ne $raw -and $raw.Length -gt 0 -and -not ($raw.EndsWith("`n") -or $raw.EndsWith("`r`n"))) {
+      Add-Content -Path $excludePath -Value ""
+    }
+    Add-Content -Path $excludePath -Value $CacheFileName
+    Write-Host "[INFO] Added $CacheFileName to local git exclude."
+  } catch {
+    # best effort only
+  }
+}
+
+function Save-BootstrapCache {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$NodeIdValue,
+    [Parameter(Mandatory = $true)][string]$ApiKeyValue
+  )
+  Ensure-CacheIgnoredLocally -RepoRootPath $RepoRoot -CacheFileName $BootstrapCacheFilename
+  $payload = @{
+    node_id = $NodeIdValue
+    api_key = $ApiKeyValue
+  } | ConvertTo-Json -Depth 5
+  Set-Content -Path $Path -Value $payload
+  Write-Host "[INFO] Saved bootstrap cache: $Path"
 }
 
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
@@ -179,7 +247,6 @@ if ($hostName -in @("localhost", "127.0.0.1") -and $BillingPath -eq "/v1/billing
   Write-Host "[PASS] Local Stripe config preflight passed for plan_code=$PlanCode"
 }
 
-Write-Host "[STEP] Bootstrap node..."
 try {
   $meta = Invoke-RestMethod -Uri "$BaseUrl/v1/meta" -Method Get -TimeoutSec 30
 } catch {
@@ -200,25 +267,113 @@ try {
 }
 $requiredLegalVersion = $meta.required_legal_version
 
-$bootstrapBody = @{
-  display_name = "Stripe Smoke"
-  email = $null
-  referral_code = $null
-  legal = @{
-    accepted = $true
-    version = $requiredLegalVersion
+$hasNodeId = -not [string]::IsNullOrWhiteSpace($NodeId)
+$hasApiKey = -not [string]::IsNullOrWhiteSpace($ApiKey)
+if ($hasNodeId -xor $hasApiKey) {
+  Write-Host "[FAIL] Provide both -NodeId and -ApiKey together, or neither."
+  exit 1
+}
+
+$cached = Get-BootstrapCache -Path $BootstrapCachePath
+$resolvedNodeId = $null
+$resolvedApiKey = $null
+
+if ($SkipBootstrap) {
+  if ($hasNodeId -and $hasApiKey) {
+    $resolvedNodeId = $NodeId.Trim()
+    $resolvedApiKey = $ApiKey.Trim()
+    Write-Host "[INFO] Using NodeId/ApiKey from parameters (skip bootstrap)."
+  } elseif ($cached) {
+    $resolvedNodeId = $cached.node_id
+    $resolvedApiKey = $cached.api_key
+    Write-Host "[INFO] Using cached NodeId/ApiKey from $BootstrapCachePath (skip bootstrap)."
+  } else {
+    Write-Host "[FAIL] -SkipBootstrap requires -NodeId and -ApiKey, or an existing cache at $BootstrapCachePath"
+    exit 1
   }
-} | ConvertTo-Json -Compress
+} elseif ($hasNodeId -and $hasApiKey) {
+  $resolvedNodeId = $NodeId.Trim()
+  $resolvedApiKey = $ApiKey.Trim()
+  Write-Host "[INFO] Using NodeId/ApiKey from parameters (bootstrap bypassed)."
+  Save-BootstrapCache -Path $BootstrapCachePath -NodeIdValue $resolvedNodeId -ApiKeyValue $resolvedApiKey
+} elseif ($cached) {
+  $resolvedNodeId = $cached.node_id
+  $resolvedApiKey = $cached.api_key
+  Write-Host "[INFO] Using cached NodeId/ApiKey from $BootstrapCachePath (bootstrap bypassed)."
+} else {
+  Write-Host "[STEP] Bootstrap node..."
+  $bootstrapBody = @{
+    display_name = "Stripe Smoke"
+    email = $null
+    referral_code = $null
+    legal = @{
+      accepted = $true
+      version = $requiredLegalVersion
+    }
+  } | ConvertTo-Json -Compress
+  try {
+    $bootstrap = Invoke-RestMethod -Uri "$BaseUrl/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key" = (New-IdempotencyKey) } -ContentType "application/json" -Body $bootstrapBody
+    $resolvedNodeId = $bootstrap.node.id
+    $resolvedApiKey = $bootstrap.api_key.api_key
+    Save-BootstrapCache -Path $BootstrapCachePath -NodeIdValue $resolvedNodeId -ApiKeyValue $resolvedApiKey
+  } catch {
+    $statusCode = $null
+    if ($_.Exception.Response) {
+      $statusCode = [int]$_.Exception.Response.StatusCode
+    }
+    $errorBody = Read-ErrorResponseBody -ErrorRecord $_
+    $parsedError = $null
+    if (-not [string]::IsNullOrWhiteSpace($errorBody)) {
+      try {
+        $parsedError = $errorBody | ConvertFrom-Json
+      } catch {
+        $parsedError = $null
+      }
+    }
+    $errorCode = $null
+    $retryAfter = $null
+    if ($parsedError -and $parsedError.error) {
+      $errorCode = [string]$parsedError.error.code
+      if ($parsedError.error.details) {
+        $retryAfter = $parsedError.error.details.retry_after_seconds
+      }
+    }
+    if ($errorCode -eq "rate_limit_exceeded") {
+      Write-Host "[FAIL] Bootstrap rate limited."
+      if ($null -ne $retryAfter) {
+        Write-Host "[INFO] retry_after_seconds=$retryAfter"
+      }
+      if ($cached) {
+        Write-Host "[NEXT] Re-run with -SkipBootstrap to reuse cached node/api key."
+      } else {
+        Write-Host "[NEXT] Wait for the cooldown, or rerun with -NodeId and -ApiKey for an existing node."
+      }
+      exit 1
+    }
+    if ($null -ne $statusCode) {
+      Write-Host "[FAIL] Bootstrap failed with HTTP $statusCode"
+    } else {
+      Write-Host "[FAIL] Bootstrap failed."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($errorBody)) {
+      Write-Host "[INFO] Bootstrap error response body:"
+      try {
+        ($errorBody | ConvertFrom-Json) | ConvertTo-Json -Depth 20
+      } catch {
+        Write-Host $errorBody
+      }
+    } else {
+      Write-Host $_.Exception.Message
+    }
+    exit 1
+  }
+}
 
-$bootstrap = Invoke-RestMethod -Uri "$BaseUrl/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key" = (New-IdempotencyKey) } -ContentType "application/json" -Body $bootstrapBody
-$nodeId = $bootstrap.node.id
-$apiKey = $bootstrap.api_key.api_key
-
-Write-Host "[INFO] node_id=$nodeId"
+Write-Host "[INFO] node_id=$resolvedNodeId"
 Write-Host "[STEP] Create checkout session via billing endpoint..."
 
 $billingBody = @{
-  node_id = $nodeId
+  node_id = $resolvedNodeId
   plan_code = $PlanCode
   success_url = $SuccessUrl
   cancel_url = $CancelUrl
@@ -238,7 +393,7 @@ try {
 
 try {
   $checkout = Invoke-RestMethod -Uri $billingUrl -Method Post -Headers @{
-    Authorization = "ApiKey $apiKey"
+    Authorization = "ApiKey $resolvedApiKey"
     "Idempotency-Key" = $billingIdempotencyKey
   } -ContentType "application/json" -Body $billingBody
   Write-Host "[PASS] Billing endpoint response:"
@@ -261,7 +416,7 @@ try {
     }
     if ($status -eq 404) {
       Write-Host "[WARN] No billing checkout endpoint is currently exposed by this API contract."
-      Write-Host "[NEXT] Complete Stripe test checkout externally with metadata.node_id=$nodeId and metadata.plan_code=$PlanCode, then continue."
+      Write-Host "[NEXT] Complete Stripe test checkout externally with metadata.node_id=$resolvedNodeId and metadata.plan_code=$PlanCode, then continue."
     } else {
       Write-Host "[FAIL] Cannot continue automated smoke flow."
       exit 1
@@ -276,12 +431,12 @@ try {
 Write-Host "[STEP] Complete test payment in Stripe, then press Enter to verify /v1/me ..."
 Read-Host | Out-Null
 
-$me = Invoke-RestMethod -Uri "$BaseUrl/v1/me" -Method Get -Headers @{ Authorization = "ApiKey $apiKey" }
+$me = Invoke-RestMethod -Uri "$BaseUrl/v1/me" -Method Get -Headers @{ Authorization = "ApiKey $resolvedApiKey" }
 Write-Host "[RESULT] /v1/me:"
 $me | ConvertTo-Json -Depth 10
 
 if ($me.subscription.status -eq "active") {
-  Write-Host "[PASS] Subscription is active for node $nodeId."
+  Write-Host "[PASS] Subscription is active for node $resolvedNodeId."
   exit 0
 }
 
