@@ -2,6 +2,16 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Production schema drift handling for legal assent columns
+Decision: Treat `nodes` legal assent columns as required production schema and remediate drift with an idempotent SQL patch (`add column if not exists` + backfill + not-null/default) before rerunning smoke.
+Reason: Cloud Run `/v1/bootstrap` and `/v1/me` paths failed when `legal_accepted_at` / related columns were missing in Supabase.
+Where captured:
+- `docs/runbooks/sql/2026-02-17_nodes_legal_assent_columns.sql`
+- `docs/runbooks/go-live-cloudrun-stripe.md` (Supabase schema apply section)
+Impact:
+- Production schema can be repaired without code fallback.
+- Deployed smoke resumed and validated successfully after schema apply.
+
 ## 2026-02-17 — Go-live ASAP follow-ons (post P0 legal/meta/bootstrap)
 - **Docs/hosting:** Publish OpenAPI on the same origin as the API (Cloud Run), exposed at `GET /openapi.json` (or `/docs/openapi.json`) and linked from `GET /v1/meta` as `openapi_url`.
 - **Gating rule (confirmed):** Subscriber-gated actions remain **subscription-only** (credits balance does not unlock gated actions). Rationale: simplest UX + strongest subscription incentive.

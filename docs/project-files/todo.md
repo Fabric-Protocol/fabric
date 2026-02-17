@@ -52,6 +52,9 @@ Last updated: 2026-02-17
   - Done: real Stripe webhook deliveries return 200 after TLS CA pinning; DB webhook insert path succeeds in Cloud Run
   - Done: paid-node verification after `invoice.paid` replay shows `/v1/me` `subscription.plan=plus`, `subscription.status=active`, `credits_balance=1700`
   - Done: idempotency verification after re-resend of same `invoice.paid` event left paid-node `/v1/me` unchanged (`credits_balance` remained `1700`)
+- [x] Resolve production schema drift and confirm deployed smoke:
+  - Done: Supabase schema updated for `nodes.legal_accepted_at`, `nodes.legal_version`, `nodes.legal_ip`, `nodes.legal_user_agent`
+  - Done: deployed smoke on `https://fabric-api-393345198409.us-west1.run.app` progressed end-to-end to active subscription after checkout completion
 
 ## ✅ Completed (P0) — Legal/meta/bootstrap gating (A1+B1)
 - [x] Decision: host legal/docs same-origin on Cloud Run; require legal assent during `POST /v1/bootstrap`.
@@ -67,28 +70,28 @@ Last updated: 2026-02-17
 
 ## Phase 0.5 — Go-live ASAP (next threads)
 ### Docs + legal + operability
-- [ ] Publish OpenAPI on same origin:
+- [x] Publish OpenAPI on same origin:
   - add `GET /openapi.json` (or `/docs/openapi.json`)
   - add `openapi_url` to `GET /v1/meta`
   - keep consistent with `docs/specs/20__api-contracts.md`
-- [ ] Upgrade `/docs/agents` from placeholder → real Agent Quickstart:
+- [x] Upgrade `/docs/agents` from placeholder → real Agent Quickstart:
   - bootstrap → create unit/request → publish → search → offer → accept/reject → contact reveal
   - include canonical error envelope, idempotency/retries, credits exhausted behavior
-- [ ] Legal content pass (documents still need real text):
+- [x] Legal content pass (documents still need real text):
   - ToS / Privacy / AUP / Developer-Agent policy text (not placeholders)
   - document how `required_legal_version` changes
-- [ ] Support page content pass:
+- [x] Support page content pass:
   - support contact, billing support, abuse/takedown instructions, security reporting instructions
-- [ ] Ops minimum runbook (docs-only):
+- [x] Ops minimum runbook (docs-only):
   - key rotation procedure
   - manual suspension procedure
   - incident basics (logs, triage)
 
 ### Implementation verification vs specs (must confirm real enforcement)
-- [ ] Verify trial/gating enforcement in code matches `docs/specs/25__plans-credits-gating.md` and `docs/specs/20__api-contracts.md`; implement missing gates + tests.
-- [ ] Verify rate-limit enforcement in code matches `docs/specs/10__invariants.md`; implement missing limits + tests.
-- [ ] Verify audit/ledger retention behavior is implemented; if not automated, document as ops policy.
-- [ ] Search: exclude caller node’s own published listings/requests by default (opt-in `include_self` flag if needed later).
+- [x] Verify trial/gating enforcement in code matches `docs/specs/25__plans-credits-gating.md` and `docs/specs/20__api-contracts.md`; implement missing gates + tests.
+- [x] Verify rate-limit enforcement in code matches `docs/specs/10__invariants.md`; implement missing limits + tests.
+- [x] Verify audit/ledger retention behavior is implemented; if not automated, document as ops policy.
+- [x] Search: exclude caller node’s own published listings/requests by default (opt-in `include_self` flag if needed later).
 
 ### Suspension (MVP approach)
 - [ ] Implement/document manual suspension (recommended):
@@ -103,22 +106,22 @@ Last updated: 2026-02-17
 
 ## Phase 1 — Near-term product completeness
 ### Credits UX
-- [ ] Add server-side quote endpoint (no search execution):
+- [x] Add server-side quote endpoint (no search execution):
   - `POST /v1/credits/quote` accepts same params as search
   - returns `estimated_cost` + breakdown; does not depend on result count
   - free but rate-limited + cached (short TTL)
 
 ### Top-ups (credit packs)
-- [ ] Specify + implement 3 credit packs:
+- [x] Specify + implement 3 credit packs:
   - pricing rule: ~2× subscription implied cost-per-credit (incentivize subscription)
   - Stripe Checkout flow + webhook grant into credits ledger (invoice/session idempotency)
   - velocity limits (anti-fraud) + refund/chargeback policy
 
 ### Plan changes + credits (decision locked)
-- [ ] Upgrade credits are difference-based and granted immediately on paid upgrade invoice:
+- [x] Upgrade credits are difference-based and granted immediately on paid upgrade invoice:
   - on upgrade, create proration invoice; on `invoice.paid`, grant credit difference for the cycle
   - enforce idempotency by invoice id
-- [ ] Define downgrade semantics (recommended: apply at next renewal)
+- [x] Define downgrade semantics (recommended: apply at next renewal)
 
 ## Phase 2 — Agent adoption acceleration
 - [ ] SDKs (full): TS + Python, versioned, CI publish, examples
