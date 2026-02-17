@@ -98,6 +98,47 @@ export const fabricService = {
       checkout_url: checkoutUrl,
     };
   },
+  async createTopupCheckoutSession(
+    authedNodeId: string,
+    payload: { node_id: string; pack_code: string; success_url: string; cancel_url: string },
+    idempotencyKey: string | null,
+  ) {
+    if (payload.node_id !== authedNodeId) return { forbidden: true };
+    const pack = creditPackQuoteByCode(payload.pack_code);
+    if (!pack) return { validationError: 'unsupported_pack_code' };
+    if (!pack.stripe_price_id) return { validationError: 'missing_topup_price_mapping', pack_code: pack.pack_code };
+    if (!config.stripeSecretKey) return { validationError: 'stripe_not_configured' };
+
+    const checkoutSession = await createStripeTopupCheckoutSession({
+      nodeId: authedNodeId,
+      packCode: pack.pack_code,
+      credits: pack.credits,
+      priceId: pack.stripe_price_id,
+      successUrl: payload.success_url,
+      cancelUrl: payload.cancel_url,
+      idempotencyKey,
+    });
+    if (!checkoutSession.ok) {
+      return {
+        validationError: 'stripe_checkout_failed',
+        stripe_status: checkoutSession.status,
+      };
+    }
+
+    const checkoutSessionId = nonEmptyString(checkoutSession.session?.id);
+    const checkoutUrl = nonEmptyString(checkoutSession.session?.url);
+    if (!checkoutSessionId || !checkoutUrl) {
+      return { validationError: 'stripe_checkout_missing_url' };
+    }
+
+    return {
+      node_id: authedNodeId,
+      pack_code: pack.pack_code,
+      credits: pack.credits,
+      checkout_session_id: checkoutSessionId,
+      checkout_url: checkoutUrl,
+    };
+  },
   listAuthKeys(nodeId: string) { return repo.listKeys(nodeId).then((keys) => ({ keys })); },
   revokeAuthKey(nodeId: string, keyId: string) { return repo.revokeKey(nodeId, keyId); },
   async me(nodeId: string) {
@@ -375,6 +416,12 @@ function creditPackQuotes(): CreditPackQuote[] {
   ];
 }
 
+function creditPackQuoteByCode(packCode: string | null | undefined) {
+  if (!packCode) return null;
+  const normalized = packCode.trim().toLowerCase();
+  return creditPackQuotes().find((pack) => pack.pack_code === normalized) ?? null;
+}
+
 function paidPlanQuotes() {
   return [
     { plan_code: 'basic', monthly_credits: planCredits.basic },
@@ -557,6 +604,45 @@ async function createStripeCheckoutSession(payload: {
   }
 }
 
+async function createStripeTopupCheckoutSession(payload: {
+  nodeId: string;
+  packCode: string;
+  credits: number;
+  priceId: string;
+  successUrl: string;
+  cancelUrl: string;
+  idempotencyKey: string | null;
+}) {
+  const form = new URLSearchParams();
+  form.set('mode', 'payment');
+  form.set('line_items[0][price]', payload.priceId);
+  form.set('line_items[0][quantity]', '1');
+  form.set('success_url', payload.successUrl);
+  form.set('cancel_url', payload.cancelUrl);
+  form.set('client_reference_id', payload.nodeId);
+  form.set('metadata[node_id]', payload.nodeId);
+  form.set('metadata[topup_pack_code]', payload.packCode);
+  form.set('metadata[topup_credits]', String(payload.credits));
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${config.stripeSecretKey}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  if (payload.idempotencyKey) headers['Idempotency-Key'] = `fabric_topup:${payload.nodeId}:${payload.idempotencyKey}`;
+
+  try {
+    const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+      method: 'POST',
+      headers,
+      body: form.toString(),
+    });
+    const session = await res.json().catch(() => null);
+    return { ok: res.ok, status: res.status, session };
+  } catch {
+    return { ok: false, status: 0, session: null };
+  }
+}
+
 async function fetchStripeJson(path: string) {
   if (!config.stripeSecretKey) return null;
   try {
@@ -646,6 +732,70 @@ async function resolveNodeMapping(event: any) {
   return { nodeId: null, source: null, stripeCustomerId, stripeSubscriptionId };
 }
 
+function utcDayStartIso(now = new Date()) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+}
+
+function topupPackFromStripeEventObject(object: any) {
+  const packCode = nonEmptyString(object?.metadata?.topup_pack_code ?? object?.metadata?.pack_code ?? null);
+  return creditPackQuoteByCode(packCode);
+}
+
+function topupPaymentReference(object: any) {
+  return nonEmptyString(stripeId(object?.payment_intent))
+    ?? nonEmptyString(stripeId(object?.invoice))
+    ?? nonEmptyString(stripeId(object?.id));
+}
+
+function topupIdempotencyKey(paymentReference: string) {
+  if (paymentReference.startsWith('pi_')) return `topup:payment_intent:${paymentReference}`;
+  if (paymentReference.startsWith('in_')) return `topup:invoice:${paymentReference}`;
+  return `topup:session:${paymentReference}`;
+}
+
+async function applyTopupGrant(nodeId: string, eventType: string, eventObject: any) {
+  const pack = topupPackFromStripeEventObject(eventObject);
+  if (!pack) return { handled: false, reason: 'not_topup_event' as const };
+  if (eventType === 'checkout.session.completed') {
+    const paymentStatus = nonEmptyString(eventObject?.payment_status);
+    if (paymentStatus && paymentStatus !== 'paid') {
+      return { handled: true, applied: false, reason: 'topup_payment_not_paid' as const, pack_code: pack.pack_code };
+    }
+  }
+
+  const paymentReference = topupPaymentReference(eventObject);
+  if (!paymentReference) return { handled: true, applied: false, reason: 'topup_missing_payment_reference' as const, pack_code: pack.pack_code };
+
+  const grantsToday = await repo.countTopupPurchasesSince(nodeId, utcDayStartIso());
+  if (grantsToday >= config.topupMaxGrantsPerDay) {
+    return {
+      handled: true,
+      applied: false,
+      reason: 'topup_velocity_limit_exceeded' as const,
+      pack_code: pack.pack_code,
+      payment_reference: paymentReference,
+      grants_today: grantsToday,
+      max_grants_per_day: config.topupMaxGrantsPerDay,
+    };
+  }
+
+  const inserted = await repo.addCreditIdempotent(
+    nodeId,
+    'topup_purchase',
+    pack.credits,
+    { pack_code: pack.pack_code, payment_reference: paymentReference, event_type: eventType },
+    topupIdempotencyKey(paymentReference),
+  );
+  return {
+    handled: true,
+    applied: inserted,
+    reason: inserted ? 'topup_granted' as const : 'topup_idempotent_replay' as const,
+    pack_code: pack.pack_code,
+    credits: pack.credits,
+    payment_reference: paymentReference,
+  };
+}
+
 (fabricService as any).processStripeEvent = async (event: any) => {
   const type = String(event.type ?? 'unknown');
   const object = event.data?.object ?? {};
@@ -674,6 +824,20 @@ async function resolveNodeMapping(event: any) {
   }
 
   if (type === 'checkout.session.completed') {
+    const topup = await applyTopupGrant(nodeId, type, object);
+    if (topup.handled) {
+      if (!topup.applied && topup.reason === 'topup_velocity_limit_exceeded') {
+        console.warn(JSON.stringify({
+          msg: 'topup velocity limit exceeded',
+          node_id: nodeId,
+          pack_code: topup.pack_code,
+          payment_reference: topup.payment_reference,
+          grants_today: topup.grants_today,
+          max_grants_per_day: topup.max_grants_per_day,
+        }));
+      }
+      return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, topup };
+    }
     const planCode = await resolvePlanCode(nodeId, event, 'basic');
     const storedPlanCode = planCodeForStorage(planCode);
     await repo.upsertSubscription(nodeId, storedPlanCode, 'active', stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
@@ -681,6 +845,20 @@ async function resolveNodeMapping(event: any) {
   }
 
   if (type === 'invoice.paid') {
+    const topup = await applyTopupGrant(nodeId, type, object);
+    if (topup.handled) {
+      if (!topup.applied && topup.reason === 'topup_velocity_limit_exceeded') {
+        console.warn(JSON.stringify({
+          msg: 'topup velocity limit exceeded',
+          node_id: nodeId,
+          pack_code: topup.pack_code,
+          payment_reference: topup.payment_reference,
+          grants_today: topup.grants_today,
+          max_grants_per_day: topup.max_grants_per_day,
+        }));
+      }
+      return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, topup };
+    }
     const planCode = await resolvePlanCode(nodeId, event, 'basic', { preferStripePriceMap: true, avoidFreeFallback: true });
     const storedPlanCode = planCodeForStorage(planCode);
     const periodStart = stripeTimeToIso(object.period_start) ?? new Date().toISOString();

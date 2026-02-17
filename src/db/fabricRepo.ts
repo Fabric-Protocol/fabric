@@ -63,6 +63,19 @@ export async function addCredit(nodeId: string, type: string, amount: number, me
   await query('insert into credit_ledger(node_id,type,amount,meta,idempotency_key) values($1,$2,$3,$4,$5)', [nodeId, type, amount, meta, idempotencyKey]);
 }
 
+export async function addCreditIdempotent(nodeId: string, type: string, amount: number, meta: object = {}, idempotencyKey: string) {
+  try {
+    await query(
+      'insert into credit_ledger(node_id,type,amount,meta,idempotency_key) values($1,$2,$3,$4,$5)',
+      [nodeId, type, amount, meta, idempotencyKey],
+    );
+    return true;
+  } catch (err: any) {
+    if (err?.code === '23505') return false;
+    throw err;
+  }
+}
+
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
@@ -360,6 +373,14 @@ export async function getSubscriptionMapping(nodeId: string) {
 export async function monthlyCreditGranted(nodeId: string, periodStart: string) {
   const rows = await query<{ c: string }>("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_subscription_monthly' and amount > 0 and (meta->>'period_start')=$2", [nodeId, periodStart]);
   return Number(rows[0].c) > 0;
+}
+
+export async function countTopupPurchasesSince(nodeId: string, sinceIso: string) {
+  const rows = await query<{ c: string }>(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='topup_purchase' and amount > 0 and created_at >= $2::timestamptz",
+    [nodeId, sinceIso],
+  );
+  return Number(rows[0]?.c ?? 0);
 }
 
 export async function getReferralClaim(nodeId: string) {

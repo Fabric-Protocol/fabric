@@ -252,6 +252,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && path === '/v1/bootstrap') return { name: 'bootstrap', limit: config.rateLimitBootstrapPerHour, windowSeconds: 3600, subject: 'ip' };
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
@@ -587,6 +588,31 @@ export function buildApp() {
         reason: (out as any).validationError,
         stripe_status: (out as any).stripe_status ?? undefined,
         plan_code: (out as any).plan_code ?? parsed.data.plan_code,
+      }));
+    }
+    return out;
+  });
+  app.post('/v1/billing/topups/checkout-session', async (req, reply) => {
+    const parsed = z.object({
+      node_id: z.string().uuid(),
+      pack_code: z.enum(['credits_100', 'credits_300', 'credits_1000']),
+      success_url: z.string().url(),
+      cancel_url: z.string().url(),
+    }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
+    const out = await fabricService.createTopupCheckoutSession(
+      (req as AuthedRequest).nodeId!,
+      parsed.data,
+      (req as AuthedRequest).idem?.key ?? null,
+    );
+    if ((out as any).forbidden) {
+      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create topup checkout session for another node'));
+    }
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create topup checkout session', {
+        reason: (out as any).validationError,
+        stripe_status: (out as any).stripe_status ?? undefined,
+        pack_code: (out as any).pack_code ?? parsed.data.pack_code,
       }));
     }
     return out;

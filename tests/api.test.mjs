@@ -415,6 +415,141 @@ test('billing checkout-session creates a Stripe session and respects idempotency
   await app.close();
 });
 
+test('billing topups checkout-session creates payment mode session and respects idempotency', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-topup-checkout');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const idemKey = 'topup-checkout-1';
+  let fetchCalls = 0;
+
+  await withMockFetch(async (url, init = {}) => {
+    fetchCalls += 1;
+    assert.equal(String(url), 'https://api.stripe.com/v1/checkout/sessions');
+    const headers = new Headers(init.headers);
+    assert.match(headers.get('Authorization') ?? '', /^Bearer /);
+    assert.match(headers.get('Idempotency-Key') ?? '', /^fabric_topup:/);
+
+    const form = new URLSearchParams(String(init.body ?? ''));
+    assert.equal(form.get('mode'), 'payment');
+    assert.equal(form.get('line_items[0][price]'), 'price_topup_300_test');
+    assert.equal(form.get('metadata[node_id]'), nodeId);
+    assert.equal(form.get('metadata[topup_pack_code]'), 'credits_300');
+    assert.equal(form.get('metadata[topup_credits]'), '300');
+
+    return jsonResponse(200, {
+      id: 'cs_topup_test_123',
+      url: 'https://checkout.stripe.com/c/pay/cs_topup_test_123',
+      mode: 'payment',
+    });
+  }, async () => {
+    const payload = {
+      node_id: nodeId,
+      pack_code: 'credits_300',
+      success_url: 'https://example.com/success',
+      cancel_url: 'https://example.com/cancel',
+    };
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/topups/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload,
+    });
+    assert.equal(first.statusCode, 200);
+    assert.equal(first.json().node_id, nodeId);
+    assert.equal(first.json().pack_code, 'credits_300');
+    assert.equal(first.json().credits, 300);
+    assert.equal(first.json().checkout_session_id, 'cs_topup_test_123');
+    assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_topup_test_123');
+
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/topups/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload,
+    });
+    assert.equal(replay.statusCode, 200);
+    assert.deepEqual(replay.json(), first.json());
+
+    const conflict = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/topups/checkout-session',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+      payload: { ...payload, pack_code: 'credits_100' },
+    });
+    assert.equal(conflict.statusCode, 409);
+    assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+  });
+
+  assert.equal(fetchCalls, 1);
+  await app.close();
+});
+
+test('webhook checkout.session.completed grants topup credits once by payment reference', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-topup-webhook-idem');
+  const nodeId = b.json().node.id;
+  const balBefore = await repo.creditBalance(nodeId);
+
+  const eventA = {
+    id: `evt_topup_a_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: {
+      object: {
+        id: `cs_topup_a_${nodeId.slice(0, 8)}`,
+        payment_status: 'paid',
+        payment_intent: `pi_topup_${nodeId.slice(0, 8)}`,
+        metadata: { node_id: nodeId, topup_pack_code: 'credits_300' },
+      },
+    },
+  };
+  const eventB = {
+    ...eventA,
+    id: `evt_topup_b_${nodeId.slice(0, 8)}`,
+  };
+
+  const sigA = sign(eventA);
+  const sigB = sign(eventB);
+  const resA = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sigA.header }, payload: sigA.raw });
+  const resB = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sigB.header }, payload: sigB.raw });
+  assert.equal(resA.statusCode, 200);
+  assert.equal(resB.statusCode, 200);
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter - balBefore, 300);
+  await app.close();
+});
+
+test('topup grants enforce daily velocity limit per node', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-topup-velocity');
+  const nodeId = b.json().node.id;
+  const balBefore = await repo.creditBalance(nodeId);
+
+  for (let i = 0; i < 4; i += 1) {
+    const event = {
+      id: `evt_topup_vel_${nodeId.slice(0, 8)}_${i}`,
+      type: 'checkout.session.completed',
+      data: {
+        object: {
+          id: `cs_topup_vel_${nodeId.slice(0, 8)}_${i}`,
+          payment_status: 'paid',
+          payment_intent: `pi_topup_vel_${nodeId.slice(0, 8)}_${i}`,
+          metadata: { node_id: nodeId, topup_pack_code: 'credits_100' },
+        },
+      },
+    };
+    const sig = sign(event);
+    const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter - balBefore, 300);
+  await app.close();
+});
+
 test('webhook processes checkout.session.completed and is idempotent by event id', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh');

@@ -43,6 +43,7 @@ export const config = {
   rateLimitBootstrapPerHour: Number(process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR ?? 3),
   rateLimitSearchPerMinute: Number(process.env.RATE_LIMIT_SEARCH_PER_MINUTE ?? 20),
   rateLimitCreditsQuotePerMinute: Number(process.env.RATE_LIMIT_CREDITS_QUOTE_PER_MINUTE ?? 60),
+  rateLimitTopupCheckoutPerDay: Number(process.env.RATE_LIMIT_TOPUP_CHECKOUT_PER_DAY ?? 10),
   rateLimitInventoryPerMinute: Number(process.env.RATE_LIMIT_INVENTORY_PER_MINUTE ?? 6),
   rateLimitOfferWritePerMinute: Number(process.env.RATE_LIMIT_OFFER_WRITE_PER_MINUTE ?? 30),
   rateLimitOfferDecisionPerMinute: Number(process.env.RATE_LIMIT_OFFER_DECISION_PER_MINUTE ?? 60),

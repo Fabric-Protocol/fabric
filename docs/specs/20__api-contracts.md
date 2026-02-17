@@ -1297,6 +1297,56 @@ Errors
 
 422 validation_error
 
+14b) Billing checkout session (credit top-ups)
+POST /v1/billing/topups/checkout-session
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Create a Stripe Checkout Session in payment mode for a one-time credit pack purchase.
+
+Request
+{
+  "node_id": "uuid",
+  "pack_code": "credits_100|credits_300|credits_1000",
+  "success_url": "https://...",
+  "cancel_url": "https://..."
+}
+
+Rules / side effects
+
+- `node_id` must match the authenticated Node.
+- Server resolves Stripe Price ID from configured top-up pack mapping.
+- Creates Stripe Checkout Session in payment mode and sets:
+  - `metadata.node_id`
+  - `metadata.topup_pack_code`
+  - `metadata.topup_credits`
+
+Response 200
+{
+  "node_id": "uuid",
+  "pack_code": "credits_100|credits_300|credits_1000",
+  "credits": 100,
+  "checkout_session_id": "cs_...",
+  "checkout_url": "https://checkout.stripe.com/..."
+}
+
+Errors
+
+403 forbidden (node_id mismatch)
+
+422 validation_error
+
 15) Stripe webhooks (idempotent; locked)
 POST /v1/webhooks/stripe
 Auth
@@ -1336,6 +1386,12 @@ Updates subscriber status.
 Grants monthly credits once per billing period (unique on (node_id, period_start) in ledger).
 
 Applies referral award on first paid subscription invoice.
+
+Top-up grants:
+
+- If event payload includes `metadata.topup_pack_code`, grant the configured pack credits as `topup_purchase`.
+- Grant idempotency is keyed by payment reference (`payment_intent` or `invoice`), independent of Stripe `event.id`.
+- Enforce daily velocity limit per node (`TOPUP_MAX_GRANTS_PER_DAY`); over-limit events still return `200` without grant side effects.
 
 Signature verification with 5-minute tolerance.
 

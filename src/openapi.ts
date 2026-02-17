@@ -112,6 +112,17 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/billing/topups/checkout-session': {
+      post: {
+        summary: 'Create Stripe Checkout Session for a credit top-up pack',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': { description: 'Top-up checkout session created' },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {

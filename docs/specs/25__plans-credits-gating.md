@@ -1,196 +1,99 @@
+# Plans, Credits, and Gating (MVP)
 
----
-
-## `Plans.md`
-
-```md
-# Plans.md — Fabric plans, credits, gating (MVP)
-
-This document defines **commercial behavior** that the API enforces:
-- what requires an active subscription
-- what consumes credits
-- what limits apply (rate limits + quotas)
-- how free/non-subscriber Nodes can still participate (minimal fairness)
-
-This document must not conflict with:
-- `docs/specs/10__invariants.md`
-- `docs/specs/20__api-contracts.md`
-- `docs/specs/22__projections-and-search.md`
-
----
+This document defines commercial and access-control behavior enforced by the API.
+If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-contracts.md`, those documents win.
 
 ## 0) Definitions
+- Subscriber: Node with active paid subscription status.
+- Credits: balance computed from `credit_ledger` deltas.
+- Metered endpoint: decrements credits only on HTTP 200.
+- Free node: node without active paid subscription.
 
-- **Subscriber**: Node with an active paid plan.
-- **Credits**: consumable units used to meter certain actions (primarily search).
-- **Metered endpoint**: endpoint that decrements credits on HTTP 200 only.
-- **Free node**: Node without an active plan.
+## 1) Gating rules
+### 1.1 Allowed for free and subscribed nodes
+- Manage own private canonical resources (Units, Requests).
+- Publish/unpublish own resources.
+- View own resources and own offers.
+- Reject inbound offers.
 
----
+### 1.2 Subscriber-only actions
+- `POST /v1/search/listings`
+- `POST /v1/search/requests`
+- `GET /v1/public/nodes/{node_id}/listings`
+- `GET /v1/public/nodes/{node_id}/requests`
+- `POST /v1/offers`
+- `POST /v1/offers/{offer_id}/counter`
+- `POST /v1/offers/{offer_id}/accept`
+- `POST /v1/offers/{offer_id}/reveal-contact`
 
-## 1) Gating rules (MVP)
+### 1.3 Two-sided subscriber requirement
+- Contact reveal requires both offer parties to be subscribers.
+- If either side is non-subscriber, return `403 subscriber_required`.
 
-### 1.1 Always allowed (free and subscribed)
-These actions MUST be available to all Nodes (subject to rate limits and abuse prevention):
-- Create/manage own canonical private data (Units, Requests) (unless explicitly gated elsewhere)
-- Publish/unpublish own Units/Requests (unless explicitly gated elsewhere)
-- View own objects (Units/Requests/Offers involving the node)
-- Reject inbound offers (recipient fairness)
-- Admin endpoints are not applicable (admin only)
+## 2) Credits and metering
+### 2.1 Charging model
+- Charge only on HTTP 200.
+- Do not charge on 4xx/5xx.
+- Do not double-charge idempotent replays.
 
-> Rationale: a marketplace cannot function if recipients must pay to say “no”.
+### 2.2 Base costs
+- `SEARCH_CREDIT_COST = 2`
+- Search listing/request call base: 2 credits.
+- Public node inventory expansion call base: 2 credits.
 
-### 1.2 Subscriber-only (MVP)
-These actions require the caller to be a Subscriber:
-- Search listings (`POST /v1/search/listings`)
-- Search requests (`POST /v1/search/requests`)
-- “Expand” reads that are metered (e.g., view a node’s other public listings/requests) if marked metered in contracts
-- Create offers
-- Counter offers
-- Accept offers (if contracts gate acceptance; keep aligned with spec)
-- Contact reveal attempt (caller must be Subscriber)
+### 2.3 Broadening costs
+- Broadening add-on cost equals requested level.
+- Formula: `estimated_cost = SEARCH_CREDIT_COST + broadening.level`
 
-### 1.3 Two-sided subscriber rule (contact reveal)
-Contact reveal is allowed only when:
-- offer status is mutually accepted
-- caller is a party to the offer
-- **both parties are Subscribers**
+### 2.4 Ledger behavior
+- Search/expand writes negative entries (`debit_search`, `debit_search_page`).
+- Grants write positive entries (`grant_signup`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
+- Balance is authoritative `SUM(amount)` per node.
 
-If either party is not a Subscriber, contact reveal returns `403 subscriber_required` (or the contract’s exact error code).
+## 3) Rate limits (default env-backed values)
+- Bootstrap: `3/hour`
+- Search: `20/min`
+- Credits quote: `60/min`
+- Inventory expand: `6/min`
+- Offer create/counter: `30/min`
+- Offer accept/reject/cancel: `60/min`
+- Reveal contact: `10/hour`
+- API key issuance: `10/day`
 
----
+## 4) Plans (MVP)
+- Free: 0 monthly credits, non-subscriber.
+- Basic: 500 monthly credits.
+- Pro/Plus: 1,500 monthly credits.
+- Business: 5,000 monthly credits.
 
-## 2) Credits and metering (MVP)
+Implementation note:
+- Internal storage remains `free|basic|pro|business`.
+- API responses may present `plus` when Stripe plus mapping is configured.
 
-### 2.1 What consumes credits
-Credits are consumed on HTTP 200 responses only for:
-- Search listings
-- Search requests
-- Expansion reads marked as metered
-
-No credits are consumed on:
-- 4xx/5xx responses
-- idempotency replays that return a stored response (implementation may treat replay as no-op metering)
-
-### 2.2 Base costs (fill in)
-Define these constants for implementation (do not guess values in code):
-- `CREDITS_SEARCH_LISTINGS_BASE = __`
-- `CREDITS_SEARCH_REQUESTS_BASE = __`
-- `CREDITS_EXPAND_NODE_LISTINGS_BASE = __`
-- `CREDITS_EXPAND_NODE_REQUESTS_BASE = __`
-
-### 2.3 Pagination and “broadening” costs (fill in)
-If broadening is supported per spec, define:
-- `CREDITS_BROADENING_LEVEL_1 = __`
-- `CREDITS_BROADENING_LEVEL_2 = __`
-- Pagination rules:
-  - per-page credit cost (if any): `CREDITS_PER_PAGE = __`
-  - max page size: `PAGE_SIZE_MAX = __`
-
-### 2.4 Ledger requirements
-Every credit charge must write a ledger entry containing at minimum:
-- node_id
-- action_type (enum)
-- credits_delta (negative)
-- request_id/correlation id
-- created_at
-
----
-
-## 3) Rate limits (MVP)
-
-Rate limits protect availability and reduce abuse. Values are policy; do not guess in code.
-
-Define per-route caps (fill in):
-- `RL_SEARCH_PER_MIN = __`
-- `RL_OFFERS_CREATE_PER_MIN = __`
-- `RL_OFFERS_ACCEPT_PER_MIN = __`
-- `RL_PUBLISH_PER_MIN = __`
-- global cap: `RL_GLOBAL_PER_MIN = __`
-
-Implementation guidance:
-- Prefer token bucket / fixed window per node_id + route group.
-- On exceed: return `429 rate_limited` with error envelope.
-
----
-
-## 4) Plan tiers (MVP)
-
-Plan tiers are a billing concern; the API needs only:
-- is_subscriber boolean
-- plan_id (string)
-- credit_balance
-- renewal/period timestamps (optional)
-
-Define tiers (names and benefits) WITHOUT inventing pricing here unless you want this file to be authoritative.
-
-### 4.1 Suggested tier shapes (fill in)
-- **Free**
-  - is_subscriber = false
-  - can: create/manage/publish, reject offers, view own
-  - cannot: search, create offers, counter, contact reveal
-
-- **Basic**
-  - is_subscriber = true
-  - monthly credits: __
-  - rate limits: __
-  - access: subscriber-only endpoints
-
-- **Pro**
-  - is_subscriber = true
-  - monthly credits: __
-  - higher rate limits: __
-  - access: subscriber-only endpoints
-
-(If you only want one paid tier in MVP, keep just Basic.)
-
----
-
-## 5) Credits top-ups (optional MVP)
-
-If top-ups are enabled:
-- endpoint(s): per `docs/specs/20__api-contracts.md`
-- rules:
-  - top-up increases credit_balance
-  - ledger entry is written
-  - anti-abuse (max top-ups per day) (fill in)
-
-If top-ups are not enabled in MVP, state:
-- “No top-ups in MVP; credits replenish only via subscription cycle.”
-
----
-
-## 6) Referral credits (MVP)
-
-If referrals are enabled:
-- Claim endpoint: `POST /v1/referrals/claim`
-- Awarding rules (fill in):
-  - credits_awarded_to_referrer = __
-  - credits_awarded_to_referred = __
-  - eligibility constraints: __ (e.g., first-time only)
+## 5) Credit top-ups (enabled in MVP)
+- Endpoint: `POST /v1/billing/topups/checkout-session`
+- Packs:
+  - `credits_100`: 100 credits, `$4.00`
+  - `credits_300`: 300 credits, `$12.00`
+  - `credits_1000`: 1,000 credits, `$38.00`
+- Fulfillment:
+  - Webhook grants `topup_purchase` on paid event with `metadata.topup_pack_code`.
+  - Grant idempotency key uses payment reference (`payment_intent` / `invoice`).
 - Anti-abuse:
-  - one-time per referred node
-  - require subscriber status? (fill in; keep aligned to spec)
+  - `TOPUP_MAX_GRANTS_PER_DAY` (default `3`) enforced per node (UTC day).
+  - Over-limit events are acknowledged (`200`) but grant is skipped.
 
----
+## 6) Referrals
+- Claim endpoint: `POST /v1/referrals/claim`
+- Award trigger: first paid subscription invoice.
+- Current grant: 100 credits to referrer.
+- One claim per referred node.
 
-## 7) Implementation notes (what code must expose)
+## 7) Credits quote endpoints
+- `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).
+- `POST /v1/credits/quote`: search-shaped request returns estimated cost without executing search.
+- Quote endpoints do not mutate ledger.
 
-The backend should expose:
-- `GET /v1/credits/balance`
-- `GET /v1/credits/ledger`
-- clear error codes for:
-  - subscriber_required
-  - credits_exhausted
-  - rate_limited
-
----
-
-## 8) Open decisions (must be set before launch)
-
-Fill these before final implementation:
-1. Credit costs (base, pagination, broadening)
-2. Rate limits per route group
-3. Tier definitions (number of tiers, monthly credits)
-4. Referral award amounts + eligibility
-5. Whether offer acceptance is subscriber-only (must match API contracts)
+## 8) Plan-change semantics (MVP)
+- Upgrade invoice paid: grant difference-based credits for the cycle (idempotent by invoice id).
+- Downgrade: effective at next renewal (no immediate clawback).
