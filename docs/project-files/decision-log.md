@@ -2,6 +2,11 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-17 - Codex operational protocol: run-to-completion with bounded retries
+Decision: Operational Codex tasks should run to completion with a bounded diagnose/fix/retry loop (up to 3 cycles per failing step), and stop only for true human-only blockers (UI/credentials/2FA). Avoid non-required cosmetic edits; only change files needed to satisfy TODOs or fix failing verification.
+Reason: Reduce avoidable back-and-forth during CLI-heavy setup/deploy verification and keep diffs focused.
+Impact: Future instruction blocks and execution reports should follow SUCCESS/BLOCKED outcomes with concrete command evidence.
+
 ## 2026-02-17 - Local DB bootstrap DDL trigger creation is idempotent
 Decision: For bootstrap DDL, recreate triggers using `DROP TRIGGER IF EXISTS ... ON <table>; CREATE TRIGGER ...` across `nodes`, `subscriptions`, `units`, `requests`, and `offers`.
 Reason: Re-running `npm run db:bootstrap` failed with Postgres `42710` (`trigger already exists`).

@@ -19,9 +19,10 @@ Last updated: 2026-02-17
   - Verify: `netstat -ano | findstr :5432`
 - [x] Ensure `psql` is available in PATH:
   - Verify: `psql --version`
-- [ ] Validate repo `.env` values for local DB remain correct:
+- [x] Validate repo `.env` values for local DB remain correct:
   - `DATABASE_URL=postgres://postgres:<password>@localhost:5432/fabric`
   - `ADMIN_KEY=<non-empty>`
+  - Verified in-thread (`git check-ignore -v .env`; redacted parse showed host=`localhost`, port=`5432`, db=`fabric`, `ADMIN_KEY` non-empty)
 - [x] Make local bootstrap rerunnable:
   - `npm run db:bootstrap` succeeded twice after idempotent trigger fix in `docs/specs/21__db-ddl.sql` (commit `9b4b31c`)
 
@@ -63,4 +64,5 @@ Last updated: 2026-02-17
 - [x] Resend a non-entitlement Stripe event (for example `customer.created`) and confirm no subscription/credits mutation.
 
 ## P1 - Repo hygiene
-- [ ] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
+- [x] Ensure `.gitignore` includes: `node_modules/`, `dist/`, `coverage/`, `.env`, `.env.*`
+  - Verified in-thread; normalized to `coverage/` in commit `c115f6b`
