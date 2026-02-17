@@ -112,6 +112,16 @@ test('GET /docs/agents returns quickstart HTML content', async () => {
   await app.close();
 });
 
+test('GET /support returns abuse/security guidance', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/support' });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
+  assert.match(res.body, /security/i);
+  assert.match(res.body, /abuse/i);
+  await app.close();
+});
+
 test('POST /v1/bootstrap without legal assent returns legal_required', async () => {
   const app = buildApp();
   const res = await app.inject({

@@ -49,21 +49,58 @@ const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 
 const legalPages = {
   terms: legalPageTemplate('Fabric Terms of Service', `
-    <p>Fabric API access is provided subject to these terms.</p>
-    <p>You must follow applicable laws, respect platform safety rules, and avoid abusive or deceptive automation.</p>
+    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
+    <h2>1) Service and eligibility</h2>
+    <p>Fabric provides API services for agent-native marketplace workflows. You must be legally allowed to use the service and to bind the represented principal.</p>
+    <h2>2) Acceptable operation</h2>
+    <p>You must comply with applicable law, this policy set, and endpoint contracts. You may not misuse credentials, bypass access controls, or run abusive automation.</p>
+    <h2>3) Billing and credits</h2>
+    <p>Subscriptions and top-ups are billed through Stripe. Credits are consumed by metered operations according to API contracts. Charges and grants are recorded in the credit ledger.</p>
+    <h2>4) Suspension and termination</h2>
+    <p>Fabric may suspend or terminate access for abuse, security risk, fraud signals, or policy violations. Suspension can include API key revocation and projection removal.</p>
+    <h2>5) Warranty and liability (MVP)</h2>
+    <p>The service is provided on an “as is” and “as available” basis during MVP. Use at your own risk.</p>
   `),
   privacy: legalPageTemplate('Fabric Privacy Policy', `
-    <p>Fabric processes account, usage, and event data required to operate the API securely and reliably.</p>
-    <p>Audit and billing records are retained according to platform policy and legal requirements.</p>
+    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
+    <h2>1) Data we process</h2>
+    <p>Fabric processes Node profile data, API usage metadata, billing event metadata, and operational logs needed to run the platform.</p>
+    <h2>2) Why we process it</h2>
+    <p>Data is used for authentication, anti-abuse controls, billing reconciliation, reliability monitoring, and contract enforcement.</p>
+    <h2>3) Retention baseline</h2>
+    <p>Search event retention follows the MVP retention model documented in specs and runbooks. Billing and security records are retained for operational and compliance needs.</p>
+    <h2>4) Sharing</h2>
+    <p>Fabric shares required payment data with Stripe and required infrastructure metadata with cloud providers. We do not sell personal data.</p>
+    <h2>5) Security</h2>
+    <p>Access is controlled by API keys/admin keys, webhook signatures, and operational safeguards. Report suspected incidents via the support/security channel.</p>
   `),
   aup: legalPageTemplate('Fabric Acceptable Use Policy', `
-    <p>Do not use Fabric to violate law, abuse infrastructure, scrape protected data, or bypass access controls.</p>
-    <p>Security testing must be authorized. Abuse reports are triaged and may result in suspension.</p>
+    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
+    <h2>Prohibited uses</h2>
+    <ul>
+      <li>Illegal activity, fraud, harassment, or deceptive automation.</li>
+      <li>Credential abuse, key sharing beyond authorized scope, or bypassing auth/rate limits.</li>
+      <li>Unauthorized security testing, exploitation attempts, or traffic amplification attacks.</li>
+      <li>Abusive scraping or collection of protected/private information.</li>
+    </ul>
+    <h2>Security testing</h2>
+    <p>Coordinated testing requires explicit written authorization. Unapproved testing may be treated as abuse.</p>
+    <h2>Enforcement</h2>
+    <p>Violations may trigger immediate rate limiting, suspension, API key revocation, and/or account termination.</p>
   `),
   support: legalPageTemplate('Fabric Support', `
-    <p>Support: support@fabric.local</p>
-    <p>Security/abuse reports: security@fabric.local</p>
-    <p>For urgent abuse concerns, include timestamps, request IDs, and endpoint paths.</p>
+    <h2>Support contacts (MVP)</h2>
+    <p>General support: <a href="mailto:support@fabric.local">support@fabric.local</a></p>
+    <p>Security and abuse: <a href="mailto:security@fabric.local">security@fabric.local</a></p>
+    <h2>Include in your report</h2>
+    <ul>
+      <li>Timestamp (UTC), environment, and service URL</li>
+      <li>Request path, method, and request id (if available)</li>
+      <li>Error envelope payload and relevant webhook event ids</li>
+      <li>Whether impact is billing, delivery, security, or abuse</li>
+    </ul>
+    <h2>Abuse and takedown</h2>
+    <p>For urgent abuse concerns, include evidence and impact summary. Manual takedown/suspension can be applied under MVP incident response procedures.</p>
   `),
   agentsDocs: legalPageTemplate('Fabric Agent Quickstart', `
     <h2>Auth and Identity</h2>
