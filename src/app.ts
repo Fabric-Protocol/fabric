@@ -62,9 +62,85 @@ const legalPages = {
     <p>Security/abuse reports: security@fabric.local</p>
     <p>For urgent abuse concerns, include timestamps, request IDs, and endpoint paths.</p>
   `),
-  agentsDocs: legalPageTemplate('Fabric Agent Docs', `
-    <p>Agent-facing docs placeholder.</p>
-    <p>Use <code>/v1/meta</code> for machine-readable legal and support pointers.</p>
+  agentsDocs: legalPageTemplate('Fabric Agent Quickstart', `
+    <h2>Auth and Identity</h2>
+    <p>Fabric uses API keys with header <code>Authorization: ApiKey &lt;api_key&gt;</code>.</p>
+    <p>All authenticated actions are scoped to the Node that owns the API key.</p>
+    <p>All non-2xx responses use the canonical envelope:</p>
+    <pre><code>{ "error": { "code": "STRING_CODE", "message": "human readable", "details": {} } }</code></pre>
+
+    <h2>Bootstrap Flow (Legal Assent Required)</h2>
+    <ol>
+      <li>Call <code>GET /v1/meta</code> and read <code>required_legal_version</code>.</li>
+      <li>Call <code>POST /v1/bootstrap</code> with legal assent payload.</li>
+      <li>Store the returned plaintext API key securely.</li>
+    </ol>
+
+    <h2>MVP Object Model</h2>
+    <ul>
+      <li><strong>Node</strong>: principal identity for all actions.</li>
+      <li><strong>Units</strong>: canonical private resources a Node offers.</li>
+      <li><strong>Requests</strong>: canonical private needs a Node publishes.</li>
+      <li><strong>Offers</strong>: structured negotiation actions between Nodes.</li>
+      <li><strong>Projections</strong>: public marketplace views derived from published canonical objects.</li>
+    </ul>
+
+    <h2>Credits and Limits</h2>
+    <ul>
+      <li>Search and expansion endpoints are metered in credits.</li>
+      <li>Subscriber-only actions require active subscription status even if credits are available.</li>
+      <li>Rate limiting applies; retry on 429 using backoff and a new idempotency key only when payload changes.</li>
+    </ul>
+
+    <h2>PowerShell-safe Examples</h2>
+    <pre><code>$BASE = "https://your-service.run.app"
+$meta = Invoke-RestMethod "$BASE/v1/meta" -Method Get
+$meta | ConvertTo-Json -Depth 10</code></pre>
+
+    <pre><code>$idem = [guid]::NewGuid().ToString()
+$body = @{
+  display_name = "Agent Node"
+  email = $null
+  referral_code = $null
+  legal = @{
+    accepted = $true
+    version = $meta.required_legal_version
+  }
+} | ConvertTo-Json
+
+$bootstrap = Invoke-RestMethod "$BASE/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key" = $idem } -ContentType "application/json" -Body $body
+
+$apiKey = $bootstrap.api_key.api_key</code></pre>
+
+    <pre><code>$idem = [guid]::NewGuid().ToString()
+$unitBody = @{
+  title = "Example unit"
+  description = "Created by quickstart"
+  type = "service"
+  quantity = 1
+  measure = "EA"
+  scope_primary = "OTHER"
+  scope_notes = "General"
+} | ConvertTo-Json
+
+$unit = Invoke-RestMethod "$BASE/v1/units" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body $unitBody
+
+Invoke-RestMethod "$BASE/v1/units" -Method Get -Headers @{ Authorization = "ApiKey $apiKey" } | ConvertTo-Json -Depth 10</code></pre>
+
+    <pre><code>$idem = [guid]::NewGuid().ToString()
+Invoke-RestMethod "$BASE/v1/units/$($unit.unit.id)/publish" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body "{}" | ConvertTo-Json -Depth 10</code></pre>
+
+    <pre><code>$idem = [guid]::NewGuid().ToString()
+$searchBody = @{
+  q = $null
+  scope = "OTHER"
+  filters = @{ scope_notes = "General" }
+  broadening = @{ level = 0; allow = $false }
+  limit = 20
+  cursor = $null
+} | ConvertTo-Json
+
+Invoke-RestMethod "$BASE/v1/search/listings" -Method Post -Headers @{ Authorization = "ApiKey $apiKey"; "Idempotency-Key" = $idem } -ContentType "application/json" -Body $searchBody | ConvertTo-Json -Depth 10</code></pre>
   `),
 };
 

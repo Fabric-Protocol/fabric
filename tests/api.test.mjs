@@ -100,6 +100,17 @@ test('GET /legal/terms returns HTML', async () => {
   await app.close();
 });
 
+test('GET /docs/agents returns quickstart HTML content', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/docs/agents' });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
+  assert.match(res.body, /Fabric Agent Quickstart/);
+  assert.match(res.body, /Authorization: ApiKey/);
+  assert.match(res.body, /required_legal_version/);
+  await app.close();
+});
+
 test('POST /v1/bootstrap without legal assent returns legal_required', async () => {
   const app = buildApp();
   const res = await app.inject({

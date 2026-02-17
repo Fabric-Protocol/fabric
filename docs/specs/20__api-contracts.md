@@ -60,12 +60,13 @@ Serve OpenAPI 3.x JSON on the same origin as the API.
 ## GET /legal/privacy
 ## GET /legal/aup
 ## GET /support
+## GET /docs/agents
 
 ### Auth
 None
 
 ### Purpose
-Serve public legal and support pages from the same service origin as the API.
+Serve public legal/support pages and an agent quickstart page from the same service origin as the API.
 
 ### Response 200
 `text/html`
