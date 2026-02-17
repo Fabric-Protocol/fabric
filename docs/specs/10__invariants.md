@@ -158,9 +158,9 @@ Subscriptions:
 - Business: $49.99 / 5,000 credits
 
 Top-ups (worse than Basic):
-- 100 credits = $4
-- 300 credits = $12
-- 1,000 credits = $38
+- 100 credits = $3.99
+- 300 credits = $11.99
+- 1,000 credits = $39.99
 
 Acquisition:
 - Signup grant: 200 credits one-time
