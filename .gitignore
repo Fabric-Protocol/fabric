@@ -2,6 +2,6 @@
 dist/
 .env.*
 .env
-coverage
+coverage/
 # local debugging filters
 logfilter.txt
