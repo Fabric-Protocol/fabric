@@ -204,10 +204,24 @@ export async function removeProjection(kind:'units'|'requests', id:string) {
   else await query('delete from public_requests where request_id=$1',[id]);
 }
 
-export async function searchPublic(kind:'listings'|'requests', scope:string, limit:number, cursor:string|null) {
+export async function searchPublic(kind:'listings'|'requests', scope:string, limit:number, cursor:string|null, callerNodeId:string|null = null) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
-  if (cursor) return query<any>(`select * from ${table} where published_at < $2::timestamptz and (doc->>'scope_primary')=$3 order by published_at desc limit $1`, [limit,cursor,scope]);
-  return query<any>(`select * from ${table} where (doc->>'scope_primary')=$2 order by published_at desc limit $1`, [limit,scope]);
+  if (cursor) {
+    if (callerNodeId) {
+      return query<any>(
+        `select * from ${table} where published_at < $2::timestamptz and (doc->>'scope_primary')=$3 and node_id <> $4 order by published_at desc limit $1`,
+        [limit, cursor, scope, callerNodeId],
+      );
+    }
+    return query<any>(`select * from ${table} where published_at < $2::timestamptz and (doc->>'scope_primary')=$3 order by published_at desc limit $1`, [limit, cursor, scope]);
+  }
+  if (callerNodeId) {
+    return query<any>(
+      `select * from ${table} where (doc->>'scope_primary')=$2 and node_id <> $3 order by published_at desc limit $1`,
+      [limit, scope, callerNodeId],
+    );
+  }
+  return query<any>(`select * from ${table} where (doc->>'scope_primary')=$2 order by published_at desc limit $1`, [limit, scope]);
 }
 
 export async function logSearch(nodeId:string, kind:'listings'|'requests', scope:string, q:string|null, filters:any, broadening:number, credits:number) {

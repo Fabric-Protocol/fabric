@@ -1060,6 +1060,94 @@ test('search returns credits_exhausted for subscriber with insufficient credits'
   await app.close();
 });
 
+test('search excludes caller-owned published listings and requests by default', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-self-exclude');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const activateBody = {
+    id: `evt_subscriber_self_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_self_${nodeId.slice(0, 8)}`, subscription: `sub_self_${nodeId.slice(0, 8)}` } },
+  };
+  const activateSig = sign(activateBody);
+  const activated = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
+  assert.equal(activated.statusCode, 200);
+
+  const unit = await repo.createResource('units', nodeId, {
+    title: 'Self listing',
+    description: 'Owned by caller',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    measure: 'EA',
+    custom_measure: null,
+    scope_primary: 'OTHER',
+    scope_secondary: [],
+    scope_notes: 'self-exclude-test',
+    location_text_public: null,
+    origin_region: null,
+    dest_region: null,
+    service_region: null,
+    delivery_format: null,
+    tags: [],
+    category_ids: [],
+    public_summary: 'self listing',
+  });
+  await repo.setPublished('units', unit.id, true);
+  const publishedUnit = await repo.getResource('units', nodeId, unit.id);
+  await repo.upsertProjection('units', publishedUnit);
+
+  const request = await repo.createResource('requests', nodeId, {
+    title: 'Self request',
+    description: 'Owned by caller',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    measure: 'EA',
+    custom_measure: null,
+    scope_primary: 'OTHER',
+    scope_secondary: [],
+    scope_notes: 'self-exclude-test',
+    location_text_public: null,
+    origin_region: null,
+    dest_region: null,
+    service_region: null,
+    delivery_format: null,
+    need_by: null,
+    accept_substitutions: true,
+    tags: [],
+    category_ids: [],
+    public_summary: 'self request',
+  });
+  await repo.setPublished('requests', request.id, true);
+  const publishedRequest = await repo.getResource('requests', nodeId, request.id);
+  await repo.upsertProjection('requests', publishedRequest);
+
+  const listingsRes = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-listings-${nodeId}` },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(listingsRes.statusCode, 200);
+  const ownListingSeen = listingsRes.json().items.some((row) => row.item?.node_id === nodeId);
+  assert.equal(ownListingSeen, false);
+
+  const requestsRes = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-requests-${nodeId}` },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(requestsRes.statusCode, 200);
+  const ownRequestSeen = requestsRes.json().items.some((row) => row.item?.node_id === nodeId);
+  assert.equal(ownRequestSeen, false);
+
+  await app.close();
+});
+
 test('admin can mint an api key for an existing node and rejects unknown node', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-admin-mint');

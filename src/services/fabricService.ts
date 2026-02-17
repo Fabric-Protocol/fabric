@@ -227,7 +227,7 @@ export const fabricService = {
     const cost = config.searchCreditCost + (body.broadening?.level ?? 0);
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
-    const rows = await repo.searchPublic(kind, body.scope, body.limit ?? 20, body.cursor ?? null);
+    const rows = await repo.searchPublic(kind, body.scope, body.limit ?? 20, body.cursor ?? null, nodeId);
     await repo.addCredit(nodeId, body.cursor ? 'debit_search_page' : 'debit_search', -cost, { scope: body.scope }, idemKey);
     await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, body.broadening?.level ?? 0, cost);
     return { search_id: crypto.randomUUID(), scope: body.scope, limit: body.limit ?? 20, cursor: body.cursor ?? null, broadening: body.broadening ?? { level: 0, allow: false }, applied_filters: body.filters ?? {}, items: rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } })), has_more: rows.length === (body.limit ?? 20) };
