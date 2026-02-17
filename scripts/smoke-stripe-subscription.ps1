@@ -12,6 +12,83 @@ function New-IdempotencyKey {
   return [guid]::NewGuid().ToString()
 }
 
+function Read-ErrorResponseBody {
+  param([Parameter(Mandatory = $true)]$ErrorRecord)
+
+  if ($null -ne $ErrorRecord.ErrorDetails -and -not [string]::IsNullOrWhiteSpace($ErrorRecord.ErrorDetails.Message)) {
+    return $ErrorRecord.ErrorDetails.Message
+  }
+
+  if ($null -eq $ErrorRecord.Exception -or $null -eq $ErrorRecord.Exception.Response) {
+    return ""
+  }
+
+  try {
+    $stream = $ErrorRecord.Exception.Response.GetResponseStream()
+    if ($null -eq $stream) { return "" }
+    $reader = New-Object System.IO.StreamReader($stream)
+    return $reader.ReadToEnd()
+  } catch {
+    return ""
+  }
+}
+
+function Get-DotEnvMap {
+  $map = @{}
+  if (-not (Test-Path ".env")) { return $map }
+  foreach ($line in Get-Content ".env") {
+    if ([string]::IsNullOrWhiteSpace($line)) { continue }
+    if ($line.TrimStart().StartsWith("#")) { continue }
+    $parts = $line -split "=", 2
+    if ($parts.Length -ne 2) { continue }
+    $key = $parts[0].Trim()
+    $value = $parts[1].Trim()
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+      $map[$key] = $value
+    }
+  }
+  return $map
+}
+
+function Get-ConfigValue {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name,
+    [Parameter(Mandatory = $true)][hashtable]$DotEnv
+  )
+  $fromEnv = [Environment]::GetEnvironmentVariable($Name, "Process")
+  if (-not [string]::IsNullOrWhiteSpace($fromEnv)) { return $fromEnv }
+  $fromMachine = [Environment]::GetEnvironmentVariable($Name, "Machine")
+  if (-not [string]::IsNullOrWhiteSpace($fromMachine)) { return $fromMachine }
+  $fromUser = [Environment]::GetEnvironmentVariable($Name, "User")
+  if (-not [string]::IsNullOrWhiteSpace($fromUser)) { return $fromUser }
+  if ($DotEnv.ContainsKey($Name) -and -not [string]::IsNullOrWhiteSpace($DotEnv[$Name])) { return $DotEnv[$Name] }
+  return ""
+}
+
+function HasAnyConfigValue {
+  param(
+    [Parameter(Mandatory = $true)][string[]]$Names,
+    [Parameter(Mandatory = $true)][hashtable]$DotEnv
+  )
+  foreach ($n in $Names) {
+    if (-not [string]::IsNullOrWhiteSpace((Get-ConfigValue -Name $n -DotEnv $DotEnv))) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Get-PlanPriceVarCandidates {
+  param([Parameter(Mandatory = $true)][string]$PlanCode)
+  switch ($PlanCode.Trim().ToLowerInvariant()) {
+    "basic" { return @("STRIPE_PRICE_BASIC", "STRIPE_PRICE_IDS_BASIC") }
+    "plus" { return @("STRIPE_PRICE_PLUS", "STRIPE_PRICE_IDS_PLUS") }
+    "pro" { return @("STRIPE_PRICE_PRO", "STRIPE_PRICE_IDS_PRO") }
+    "business" { return @("STRIPE_PRICE_BUSINESS", "STRIPE_PRICE_IDS_BUSINESS") }
+    default { return @() }
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
   if (-not [string]::IsNullOrWhiteSpace($env:FABRIC_BASE_URL)) {
     $BaseUrl = $env:FABRIC_BASE_URL
@@ -74,6 +151,34 @@ if ($baseUri.Scheme -eq "https") {
   Write-Host "[PASS] Listener detected on localhost:$port"
 }
 
+if ($hostName -in @("localhost", "127.0.0.1") -and $BillingPath -eq "/v1/billing/checkout-session") {
+  $dotEnv = Get-DotEnvMap
+  $missing = @()
+
+  if ([string]::IsNullOrWhiteSpace((Get-ConfigValue -Name "STRIPE_SECRET_KEY" -DotEnv $dotEnv))) {
+    $missing += "STRIPE_SECRET_KEY"
+  }
+
+  $priceVarCandidates = Get-PlanPriceVarCandidates -PlanCode $PlanCode
+  if ($priceVarCandidates.Count -eq 0) {
+    Write-Host "[FAIL] Unsupported PlanCode '$PlanCode' for checkout-session smoke. Use basic|plus|pro|business."
+    exit 1
+  }
+  if (-not (HasAnyConfigValue -Names $priceVarCandidates -DotEnv $dotEnv)) {
+    $missing += ($priceVarCandidates -join " or ")
+  }
+
+  if ($missing.Count -gt 0) {
+    Write-Host "[FAIL] Local Stripe config preflight failed."
+    foreach ($item in $missing) {
+      Write-Host "  - missing: $item"
+    }
+    Write-Host "[NEXT] Set these in .env (or environment), restart API, then re-run smoke."
+    exit 1
+  }
+  Write-Host "[PASS] Local Stripe config preflight passed for plan_code=$PlanCode"
+}
+
 Write-Host "[STEP] Bootstrap node..."
 try {
   $meta = Invoke-RestMethod -Uri "$BaseUrl/v1/meta" -Method Get -TimeoutSec 30
@@ -121,21 +226,39 @@ $billingBody = @{
 
 $billingUrl = "$BaseUrl$BillingPath"
 $checkout = $null
+$billingIdempotencyKey = (New-IdempotencyKey)
+
+Write-Host "[INFO] Billing URL=$billingUrl"
+Write-Host "[INFO] Billing request payload:"
+try {
+  ($billingBody | ConvertFrom-Json) | ConvertTo-Json -Depth 20
+} catch {
+  Write-Host $billingBody
+}
 
 try {
   $checkout = Invoke-RestMethod -Uri $billingUrl -Method Post -Headers @{
     Authorization = "ApiKey $apiKey"
-    "Idempotency-Key" = (New-IdempotencyKey)
+    "Idempotency-Key" = $billingIdempotencyKey
   } -ContentType "application/json" -Body $billingBody
   Write-Host "[PASS] Billing endpoint response:"
   $checkout | ConvertTo-Json -Depth 10
 } catch {
   if ($_.Exception.Response) {
     $status = [int]$_.Exception.Response.StatusCode
-    $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
-    $errorBody = $reader.ReadToEnd()
+    $errorBody = Read-ErrorResponseBody -ErrorRecord $_
     Write-Host "[WARN] Billing endpoint call failed with HTTP $status"
-    Write-Host $errorBody
+    Write-Host "[INFO] Billing request idempotency-key=$billingIdempotencyKey"
+    if (-not [string]::IsNullOrWhiteSpace($errorBody)) {
+      Write-Host "[INFO] Billing error response body:"
+      try {
+        ($errorBody | ConvertFrom-Json) | ConvertTo-Json -Depth 20
+      } catch {
+        Write-Host $errorBody
+      }
+    } else {
+      Write-Host "[INFO] Billing error response body is empty."
+    }
     if ($status -eq 404) {
       Write-Host "[WARN] No billing checkout endpoint is currently exposed by this API contract."
       Write-Host "[NEXT] Complete Stripe test checkout externally with metadata.node_id=$nodeId and metadata.plan_code=$PlanCode, then continue."
