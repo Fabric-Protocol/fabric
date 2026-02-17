@@ -533,6 +533,44 @@ function planCodeForResponse(planCode: string) {
   return planCode;
 }
 
+const planOrder: Record<string, number> = {
+  free: 0,
+  basic: 1,
+  plus: 2,
+  pro: 2,
+  business: 3,
+};
+
+function planRank(planCode: string | null | undefined) {
+  if (!planCode) return 0;
+  return planOrder[planCode] ?? 0;
+}
+
+function normalizePlanForComparison(planCode: string | null | undefined) {
+  const normalized = normalizePlanCode(planCode);
+  if (!normalized) return 'free';
+  return normalized;
+}
+
+function invoiceIdForIdempotency(invoiceObject: any) {
+  return nonEmptyString(invoiceObject?.id);
+}
+
+function hasProrationLine(invoiceObject: any) {
+  for (const line of invoiceLineItems(invoiceObject)) {
+    if (line?.proration === true) return true;
+    if (line?.parent?.subscription_item_details?.proration === true) return true;
+  }
+  return false;
+}
+
+async function invoiceObjectWithLines(event: any) {
+  const eventObject = event?.data?.object ?? {};
+  if (invoiceLineItems(eventObject).length > 0) return eventObject;
+  const fetched = await fetchInvoiceForPlanResolution(event);
+  return fetched ?? eventObject;
+}
+
 async function resolvePlanCode(nodeId: string, event: any, fallback: string, options: { preferStripePriceMap?: boolean; avoidFreeFallback?: boolean } = {}) {
   const explicitPlan = normalizePlanCode(event.data?.object?.metadata?.plan_code ?? event.data?.object?.plan_code ?? null);
   if (explicitPlan) return explicitPlan;
@@ -859,13 +897,60 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
       }
       return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, topup };
     }
-    const planCode = await resolvePlanCode(nodeId, event, 'basic', { preferStripePriceMap: true, avoidFreeFallback: true });
-    const storedPlanCode = planCodeForStorage(planCode);
-    const periodStart = stripeTimeToIso(object.period_start) ?? new Date().toISOString();
-    await repo.upsertSubscription(nodeId, storedPlanCode, 'active', periodStart, stripeTimeToIso(object.period_end), stripeCustomerId, stripeSubscriptionId);
-    if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {
-      await repo.addCredit(nodeId, 'grant_subscription_monthly', planCredits[planCode] ?? 0, { period_start: periodStart });
+    const invoiceObject = await invoiceObjectWithLines(event);
+    const invoiceId = invoiceIdForIdempotency(invoiceObject) ?? invoiceIdForIdempotency(object);
+    const billingReason = nonEmptyString(invoiceObject?.billing_reason ?? object?.billing_reason);
+    const proration = hasProrationLine(invoiceObject);
+
+    const existing = await repo.getMe(nodeId);
+    const existingStoredPlan = normalizePlanCode(existing?.plan_code) ?? 'free';
+    const existingPlan = normalizePlanForComparison(planCodeForResponse(existingStoredPlan));
+
+    const resolvedPlan = await resolvePlanCode(nodeId, event, 'basic', { preferStripePriceMap: true, avoidFreeFallback: true });
+    const resolvedPlanNorm = normalizePlanForComparison(resolvedPlan);
+    let effectivePlan = resolvedPlanNorm;
+
+    const isDowngradeUpdate = planRank(resolvedPlanNorm) < planRank(existingPlan)
+      && (billingReason === 'subscription_update' || proration);
+    if (isDowngradeUpdate) {
+      effectivePlan = existingPlan;
+      console.info(JSON.stringify({
+        msg: 'stripe downgrade deferred until renewal',
+        node_id: nodeId,
+        invoice_id: invoiceId,
+        from_plan: existingPlan,
+        requested_plan: resolvedPlanNorm,
+        billing_reason: billingReason,
+      }));
     }
+
+    const storedPlanCode = planCodeForStorage(effectivePlan);
+    const periodStart = stripeTimeToIso(invoiceObject?.period_start ?? object?.period_start) ?? new Date().toISOString();
+    const periodEnd = stripeTimeToIso(invoiceObject?.period_end ?? object?.period_end);
+    await repo.upsertSubscription(nodeId, storedPlanCode, 'active', periodStart, periodEnd, stripeCustomerId, stripeSubscriptionId);
+
+    if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {
+      await repo.addCredit(nodeId, 'grant_subscription_monthly', planCredits[effectivePlan] ?? 0, { period_start: periodStart });
+    }
+
+    const isUpgradeProration = planRank(effectivePlan) > planRank(existingPlan)
+      && (billingReason === 'subscription_update' || proration);
+    const upgradeDelta = (planCredits[effectivePlan] ?? 0) - (planCredits[existingPlan] ?? 0);
+    if (isUpgradeProration && upgradeDelta > 0 && invoiceId) {
+      await repo.addCreditIdempotent(
+        nodeId,
+        'adjustment_manual',
+        upgradeDelta,
+        {
+          reason: 'upgrade_proration_delta',
+          invoice_id: invoiceId,
+          from_plan: existingPlan,
+          to_plan: effectivePlan,
+        },
+        `invoice:${invoiceId}:upgrade`,
+      );
+    }
+
     const claim = await repo.getReferralClaim(nodeId);
     if (claim) {
       await repo.addCredit(claim.issuer_node_id, 'grant_referral', 100, { claimer_node_id: nodeId, claim_id: claim.id });

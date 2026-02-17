@@ -1393,6 +1393,13 @@ Top-up grants:
 - Grant idempotency is keyed by payment reference (`payment_intent` or `invoice`), independent of Stripe `event.id`.
 - Enforce daily velocity limit per node (`TOPUP_MAX_GRANTS_PER_DAY`); over-limit events still return `200` without grant side effects.
 
+Plan-change semantics:
+
+- On paid upgrade/proration invoice, grant difference credits (`new_plan_monthly_credits - prior_plan_monthly_credits`) immediately.
+- Upgrade-difference grant is idempotent by invoice id (`invoice:<invoice_id>:upgrade`).
+- Mid-cycle downgrade (`billing_reason=subscription_update` or proration invoice) is deferred; active plan remains unchanged until renewal invoice.
+- Downgrade is applied on renewal-cycle invoice (`billing_reason=subscription_cycle`).
+
 Signature verification with 5-minute tolerance.
 
 Response 200

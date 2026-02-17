@@ -761,6 +761,166 @@ test('invoice.paid credits grant ignores prior zero-credit grant for same period
   await app.close();
 });
 
+test('invoice.paid upgrade proration grants plan-difference credits once per invoice id', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-upgrade-proration');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_upgrade_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_upgrade_${nodeId.slice(0, 8)}`;
+  const periodStart = 1735689600;
+  const periodEnd = 1738368000;
+
+  const activateBasic = {
+    id: `evt_upgrade_activate_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
+  };
+  const activateSig = sign(activateBasic);
+  const activateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
+  assert.equal(activateRes.statusCode, 200);
+
+  const basicInvoice = {
+    id: `evt_upgrade_basic_monthly_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_basic_monthly_${nodeId.slice(0, 8)}`,
+        customer: customerId,
+        subscription: subscriptionId,
+        period_start: periodStart,
+        period_end: periodEnd,
+        billing_reason: 'subscription_cycle',
+        metadata: { node_id: nodeId, plan_code: 'basic' },
+      },
+    },
+  };
+  const basicSig = sign(basicInvoice);
+  const basicRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': basicSig.header }, payload: basicSig.raw });
+  assert.equal(basicRes.statusCode, 200);
+
+  const balBeforeUpgrade = await repo.creditBalance(nodeId);
+  const invoiceId = `in_upgrade_proration_${nodeId.slice(0, 8)}`;
+  const upgradeObject = {
+    id: invoiceId,
+    customer: customerId,
+    subscription: subscriptionId,
+    period_start: periodStart,
+    period_end: periodEnd,
+    billing_reason: 'subscription_update',
+    metadata: { node_id: nodeId, plan_code: 'plus' },
+    lines: { data: [{ proration: true, amount: 1000 }] },
+  };
+
+  const upgradeEventA = { id: `evt_upgrade_proration_a_${nodeId.slice(0, 8)}`, type: 'invoice.paid', data: { object: upgradeObject } };
+  const upgradeEventB = { id: `evt_upgrade_proration_b_${nodeId.slice(0, 8)}`, type: 'invoice.paid', data: { object: upgradeObject } };
+  const upgradeSigA = sign(upgradeEventA);
+  const upgradeSigB = sign(upgradeEventB);
+  const upgradeResA = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': upgradeSigA.header }, payload: upgradeSigA.raw });
+  const upgradeResB = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': upgradeSigB.header }, payload: upgradeSigB.raw });
+  assert.equal(upgradeResA.statusCode, 200);
+  assert.equal(upgradeResB.statusCode, 200);
+
+  const balAfterUpgrade = await repo.creditBalance(nodeId);
+  assert.equal(balAfterUpgrade - balBeforeUpgrade, 1000);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().subscription.plan, 'plus');
+  await app.close();
+});
+
+test('invoice.paid downgrade on subscription_update is deferred until renewal invoice', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-downgrade-deferred');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_downgrade_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_downgrade_${nodeId.slice(0, 8)}`;
+  const periodStart = 1735689600;
+  const periodEnd = 1738368000;
+  const nextPeriodEnd = 1740787200;
+
+  const activatePlus = {
+    id: `evt_downgrade_activate_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { metadata: { node_id: nodeId, plan_code: 'plus' }, customer: customerId, subscription: subscriptionId } },
+  };
+  const activateSig = sign(activatePlus);
+  const activateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
+  assert.equal(activateRes.statusCode, 200);
+
+  const plusInvoice = {
+    id: `evt_downgrade_plus_monthly_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_plus_monthly_${nodeId.slice(0, 8)}`,
+        customer: customerId,
+        subscription: subscriptionId,
+        period_start: periodStart,
+        period_end: periodEnd,
+        billing_reason: 'subscription_cycle',
+        metadata: { node_id: nodeId, plan_code: 'plus' },
+      },
+    },
+  };
+  const plusSig = sign(plusInvoice);
+  const plusRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': plusSig.header }, payload: plusSig.raw });
+  assert.equal(plusRes.statusCode, 200);
+  const balAfterPlus = await repo.creditBalance(nodeId);
+
+  const downgradeUpdateInvoice = {
+    id: `evt_downgrade_update_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_downgrade_update_${nodeId.slice(0, 8)}`,
+        customer: customerId,
+        subscription: subscriptionId,
+        period_start: periodStart,
+        period_end: periodEnd,
+        billing_reason: 'subscription_update',
+        metadata: { node_id: nodeId, plan_code: 'basic' },
+        lines: { data: [{ proration: true, amount: -500 }] },
+      },
+    },
+  };
+  const downgradeUpdateSig = sign(downgradeUpdateInvoice);
+  const downgradeUpdateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': downgradeUpdateSig.header }, payload: downgradeUpdateSig.raw });
+  assert.equal(downgradeUpdateRes.statusCode, 200);
+
+  const meAfterUpdate = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
+  assert.equal(meAfterUpdate.statusCode, 200);
+  assert.equal(meAfterUpdate.json().subscription.plan, 'plus');
+  const balAfterUpdate = await repo.creditBalance(nodeId);
+  assert.equal(balAfterUpdate, balAfterPlus);
+
+  const downgradeRenewalInvoice = {
+    id: `evt_downgrade_renewal_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_downgrade_renewal_${nodeId.slice(0, 8)}`,
+        customer: customerId,
+        subscription: subscriptionId,
+        period_start: periodEnd,
+        period_end: nextPeriodEnd,
+        billing_reason: 'subscription_cycle',
+        metadata: { node_id: nodeId, plan_code: 'basic' },
+      },
+    },
+  };
+  const downgradeRenewalSig = sign(downgradeRenewalInvoice);
+  const downgradeRenewalRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': downgradeRenewalSig.header }, payload: downgradeRenewalSig.raw });
+  assert.equal(downgradeRenewalRes.statusCode, 200);
+
+  const meAfterRenewal = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
+  assert.equal(meAfterRenewal.statusCode, 200);
+  assert.equal(meAfterRenewal.json().subscription.plan, 'basic');
+  const balAfterRenewal = await repo.creditBalance(nodeId);
+  assert.equal(balAfterRenewal - balAfterUpdate, 500);
+  await app.close();
+});
+
 test('webhook maps customer.subscription.created via fetched customer metadata.node_id and persists mapping', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-fetch-sub-created');
