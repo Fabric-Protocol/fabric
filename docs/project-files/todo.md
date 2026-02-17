@@ -88,6 +88,7 @@ Last updated: 2026-02-17
 - [ ] Verify trial/gating enforcement in code matches `docs/specs/25__plans-credits-gating.md` and `docs/specs/20__api-contracts.md`; implement missing gates + tests.
 - [ ] Verify rate-limit enforcement in code matches `docs/specs/10__invariants.md`; implement missing limits + tests.
 - [ ] Verify audit/ledger retention behavior is implemented; if not automated, document as ops policy.
+- [ ] Search: exclude caller node’s own published listings/requests by default (opt-in `include_self` flag if needed later).
 
 ### Suspension (MVP approach)
 - [ ] Implement/document manual suspension (recommended):
