@@ -347,6 +347,87 @@ Response 200
   "next_cursor": "string|null"
 }
 
+GET /v1/credits/quote
+Auth
+
+Required
+
+Metering
+
+None
+
+Purpose
+
+Return machine-readable quote catalog for search costs, credit packs, and plan monthly credits.
+
+Response 200
+{
+  "node_id": "uuid",
+  "subscription": {
+    "plan": "free|basic|plus|pro|business",
+    "status": "none|active|past_due|canceled"
+  },
+  "credits_balance": 123,
+  "search_quote": {
+    "estimated_cost": 2,
+    "breakdown": {
+      "base_search_cost": 2,
+      "broadening_level": 0,
+      "broadening_cost": 0
+    }
+  },
+  "affordability": { "can_afford_estimate": true },
+  "credit_packs": [
+    {
+      "pack_code": "credits_100|credits_300|credits_1000",
+      "credits": 100,
+      "price_cents": 400,
+      "currency": "usd",
+      "stripe_price_id": "price_...|null"
+    }
+  ],
+  "plans": [
+    { "plan_code": "basic|plus|pro|business", "monthly_credits": 500 }
+  ]
+}
+
+POST /v1/credits/quote
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Quote the estimated credits cost for a search-shaped payload without executing search.
+
+Request
+{
+  "q": "string|null",
+  "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
+  "filters": {},
+  "broadening": { "level": 0, "allow": false },
+  "limit": 20,
+  "cursor": "string|null"
+}
+
+Response 200
+
+Same shape as `GET /v1/credits/quote`, but `search_quote` is computed from request payload.
+
+Rules
+
+- `estimated_cost = SEARCH_CREDIT_COST + broadening.level`
+- Quote endpoints do not execute search and do not mutate credits ledger.
+- `POST /v1/credits/quote` uses normal idempotency replay/conflict semantics.
+
 
 Balance rule
 

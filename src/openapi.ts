@@ -93,6 +93,25 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/credits/quote': {
+      get: {
+        summary: 'Get credits/search/top-up quote catalog',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': { description: 'Quote catalog' },
+          '401': { description: 'Unauthorized' },
+        },
+      },
+      post: {
+        summary: 'Estimate search credit cost without executing search',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': { description: 'Quote estimate' },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {

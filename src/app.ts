@@ -251,6 +251,7 @@ function extractUserAgent(req: FastifyRequest) {
 function selectRateLimitRule(method: string, path: string): RateLimitRule | null {
   if (method === 'POST' && path === '/v1/bootstrap') return { name: 'bootstrap', limit: config.rateLimitBootstrapPerHour, windowSeconds: 3600, subject: 'ip' };
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
+  if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
@@ -556,6 +557,14 @@ export function buildApp() {
   app.get('/v1/credits/ledger', async (req) => {
     const q = req.query as any;
     return fabricService.creditsLedger((req as AuthedRequest).nodeId!, Number(q.limit ?? 20), q.cursor ?? null);
+  });
+  app.get('/v1/credits/quote', async (req) => fabricService.creditsQuote((req as AuthedRequest).nodeId!, null));
+  app.post('/v1/credits/quote', async (req, reply) => {
+    const parsed = searchSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
+    if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
+    return fabricService.creditsQuote((req as AuthedRequest).nodeId!, parsed.data);
   });
   app.post('/v1/billing/checkout-session', async (req, reply) => {
     const parsed = z.object({

@@ -8,12 +8,18 @@ delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.STRIPE_PRICE_PLUS;
 delete process.env.STRIPE_PRICE_IDS_PLUS;
+delete process.env.STRIPE_TOPUP_PRICE_100;
+delete process.env.STRIPE_TOPUP_PRICE_300;
+delete process.env.STRIPE_TOPUP_PRICE_1000;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
 process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_PLUS = 'price_plus_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
+process.env.STRIPE_TOPUP_PRICE_100 = 'price_topup_100_test';
+process.env.STRIPE_TOPUP_PRICE_300 = 'price_topup_300_test';
+process.env.STRIPE_TOPUP_PRICE_1000 = 'price_topup_1000_test';
 process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
@@ -261,6 +267,80 @@ test('rate limit returns canonical envelope with rate_limit_exceeded', async () 
   assert.equal(limited.statusCode, 429);
   assert.equal(limited.json().error.code, 'rate_limit_exceeded');
   assert.equal(limited.json().error.details.rule, 'auth_key_issue');
+  await app.close();
+});
+
+test('GET /v1/credits/quote returns pack and plan quote catalog', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-credits-quote-get');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/credits/quote',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.node_id, nodeId);
+  assert.equal(body.search_quote.estimated_cost, 2);
+  assert.equal(Array.isArray(body.credit_packs), true);
+  assert.equal(body.credit_packs.length, 3);
+  assert.equal(body.credit_packs[0].pack_code, 'credits_100');
+  assert.equal(body.credit_packs[0].credits, 100);
+  assert.equal(body.credit_packs[0].price_cents, 400);
+  assert.equal(body.credit_packs[0].stripe_price_id, 'price_topup_100_test');
+  await app.close();
+});
+
+test('POST /v1/credits/quote is idempotent and does not mutate balance', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-credits-quote-post');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const balBefore = await repo.creditBalance(nodeId);
+
+  const payload = {
+    q: null,
+    scope: 'OTHER',
+    filters: { scope_notes: 'test quote' },
+    broadening: { level: 2, allow: true },
+    limit: 20,
+    cursor: null,
+  };
+  const idemKey = 'credits-quote-idem-1';
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/quote',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload,
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.json().search_quote.estimated_cost, 4);
+  assert.equal(first.json().affordability.can_afford_estimate, true);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/quote',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload,
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), first.json());
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/quote',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload: { ...payload, broadening: { level: 0, allow: false } },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter, balBefore);
   await app.close();
 });
 

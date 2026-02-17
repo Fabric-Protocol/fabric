@@ -115,6 +115,50 @@ export const fabricService = {
     const me = await repo.getMe(nodeId);
     return { credits_balance: await repo.creditBalance(nodeId), subscription: { plan: planCodeForResponse(me.plan_code), status: me.sub_status, period_start: me.current_period_start, period_end: me.current_period_end, credits_rollover_enabled: true } };
   },
+  async creditsQuote(nodeId: string, payload: any | null) {
+    const quotePayload = payload ?? {};
+    const cacheKey = payload
+      ? `${nodeId}:${crypto.createHash('sha256').update(JSON.stringify(quotePayload)).digest('hex')}`
+      : null;
+    const now = Date.now();
+    if (cacheKey) {
+      const cached = creditsQuoteCache.get(cacheKey);
+      if (cached && cached.expiresAtMs > now) return cached.value;
+      if (cached && cached.expiresAtMs <= now) creditsQuoteCache.delete(cacheKey);
+    }
+
+    const level = Number(quotePayload?.broadening?.level ?? 0);
+    const estimatedCost = config.searchCreditCost + level;
+    const balance = await repo.creditBalance(nodeId);
+    const me = await repo.getMe(nodeId);
+
+    const quote = {
+      node_id: nodeId,
+      subscription: {
+        plan: planCodeForResponse(me.plan_code),
+        status: me.sub_status,
+      },
+      credits_balance: balance,
+      search_quote: {
+        estimated_cost: estimatedCost,
+        breakdown: {
+          base_search_cost: config.searchCreditCost,
+          broadening_level: level,
+          broadening_cost: level,
+        },
+      },
+      affordability: {
+        can_afford_estimate: balance >= estimatedCost,
+      },
+      credit_packs: creditPackQuotes(),
+      plans: paidPlanQuotes(),
+    };
+
+    if (cacheKey) {
+      creditsQuoteCache.set(cacheKey, { expiresAtMs: now + CREDITS_QUOTE_CACHE_TTL_MS, value: quote });
+    }
+    return quote;
+  },
   async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); return { entries, next_cursor: entries.length === limit ? entries[entries.length - 1].created_at : null }; },
   createUnit(nodeId: string, payload: any) { return repo.createResource('units', nodeId, payload).then((unit) => ({ unit })); },
   listUnits(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('units', nodeId, limit, cursor); },
@@ -294,6 +338,51 @@ export async function offerSummary(offer: any) {
 
 const planCredits: Record<string, number> = { free: 0, basic: 500, plus: 1500, pro: 1500, business: 5000 };
 const freeLikePlans = new Set(['free', 'none']);
+const creditsQuoteCache = new Map<string, { expiresAtMs: number; value: any }>();
+const CREDITS_QUOTE_CACHE_TTL_MS = 60 * 1000;
+
+type CreditPackQuote = {
+  pack_code: string;
+  credits: number;
+  price_cents: number;
+  currency: 'usd';
+  stripe_price_id: string | null;
+};
+
+function creditPackQuotes(): CreditPackQuote[] {
+  return [
+    {
+      pack_code: 'credits_100',
+      credits: config.topupPack100Credits,
+      price_cents: config.topupPack100PriceCents,
+      currency: 'usd',
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice100),
+    },
+    {
+      pack_code: 'credits_300',
+      credits: config.topupPack300Credits,
+      price_cents: config.topupPack300PriceCents,
+      currency: 'usd',
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice300),
+    },
+    {
+      pack_code: 'credits_1000',
+      credits: config.topupPack1000Credits,
+      price_cents: config.topupPack1000PriceCents,
+      currency: 'usd',
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice1000),
+    },
+  ];
+}
+
+function paidPlanQuotes() {
+  return [
+    { plan_code: 'basic', monthly_credits: planCredits.basic },
+    { plan_code: 'plus', monthly_credits: planCredits.plus },
+    { plan_code: 'pro', monthly_credits: planCredits.pro },
+    { plan_code: 'business', monthly_credits: planCredits.business },
+  ];
+}
 
 const stripePricePlanMap: Record<string, string[]> = {
   basic: config.stripePriceIdsBasic,
