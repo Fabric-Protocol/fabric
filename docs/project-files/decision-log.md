@@ -21,6 +21,7 @@ Where captured:
 - `docs/project-files/thread-notes.md` (Workflow / collaboration updates section)
 Impact:
 - Future thread execution should be shorter by default and avoid speculative assumptions when source artifacts are unavailable.
+- Track this guidance as an explicit TODO item in `docs/project-files/todo.md` to avoid silent drift.
 
 ## 2026-02-18 - Legal policy constants for hosted pages locked
 Decision:

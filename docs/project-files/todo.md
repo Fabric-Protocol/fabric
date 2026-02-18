@@ -177,6 +177,9 @@ Last updated: 2026-02-18
   - add/verify DB constraint + API behavior + tests
 
 ### Phase 0.5 — Agent-commerce go-live deltas (latest thread notes)
+- [ ] Apply workflow guidance from thread notes explicitly:
+  - keep responses concise to conserve context
+  - request missing source artifacts/text instead of making assumptions
 - [ ] Add network stats surface:
   - running totals for `registered_nodes_total` and `visible_units_total`
   - plan `offers_accepted_total` for Phase 2 after metric definition is stable
