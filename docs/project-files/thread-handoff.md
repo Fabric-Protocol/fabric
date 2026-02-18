@@ -1,6 +1,6 @@
 # Thread Handoff
 
-Last updated: 2026-02-17
+Last updated: 2026-02-18
 
 ## Repo and branches
 - Repo: `fabric-api`
@@ -9,61 +9,68 @@ Last updated: 2026-02-17
 
 ## Current snapshot
 - Snapshot commands run:
-  - `git branch --show-current` -> `main`
-  - `git log -1 --oneline` -> `f155980 billing: remove plus plan; align stripe diagnostics + tests`
-  - `git status --short` -> clean at snapshot capture
-- Latest code state from thread notes:
-  - Suspension enforcement is implemented end-to-end and tested.
-  - Agent discovery/docs/legal-support routes are implemented.
-  - Stripe diagnostics endpoint exists: `GET /v1/admin/diagnostics/stripe`.
-  - Canonical plans are now `free|basic|pro|business`; legacy `plus` removed.
+  - `git status -sb` -> `## main...origin/main`
+  - `git log -1 --oneline` -> `0a75fef mvp: trial bridge + referral award + mcp wrapper + spec alignment`
+- Cloud Run service:
+  - Service: `fabric-api`
+  - Region: `us-west1`
+  - URL: `https://fabric-api-393345198409.us-west1.run.app`
+  - Active revision after redeploy: `fabric-api-00044-tzz`
 
 ## What changed most recently
-- Project files were synchronized from `docs/project-files/thread-notes.md`.
-- TODO now reflects current live blocker:
-  - Cloud Run still needs supported live Stripe price env vars wired.
-  - Live diagnostics/smoke must be re-run after env update.
-- Decision log now records:
-  - canonical plan surface excludes `plus`
-  - suspension enforcement boundary is runtime (auth + publish + public/search)
+- Cloud Run redeployed from current source to remove old `plus` drift in runtime behavior.
+- Stripe diagnostics verified clean:
+  - `stripe_configured=true`
+  - `missing=[]`
+  - `price_id_counts_by_plan={basic:1,pro:1,business:1}`
+- Live checkout-session smoke passed for all 6 paths:
+  - subscriptions: `basic`, `pro`, `business`
+  - topups: `credits_100`, `credits_300`, `credits_1000`
+- Stripe live webhook endpoint was corrected to current Cloud Run URL:
+  - `https://fabric-api-393345198409.us-west1.run.app/v1/webhooks/stripe`
+- Real live checkout propagation confirmed in logs (all 2xx):
+  - `customer.subscription.created`
+  - `checkout.session.completed`
+  - `invoice.paid`
+- `/v1/me` confirmed for checkout node `a72d3d50-3f92-4517-8617-ac81dc138135`:
+  - `node.is_subscriber=true`
+  - `subscription.status=active`
+  - `plan=pro`
+  - `credits_balance=1700`
 
 ## Current blocker
-- Human/ops blocker (Cloud Run config): supported live Stripe SKU env vars must be set in Cloud Run.
-- Human action blocker (checkout completion): live checkout URLs must be opened/completed in browser to validate subscription activation.
+- No go-live blocker for Stripe checkout/webhooks/subscriber entitlement.
+- Current technical follow-up blocker: `/v1/me` sometimes shows `subscription.period_start == subscription.period_end` after webhook processing (needs mapping investigation).
 
 ## Exact next command sequence (PowerShell)
-1) Baseline + context:
+1) Baseline context:
    - `git switch main`
    - `git pull --ff-only`
    - `git status -sb`
    - `git log -5 --oneline`
-2) Set deployment vars:
+2) Set vars:
    - `$PROJECT="fabric-487608"`
    - `$REGION="us-west1"`
-   - `$SERVICE="fabric-api"`
    - `$BASE="https://fabric-api-393345198409.us-west1.run.app"`
    - `$ADMIN_KEY="<ADMIN_KEY>"`
-3) Set live Stripe price env vars on Cloud Run:
-   - `gcloud run services update $SERVICE --project $PROJECT --region $REGION --update-env-vars STRIPE_PRICE_IDS_BASIC=price_1T1tO2K3gJAgZl81QzBXfPIf,STRIPE_PRICE_IDS_PRO=price_1T1wL1K3gJAgZl81IYKvjCsD,STRIPE_PRICE_IDS_BUSINESS=price_1T1wLgK3gJAgZl81450PfCc3,STRIPE_TOPUP_PRICE_100=price_1T1wMGK3gJAgZl817t4OWdnM,STRIPE_TOPUP_PRICE_300=price_1T1wMbK3gJAgZl81uWQJtoqH,STRIPE_TOPUP_PRICE_1000=price_1T1wNBK3gJAgZl81ixDfggz3`
-4) Verify Stripe diagnostics (must show configured true):
+   - `$NODE_ID="a72d3d50-3f92-4517-8617-ac81dc138135"`
+3) Re-verify Stripe diagnostics and webhook HTTP status:
    - `curl.exe -sS -H "X-Admin-Key: $ADMIN_KEY" "$BASE/v1/admin/diagnostics/stripe"`
-5) Run live subscription smoke per supported plan:
-   - `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "$BASE" -PlanCode "basic"`
-   - `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "$BASE" -PlanCode "pro"`
-   - `.\scripts\smoke-stripe-subscription.ps1 -BaseUrl "$BASE" -PlanCode "business"`
-6) Human-only action for each returned checkout:
-   - Open each returned `checkout_url` and complete checkout in Stripe.
-7) Verify subscriber state:
-   - `Invoke-RestMethod "$BASE/v1/me" -Method Get -Headers @{ Authorization = "ApiKey <LIVE_NODE_API_KEY>" } | ConvertTo-Json -Depth 20`
-8) Run live top-up checkout smoke (repeat for 100/300/1000):
-   - `$NODE_ID="<LIVE_NODE_ID>"`
-   - `$NODE_API_KEY="<LIVE_NODE_API_KEY>"`
-   - `$IDK="smoke-topup-100-$(Get-Date -Format yyyyMMddHHmmss)"`
-   - `$BODY = @{ node_id=$NODE_ID; pack_code="credits_100"; success_url="$BASE/docs/agents?checkout=success-live"; cancel_url="$BASE/docs/agents?checkout=cancel-live" } | ConvertTo-Json`
-   - `Invoke-RestMethod "$BASE/v1/billing/topups/checkout-session" -Method Post -Headers @{ Authorization = "ApiKey $NODE_API_KEY"; "Idempotency-Key" = $IDK; "Content-Type" = "application/json" } -Body $BODY | ConvertTo-Json -Depth 20`
-   - Human completes returned `checkout_url`; then verify `/v1/me` again.
+   - `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND resource.labels.location="us-west1" AND httpRequest.requestUrl:"/v1/webhooks/stripe"' --project $PROJECT --freshness=30m --limit 50 --order=desc --format='table(timestamp,httpRequest.status,httpRequest.requestUrl,resource.labels.revision_name)'`
+4) Pull checkout-completion Stripe event chain from app logs:
+   - `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="fabric-api" AND resource.labels.location="us-west1" AND jsonPayload.event_id:"evt_1T1yseK3gJAgZl81"' --project $PROJECT --freshness=2h --limit 30 --order=asc --format='table(timestamp,jsonPayload.msg,jsonPayload.event_id,jsonPayload.event_type,jsonPayload.node_id,jsonPayload.plan_code,jsonPayload.invoice_id,jsonPayload.signature_verified,resource.labels.revision_name)'`
+5) Mint a fresh API key for the same node and verify `/v1/me`:
+   - `$IDK="idem-admin-key-$(New-Guid)"`
+   - `$BODY=@{label="period-debug"} | ConvertTo-Json -Compress`
+   - `$NEWKEY=(Invoke-RestMethod "$BASE/v1/admin/nodes/$NODE_ID/api-keys" -Method Post -Headers @{ "X-Admin-Key"=$ADMIN_KEY; "Idempotency-Key"=$IDK; "Content-Type"="application/json" } -Body $BODY).api_key`
+   - `Invoke-RestMethod "$BASE/v1/me" -Method Get -Headers @{ Authorization = "ApiKey $NEWKEY" } | ConvertTo-Json -Depth 20`
+6) Compare Stripe invoice/subscription timestamps vs stored state (for period bug):
+   - `$ENV_DUMP=gcloud run services describe fabric-api --region $REGION --format="value(spec.template.spec.containers[0].env)"`
+   - `$LIVE_KEY=([regex]::Match($ENV_DUMP,"\\{'name': 'STRIPE_SECRET_KEY', 'value': '([^']+)'\\}")).Groups[1].Value`
+   - `stripe events retrieve evt_1T1yseK3gJAgZl81BIYI38Ry --live --api-key $LIVE_KEY`
+   - `stripe invoices retrieve in_1T1ysZK3gJAgZl81MX5pUc4w --live --api-key $LIVE_KEY`
 
 ## Carry-forward notes
-- Deferred:
-  - Fix Cursor terminal `gcloud` PATH/tooling parity.
-  - Investigate occasional `/v1/me` `period_start == period_end` observation.
+- Optional:
+  - publish MCP tool to registry (human account/verification required)
+  - fix gcloud "environment tag" warning for project (non-blocking)

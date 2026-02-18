@@ -1,6 +1,6 @@
 ﻿# Fabric - TODO (thread-active)
 
-Last updated: 2026-02-17
+Last updated: 2026-02-18
 
 ## ✅ Completed (P0) — Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
@@ -110,17 +110,17 @@ Last updated: 2026-02-17
   - ensure suspended nodes are excluded from projections/search
   - document unsuspend steps
 
-### Live Stripe SKU wiring + smoke (current blocker)
-- [ ] Set Cloud Run Stripe price env vars for supported live SKUs:
+### Live Stripe SKU wiring + smoke (completed)
+- [x] Set Cloud Run Stripe price env vars for supported live SKUs:
   - `STRIPE_PRICE_IDS_BASIC=price_1T1tO2K3gJAgZl81QzBXfPIf`
   - `STRIPE_PRICE_IDS_PRO=price_1T1wL1K3gJAgZl81IYKvjCsD`
   - `STRIPE_PRICE_IDS_BUSINESS=price_1T1wLgK3gJAgZl81450PfCc3`
   - `STRIPE_TOPUP_PRICE_100=price_1T1wMGK3gJAgZl817t4OWdnM`
   - `STRIPE_TOPUP_PRICE_300=price_1T1wMbK3gJAgZl81uWQJtoqH`
   - `STRIPE_TOPUP_PRICE_1000=price_1T1wNBK3gJAgZl81ixDfggz3`
-- [ ] Verify diagnostics after deploy:
+- [x] Verify diagnostics after deploy:
   - `GET /v1/admin/diagnostics/stripe` should return `stripe_configured=true` and `missing=[]`.
-- [ ] Run live checkout smoke for subscriptions and top-ups:
+- [x] Run live checkout smoke for subscriptions and top-ups:
   - subscriptions: `basic`, `pro`, `business`
   - top-ups: `credits_100`, `credits_300`, `credits_1000`
   - verify webhook deliveries are 2xx and `/v1/me` reflects active subscriber state.

@@ -2,6 +2,18 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-18 - Trial/referral policy and wrapper deferral locked
+Decision:
+- Trial entitlement bridge policy is fixed at: trigger on 10 uploads, grant 7-day trial entitlement, and grant +100 credits.
+- Referral incentive policy is fixed at: award on first paid invoice only, with idempotent dedupe by claimer + payment reference.
+- Major runtime skill/plugin wrapper work is deferred to Phase 2.
+Reason: These were explicitly recorded as decisions/notes in the go-live thread summary and validated during production verification.
+Where captured:
+- `docs/project-files/thread-notes.md` ("Decisions / notes")
+Impact:
+- Billing entitlement behavior and incentives are now stable inputs for downstream docs/SDK/MCP work.
+- Wrapper publishing/expansion remains out of current go-live scope.
+
 ## 2026-02-17 - Canonical paid-plan surface excludes plus
 Decision: Canonical plan set is `free|basic|pro|business`; remove legacy `plus` from backend plan enums, Stripe diagnostics requirements, and checkout validation.
 Reason: `docs/specs/00__read-first.md` defines canonical plans without `plus`, and live diagnostics showed `plus` env drift causing operational confusion.
