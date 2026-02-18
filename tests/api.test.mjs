@@ -1080,7 +1080,7 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
   await app.close();
 });
 
-test('diagnostic: invoice.paid with equal period_start/period_end is persisted as-is', async () => {
+test('invoice.paid with equal period_start/period_end falls back to Stripe subscription period', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-equal-period');
   const nodeId = b.json().node.id;
@@ -1088,31 +1088,50 @@ test('diagnostic: invoice.paid with equal period_start/period_end is persisted a
   const customerId = `cus_equal_period_${nodeId.slice(0, 8)}`;
   const subscriptionId = `sub_equal_period_${nodeId.slice(0, 8)}`;
   const periodPoint = 1735689600;
-  const expectedIso = new Date(periodPoint * 1000).toISOString();
+  const subPeriodStart = 1735689600;
+  const subPeriodEnd = 1738368000;
+  const expectedStartIso = new Date(subPeriodStart * 1000).toISOString();
+  const expectedEndIso = new Date(subPeriodEnd * 1000).toISOString();
+  const subscriptionPath = `/v1/subscriptions/${encodeURIComponent(subscriptionId)}`;
+  const fetchCalls = [];
 
-  const invoiceEvent = {
-    id: `evt_equal_period_${nodeId.slice(0, 8)}`,
-    type: 'invoice.paid',
-    data: {
-      object: {
-        id: `in_equal_period_${nodeId.slice(0, 8)}`,
-        customer: customerId,
-        subscription: subscriptionId,
-        period_start: periodPoint,
-        period_end: periodPoint,
-        metadata: { node_id: nodeId, plan_code: 'pro' },
+  await withMockFetch(async (url) => {
+    const u = String(url);
+    fetchCalls.push(u);
+    if (u.endsWith(subscriptionPath)) {
+      return jsonResponse(200, {
+        id: subscriptionId,
+        current_period_start: subPeriodStart,
+        current_period_end: subPeriodEnd,
+      });
+    }
+    return jsonResponse(404, { error: 'not_found' });
+  }, async () => {
+    const invoiceEvent = {
+      id: `evt_equal_period_${nodeId.slice(0, 8)}`,
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: `in_equal_period_${nodeId.slice(0, 8)}`,
+          customer: customerId,
+          subscription: subscriptionId,
+          period_start: periodPoint,
+          period_end: periodPoint,
+          metadata: { node_id: nodeId, plan_code: 'pro' },
+        },
       },
-    },
-  };
-  const sig = sign(invoiceEvent);
-  const invoiceRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
-  assert.equal(invoiceRes.statusCode, 200);
+    };
+    const sig = sign(invoiceEvent);
+    const invoiceRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+    assert.equal(invoiceRes.statusCode, 200);
+  });
 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
   assert.equal(me.statusCode, 200);
-  assert.equal(me.json().subscription.period_start, expectedIso);
-  assert.equal(me.json().subscription.period_end, expectedIso);
-  assert.equal(me.json().subscription.period_start, me.json().subscription.period_end);
+  assert.equal(fetchCalls.some((u) => u.endsWith(subscriptionPath)), true);
+  assert.equal(me.json().subscription.period_start, expectedStartIso);
+  assert.equal(me.json().subscription.period_end, expectedEndIso);
+  assert.ok(Date.parse(me.json().subscription.period_start) < Date.parse(me.json().subscription.period_end));
   await app.close();
 });
 

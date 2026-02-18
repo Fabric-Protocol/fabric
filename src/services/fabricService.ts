@@ -755,12 +755,64 @@ function stripeId(value: any): string | null {
 
 function stripeTimeToIso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'number') return new Date(value * 1000).toISOString();
+  if (typeof value === 'number') {
+    const asMillis = value > 1_000_000_000_000 ? value : value * 1000;
+    return new Date(asMillis).toISOString();
+  }
   if (typeof value === 'string') {
-    if (/^\d+$/.test(value)) return new Date(Number(value) * 1000).toISOString();
+    if (/^\d+$/.test(value)) {
+      const numeric = Number(value);
+      const asMillis = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+      return new Date(asMillis).toISOString();
+    }
     return value;
   }
   return null;
+}
+
+function validPeriodWindow(periodStart: string | null, periodEnd: string | null) {
+  if (!periodStart || !periodEnd) return false;
+  const startMs = Date.parse(periodStart);
+  const endMs = Date.parse(periodEnd);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+  return startMs < endMs;
+}
+
+function invoiceLinePeriodWindow(invoiceObject: any) {
+  for (const line of invoiceLineItems(invoiceObject)) {
+    const periodStart = stripeTimeToIso(line?.period?.start ?? line?.period_start);
+    const periodEnd = stripeTimeToIso(line?.period?.end ?? line?.period_end);
+    if (validPeriodWindow(periodStart, periodEnd)) return { periodStart, periodEnd };
+  }
+  return null;
+}
+
+async function stripeSubscriptionPeriodWindow(stripeSubscriptionId: string | null) {
+  if (!stripeSubscriptionId) return null;
+  const subscription = await fetchStripeJson(`subscriptions/${encodeURIComponent(stripeSubscriptionId)}`);
+  const periodStart = stripeTimeToIso(subscription?.current_period_start);
+  const periodEnd = stripeTimeToIso(subscription?.current_period_end);
+  if (!validPeriodWindow(periodStart, periodEnd)) return null;
+  return { periodStart, periodEnd };
+}
+
+async function resolveInvoicePeriodWindow(invoiceObject: any, eventObject: any, stripeSubscriptionId: string | null) {
+  const invoicePeriodStart = stripeTimeToIso(invoiceObject?.period_start ?? eventObject?.period_start);
+  const invoicePeriodEnd = stripeTimeToIso(invoiceObject?.period_end ?? eventObject?.period_end);
+  if (validPeriodWindow(invoicePeriodStart, invoicePeriodEnd)) {
+    return { periodStart: invoicePeriodStart, periodEnd: invoicePeriodEnd };
+  }
+
+  const subscriptionWindow = await stripeSubscriptionPeriodWindow(stripeSubscriptionId);
+  if (subscriptionWindow) return subscriptionWindow;
+
+  const lineWindow = invoiceLinePeriodWindow(invoiceObject);
+  if (lineWindow) return lineWindow;
+
+  return {
+    periodStart: invoicePeriodStart ?? new Date().toISOString(),
+    periodEnd: invoicePeriodEnd,
+  };
 }
 
 async function fetchInvoiceForPlanResolution(event: any) {
@@ -1207,8 +1259,7 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     }
 
     const storedPlanCode = planCodeForStorage(effectivePlan);
-    const periodStart = stripeTimeToIso(invoiceObject?.period_start ?? object?.period_start) ?? new Date().toISOString();
-    const periodEnd = stripeTimeToIso(invoiceObject?.period_end ?? object?.period_end);
+    const { periodStart, periodEnd } = await resolveInvoicePeriodWindow(invoiceObject, object, stripeSubscriptionId);
     await repo.upsertSubscription(nodeId, storedPlanCode, 'active', periodStart, periodEnd, stripeCustomerId, stripeSubscriptionId);
 
     if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {
