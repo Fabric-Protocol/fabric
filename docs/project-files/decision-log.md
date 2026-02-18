@@ -2,6 +2,27 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-18 - Legal policy constants for hosted pages locked
+Decision:
+- MVP hosted legal/support pages use operator identity `Pilsang Park (operating the Fabric Protocol)`.
+- Effective date is fixed to `2026-02-17` across legal/support pages.
+- Support/legal contact is `mapmoiras@gmail.com`.
+- Legal policy text explicitly locks top-up/subscription credit policy and prohibited-use categories captured in thread notes.
+Reason: Explicitly documented as finalized legal decisions in the period-fix/legal-finalization thread and deployed/verified live.
+Where captured:
+- `docs/project-files/thread-notes.md` (Decisions + legal finalization sections)
+Impact:
+- Public legal text is no longer placeholder and becomes the operational baseline for MVP enforcement/communications.
+
+## 2026-02-18 - Holds ownership invariant locked
+Decision:
+- Only the owner/seller may lock their own units; buyer-side bids/requests must not create holds on seller inventory.
+Reason: Explicitly captured as an anti-abuse invariant in thread notes.
+Where captured:
+- `docs/project-files/thread-notes.md` (Abuse-vector design invariant section)
+Impact:
+- Next enforcement/test work must preserve seller-owned locking semantics and block buyer inventory locking paths.
+
 ## 2026-02-18 - Self-serve recovery factors and key-rotation policy locked
 Decision:
 - Self-serve API key recovery supports two factors: recovery public-key signature (`pubkey`) and verified email OTP (`email`); either method can complete recovery.

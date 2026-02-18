@@ -101,6 +101,9 @@ Last updated: 2026-02-18
   - bootstrap 200 -> recovery start (pubkey) 200 -> recovery complete 200
   - old key `/v1/me` = 403
   - new key `/v1/me` = 200
+- [x] Merge recovery work to `main` and redeploy:
+  - merged to `main` via `1f954c2 merge: feat/self-serve-recovery`
+  - Cloud Run redeployed from `main` and legal/support/docs routes verified HTTP 200
 
 ## Phase 0.5 — Go-live ASAP (next threads)
 ### Docs + legal + operability
@@ -111,9 +114,10 @@ Last updated: 2026-02-18
 - [x] Upgrade `/docs/agents` from placeholder → real Agent Quickstart:
   - bootstrap → create unit/request → publish → search → offer → accept/reject → contact reveal
   - include canonical error envelope, idempotency/retries, credits exhausted behavior
-- [x] Legal content pass (documents still need real text):
-  - ToS / Privacy / AUP / Developer-Agent policy text (not placeholders)
-  - document how `required_legal_version` changes
+- [x] Legal content finalized and verified on Cloud Run:
+  - ToS / Privacy / AUP / Refunds / Agent Terms / Support pages replaced with final text in `src/app.ts`
+  - effective date locked to `2026-02-17`
+  - rendered pages verified with no `PLACEHOLDER` and no mojibake
 - [x] Support page content pass:
   - support contact, billing support, abuse/takedown instructions, security reporting instructions
 - [x] Ops minimum runbook (docs-only):
@@ -162,6 +166,15 @@ Last updated: 2026-02-18
   - `POST /v1/recovery/start` (`method=email`)
   - `POST /v1/recovery/complete` (`code`)
   - assert old key revoked and new key succeeds on `GET /v1/me`
+- [ ] Reconfirm recovery public-key option in final go-live smoke sequence (after email path sign-off).
+
+### Phase 0.5 — Remaining blockers from latest thread
+- [ ] Audit and enforce holds invariant:
+  - only owner/seller can lock their own unit(s)
+  - buyers must not be able to lock seller inventory via offers/requests
+  - add/adjust tests to prevent regression
+- [ ] Enforce `display_name` uniqueness:
+  - add/verify DB constraint + API behavior + tests
 
 ### Decisions locked
 - Subscription-only gating (credits do not unlock subscriber-gated actions).
