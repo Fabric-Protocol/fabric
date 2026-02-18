@@ -176,29 +176,54 @@ Last updated: 2026-02-18
 - [ ] Enforce `display_name` uniqueness:
   - add/verify DB constraint + API behavior + tests
 
-### Phase 0.5 — Agent-commerce go-live deltas (latest thread notes)
+### Phase 0.5 — Search economics + onboarding (latest thread notes)
 - [ ] Apply workflow guidance from thread notes explicitly:
   - keep responses concise to conserve context
   - request missing source artifacts/text instead of making assumptions
-- [ ] Add network stats surface:
-  - running totals for `registered_nodes_total` and `visible_units_total`
-  - plan `offers_accepted_total` for Phase 2 after metric definition is stable
-- [ ] Add onboarding and response-level reminders:
-  - explain early network sparsity and that results improve as nodes join/publish
-  - include referral/advertising growth reminder on key check-in/search responses and docs
-- [ ] Add Search Budget Contract fields to search responses:
-  - `credits_requested`, `credits_charged`, `search_strategy` (`broad|balanced|precise`)
-  - `eligible_count`, `queried_count`, `coverage_ratio`, `returned_count`
-  - sparse-result reason codes (`no_supply`, `policy_blocked`, `low_confidence_filtered`, `timeouts`)
-- [ ] Add ex-post search quality diagnostics (MVP):
-  - `coverage_ratio`, `duplicates_merged_count`, `stale_filtered_count`, `timeouts_count`
-  - optional `result_quality_score` heuristic (0-1) if low-cost to add
-- [ ] Add near-real-time offer lifecycle notifications for agents:
-  - webhooks plus polling cursor fallback (`/events?since=cursor`)
-  - optional SSE/long-poll for near-instant delivery without inbound endpoints
-- [ ] Review agent onboarding docs and flows for gaps.
+- [ ] Add top-level Search Budget Contract object to search responses:
+  - include `credits_requested`, `credits_charged`, coverage fields, and page/broadening breakdown
+  - keep this contract at top-level (not nested under metadata)
+- [ ] Enforce hard spend ceiling:
+  - `credits_charged` must always be `<= credits_requested`
+  - return actionable insufficient-budget guidance when cap blocks full execution
+- [ ] Lock go-live matching behavior:
+  - structured eligibility filters + keyword ranking only
+  - no lexical override/expansion and no semantic/vector infrastructure at go-live
+- [ ] Add top-level node targeting in search request:
+  - `target { node_id?, username? }`
+  - restrict to that node while scope filters still apply
+  - price as cheap second-order query path
+- [ ] Ensure primary search results include per-node non-zero category counts.
+- [ ] Implement node per-category drilldown behavior:
+  - cheap pricing, paginated, rate-limited
+- [ ] Add visibility data capture plumbing:
+  - log search impressions (unit returned in results)
+  - log detail views (via detail GET path)
+  - ensure offer outcomes persist `accepted|rejected|expired|cancelled`
+- [ ] Add non-binding `estimated_value` field to units.
+- [ ] Update onboarding docs and examples:
+  - explain budget-vs-results behavior and query adjustment using budget fields
+  - encourage early creation of units + requests (cheap/free)
+  - include concrete category/deal examples (including Delivery/Transport)
+  - mention anti-scrape rate-limit rationale and category suggestion intake
+  - mention saved searches/alerts as planned future capability (no timeline promises)
 - [ ] Review full agent workflows for MVP feature/anti-abuse gaps:
   - search -> offer -> acceptance -> contact reveal -> fulfillment
+
+### Next Phase (ranked by likelihood)
+High likelihood:
+- [ ] Saved searches / scheduled alerts after corpus density improves.
+- [ ] Revisit supply-vs-demand pricing divergence using observed market behavior.
+- [ ] Compute and surface visibility/discoverability scoring (private first; weighting to be decided).
+- [ ] Implement photos/media using future `unit_media` references (no DB blobs); select storage provider later.
+- [ ] Revisit basket/bundle pricing mode once sparse-corpus risk is lower.
+Medium likelihood:
+- [ ] Add bounded lexical expansion mode as opt-in, while preserving diagnostics.
+- [ ] Refine search-by-node operational pricing (cheap shallow pages + anti-scrape guardrails).
+- [ ] Add storefront-tier higher limits for paid/verified nodes after abuse controls mature.
+- [ ] Add messaging/negotiation threads for nuanced deals with moderation safeguards.
+Low likelihood:
+- [ ] No additional low-likelihood items locked in current thread notes.
 
 ### Decisions locked
 - Subscription-only gating (credits do not unlock subscriber-gated actions).

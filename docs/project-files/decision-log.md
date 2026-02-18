@@ -2,6 +2,96 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-18 - Search Budget Contract is top-level and budget-capped
+Decision:
+- Search responses must expose the Search Budget Contract at top-level, and `credits_requested` is a hard ceiling (`credits_charged <= credits_requested` always).
+Rationale:
+- Prevents agent credit shock and makes spend auditable.
+- Keeps credit-charged endpoint behavior consistent and machine-readable.
+Scope/impact:
+- API contracts, economics, onboarding guidance.
+
+## 2026-02-18 - Go-live matching stays deterministic and infra-light
+Decision:
+- Go-live search uses structured eligibility filters plus keyword ranking only; no lexical override/expansion and no semantic/vector infra.
+Rationale:
+- Keeps billing and coverage behavior deterministic and explainable.
+- Avoids early model lock-in and re-embedding operational overhead.
+Scope/impact:
+- Search API behavior, economics, infra complexity.
+
+## 2026-02-18 - Structured scoring required; deep match explanations deferred
+Decision:
+- Structured scoring is required now; "why this matched" is deferred as optional drilldown without special DB additions.
+Rationale:
+- Preserves future explainability while keeping base payload small.
+- Avoids heavy trace storage in the go-live phase.
+Scope/impact:
+- Search API payload shape, performance, future explainability work.
+
+## 2026-02-18 - Node-targeted search added as cheap second-order query
+Decision:
+- Add top-level `target { node_id?, username? }` to restrict search to one node while still honoring scope filters; price it as a low-cost follow-up path.
+Rationale:
+- Supports "work with known seller again" workflows efficiently.
+- Distinguishes drilldown behavior from global discovery cost.
+Scope/impact:
+- Search request contract, pricing model, onboarding flow.
+
+## 2026-02-18 - Broadening and pagination use explicit anti-scrape economics
+Decision:
+- Broadening defaults to strict/low and costs more as broadening increases; page 1 is included in base search cost, with escalating add-on costs for later pages.
+Rationale:
+- Prioritizes precision and ROI by default.
+- Deters deep scraping while allowing shallow legitimate pagination.
+Scope/impact:
+- Search economics, abuse controls, query UX.
+
+## 2026-02-18 - Category-count summaries and paid drilldowns are mandatory
+Decision:
+- Primary search results always include per-node categories with non-zero counts; node follow-up per-category drilldown is cheap, paginated, and rate-limited (no free full inventory dump).
+Rationale:
+- Enables multi-item viability checks with low payload overhead.
+- Balances discovery utility with abuse resistance.
+Scope/impact:
+- Search response schema, drilldown endpoints, anti-abuse controls.
+
+## 2026-02-18 - Supply/demand parity at go-live; alerting deferred
+Decision:
+- Supply and demand search share identical mechanics and pricing at go-live; saved searches/alerts are confirmed future work and deferred until corpus density improves.
+Rationale:
+- Reduces early cognitive and implementation complexity.
+- Avoids poor paid-alert experience in sparse-corpus conditions.
+Scope/impact:
+- API/economics parity, roadmap sequencing, onboarding expectations.
+
+## 2026-02-18 - Visibility scoring uses capture-now, surface-later policy
+Decision:
+- Capture visibility inputs now (impressions, detail views, offer outcomes) and defer score computation/surfacing to Phase 2; no rejection-weighting decision yet.
+Rationale:
+- Historical data must exist before scoring is useful.
+- Prevents premature scoring policy lock without observed behavior.
+Scope/impact:
+- Data capture plumbing, analytics roadmap, ranking/trust systems.
+
+## 2026-02-18 - Media shape is locked; storage provider remains open
+Decision:
+- Lock DB shape to references/metadata only (future `unit_media`, no blobs in DB) and defer storage provider choice (R2/GCS/etc.).
+Rationale:
+- Avoids near-term provider lock-in and migration pain.
+- Keeps multimodal readiness without premature infra commitment.
+Scope/impact:
+- Data model, infra roadmap, cost strategy.
+
+## 2026-02-18 - Unit estimated value and onboarding messaging are go-live requirements
+Decision:
+- Add a non-binding unit estimated-value field now, and include explicit onboarding messaging: create both units/requests early, use concrete examples, disclose anti-scrape rate-limit rationale, mention planned alerts, and invite category suggestions.
+Rationale:
+- Improves negotiation starting points with low build cost.
+- Reduces user confusion for a non-intuitive marketplace and sparse early network.
+Scope/impact:
+- Units schema/API, onboarding docs, go-to-market messaging.
+
 ## 2026-02-18 - Agent-commerce positioning baseline locked
 Decision:
 - Fabric's primary moat is network coverage + trust/policy + protocol correctness.
