@@ -34,6 +34,8 @@ create table if not exists nodes (
 
   display_name text null,
   email text null,
+  email_verified_at timestamptz null,
+  recovery_public_key text null,
   phone text null,
 
   status text not null default 'ACTIVE' check (status in ('ACTIVE','SUSPENDED')),
@@ -53,8 +55,12 @@ alter table nodes add column if not exists legal_accepted_at timestamptz not nul
 alter table nodes add column if not exists legal_version text not null default 'legacy';
 alter table nodes add column if not exists legal_ip text null;
 alter table nodes add column if not exists legal_user_agent text null;
+alter table nodes add column if not exists email text null;
+alter table nodes add column if not exists email_verified_at timestamptz null;
+alter table nodes add column if not exists recovery_public_key text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
+create unique index if not exists nodes_email_unique_idx on nodes(lower(email)) where email is not null and deleted_at is null;
 
 drop trigger if exists nodes_set_updated_at on nodes;
 create trigger nodes_set_updated_at
@@ -84,6 +90,40 @@ create table if not exists api_keys (
 
 create unique index if not exists api_keys_key_hash_unique on api_keys(key_hash);
 create index if not exists api_keys_node_active_idx on api_keys(node_id, revoked_at);
+
+-- =========================
+-- Recovery challenges + events
+-- =========================
+create table if not exists recovery_challenges (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+
+  type text not null check (type in ('pubkey','email','email_verify')),
+  nonce_or_code_hash text not null,
+  expires_at timestamptz not null,
+  attempts int not null default 0,
+  max_attempts int not null default 5,
+  meta jsonb not null default '{}'::jsonb,
+  used_at timestamptz null,
+  created_at timestamptz not null default now(),
+
+  constraint recovery_challenges_attempts_chk check (attempts >= 0),
+  constraint recovery_challenges_max_attempts_chk check (max_attempts > 0)
+);
+
+create index if not exists recovery_challenges_node_created_idx on recovery_challenges(node_id, created_at desc);
+create index if not exists recovery_challenges_expires_idx on recovery_challenges(expires_at);
+
+create table if not exists recovery_events (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+  challenge_id uuid null references recovery_challenges(id),
+  event_type text not null check (event_type in ('email_verification_completed','api_key_recovery_completed')),
+  meta jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists recovery_events_node_created_idx on recovery_events(node_id, created_at desc);
 
 -- =========================
 -- Idempotency

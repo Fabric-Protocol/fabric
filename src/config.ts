@@ -13,6 +13,12 @@ function parsePriceIds(listValue: string | undefined, singleValue: string | unde
   return [...new Set(items)];
 }
 
+function parseEmailProvider(value: string | undefined) {
+  const normalized = (value ?? 'stub').trim().toLowerCase();
+  if (normalized === 'smtp' || normalized === 'sendgrid' || normalized === 'stub') return normalized;
+  return 'stub';
+}
+
 export const config = {
   apiVersion: 'v1',
   requiredLegalVersion: '2026-02-17',
@@ -35,6 +41,16 @@ export const config = {
   stripeTopupPrice100: process.env.STRIPE_TOPUP_PRICE_100 ?? '',
   stripeTopupPrice300: process.env.STRIPE_TOPUP_PRICE_300 ?? '',
   stripeTopupPrice1000: process.env.STRIPE_TOPUP_PRICE_1000 ?? '',
+  emailProvider: parseEmailProvider(process.env.EMAIL_PROVIDER),
+  emailFrom: process.env.EMAIL_FROM ?? 'noreply@fabric.local',
+  sendgridApiKey: process.env.SENDGRID_API_KEY ?? '',
+  smtpHost: process.env.SMTP_HOST ?? '',
+  smtpPort: Number(process.env.SMTP_PORT ?? 587),
+  smtpUser: process.env.SMTP_USER ?? '',
+  smtpPass: process.env.SMTP_PASS ?? '',
+  smtpSecure: process.env.SMTP_SECURE === 'true',
+  recoveryChallengeTtlMinutes: Number(process.env.RECOVERY_CHALLENGE_TTL_MINUTES ?? 10),
+  recoveryChallengeMaxAttempts: Number(process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS ?? 5),
   topupPack100Credits: Number(process.env.TOPUP_PACK_100_CREDITS ?? 100),
   topupPack300Credits: Number(process.env.TOPUP_PACK_300_CREDITS ?? 300),
   topupPack1000Credits: Number(process.env.TOPUP_PACK_1000_CREDITS ?? 1000),
@@ -51,4 +67,7 @@ export const config = {
   rateLimitOfferDecisionPerMinute: Number(process.env.RATE_LIMIT_OFFER_DECISION_PER_MINUTE ?? 60),
   rateLimitRevealContactPerHour: Number(process.env.RATE_LIMIT_REVEAL_CONTACT_PER_HOUR ?? 10),
   rateLimitApiKeyIssuePerDay: Number(process.env.RATE_LIMIT_API_KEY_ISSUE_PER_DAY ?? 10),
+  rateLimitRecoveryStartPerHour: Number(process.env.RATE_LIMIT_RECOVERY_START_PER_HOUR ?? 20),
+  rateLimitRecoveryStartPerNodePerHour: Number(process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR ?? 5),
+  rateLimitEmailVerifyStartPerHour: Number(process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR ?? 10),
 };

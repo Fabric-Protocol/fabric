@@ -77,6 +77,31 @@ Last updated: 2026-02-18
 - [x] Update Stripe smoke script to fetch `/v1/meta` and send legal assent.
 - [x] Verify: typecheck PASS; db:bootstrap PASS; tests PASS.
 
+## ✅ Completed (P0) — Self-serve recovery implementation + live pubkey validation
+- [x] Implement self-serve API key recovery on `feat/self-serve-recovery`:
+  - Email verification endpoints: `POST /v1/email/start-verify`, `POST /v1/email/complete-verify`
+  - Recovery endpoints: `POST /v1/recovery/start`, `POST /v1/recovery/complete` (`pubkey|email`)
+  - Security controls: challenge TTL, attempt limits, per-IP/per-node rate limiting
+  - Recovery success policy: revoke all prior API keys, mint one new plaintext API key
+- [x] Add pluggable email provider wiring (`stub|smtp|sendgrid`) with stub default for tests/dev.
+- [x] Update specs/onboarding to reflect recovery contracts and invariants.
+- [x] Verify local recovery branch quality gates:
+  - `npm test`
+  - `npm run lint`
+  - `npm run build`
+- [x] Deploy recovery branch to Cloud Run and verify service sanity:
+  - revision observed: `fabric-api-00046-vpx`
+  - `GET /v1/meta` = 200
+  - `GET /openapi.json` = 200
+- [x] Resolve production DB schema prerequisites for recovery in Supabase:
+  - `nodes.email`, `nodes.email_verified_at`, `nodes.recovery_public_key`
+  - `recovery_challenges` table + indexes
+  - `recovery_events` table + indexes
+- [x] Verify live pubkey recovery end-to-end:
+  - bootstrap 200 -> recovery start (pubkey) 200 -> recovery complete 200
+  - old key `/v1/me` = 403
+  - new key `/v1/me` = 200
+
 ## Phase 0.5 — Go-live ASAP (next threads)
 ### Docs + legal + operability
 - [x] Publish OpenAPI on same origin:
@@ -124,6 +149,19 @@ Last updated: 2026-02-18
   - subscriptions: `basic`, `pro`, `business`
   - top-ups: `credits_100`, `credits_300`, `credits_1000`
   - verify webhook deliveries are 2xx and `/v1/me` reflects active subscriber state.
+
+### Self-serve email recovery go-live (blocked on provider secrets)
+- [ ] Choose production email delivery method:
+  - SendGrid or SMTP
+- [ ] Set Cloud Run email env/secrets for the chosen provider:
+  - SendGrid: `EMAIL_PROVIDER=sendgrid`, `EMAIL_FROM`, `SENDGRID_API_KEY`
+  - SMTP: `EMAIL_PROVIDER=smtp`, `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, optional `SMTP_SECURE`
+- [ ] Run live email verification + email recovery smoke after provider setup:
+  - `POST /v1/email/start-verify`
+  - `POST /v1/email/complete-verify`
+  - `POST /v1/recovery/start` (`method=email`)
+  - `POST /v1/recovery/complete` (`code`)
+  - assert old key revoked and new key succeeds on `GET /v1/me`
 
 ### Decisions locked
 - Subscription-only gating (credits do not unlock subscriber-gated actions).

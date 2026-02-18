@@ -134,6 +134,54 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/email/start-verify': {
+      post: {
+        summary: 'Start email verification for the authenticated node',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': { description: 'Verification challenge created and code sent' },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+          '503': { description: 'Email delivery failed' },
+        },
+      },
+    },
+    '/v1/email/complete-verify': {
+      post: {
+        summary: 'Complete email verification using OTP code',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': { description: 'Email verified' },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Attempts exceeded' },
+        },
+      },
+    },
+    '/v1/recovery/start': {
+      post: {
+        summary: 'Start public API key recovery challenge',
+        responses: {
+          '200': { description: 'Recovery challenge created' },
+          '404': { description: 'Node not found' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Rate limit exceeded' },
+          '503': { description: 'Email delivery failed' },
+        },
+      },
+    },
+    '/v1/recovery/complete': {
+      post: {
+        summary: 'Complete public API key recovery challenge',
+        responses: {
+          '200': { description: 'New API key minted' },
+          '404': { description: 'Challenge not found' },
+          '409': { description: 'Challenge already used' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Attempts exceeded' },
+        },
+      },
+    },
     '/v1/me': {
       get: {
         summary: 'Get current node profile',

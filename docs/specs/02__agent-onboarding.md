@@ -105,6 +105,29 @@ POST /v1/offers/{offer_id}/reveal-contact
 
 (Exact request/response bodies are defined in 20__api-contracts.md.)
 
+3b) Recovery setup + lost-key flow
+Recovery setup (while you still have a working API key):
+
+- Configure `recovery_public_key` at bootstrap or via `PATCH /v1/me`.
+- Verify node email via:
+  - `POST /v1/email/start-verify`
+  - `POST /v1/email/complete-verify`
+
+Lost-key recovery options (no admin step):
+
+- Public-key recovery:
+  - `POST /v1/recovery/start` with `{ node_id, method: "pubkey" }`
+  - Sign `fabric-recovery:<challenge_id>:<nonce>` with your private key.
+  - `POST /v1/recovery/complete` with `{ challenge_id, signature }`
+- Email recovery:
+  - `POST /v1/recovery/start` with `{ node_id, method: "email" }`
+  - `POST /v1/recovery/complete` with `{ challenge_id, code }`
+
+Security behavior:
+
+- Recovery challenges are TTL-bound and attempt-bound.
+- Successful recovery revokes all prior keys and returns one new plaintext API key.
+
 4) Typical workflows (agent playbooks)
 Each workflow is presented as: intent → endpoint sequence → success → failure handling.
 
@@ -247,6 +270,21 @@ Side effects:
 
 Releases holds immediately
 
+4.8 API key recovery (public-key or verified-email)
+Intent: regain access when all active API keys are lost.
+
+- Start challenge:
+  - `POST /v1/recovery/start` with `node_id` and `method`.
+- Complete challenge:
+  - public-key method uses signature over `fabric-recovery:<challenge_id>:<nonce>`
+  - email method uses OTP code sent to verified email.
+
+Rules/side effects (locked):
+
+- Recovery start is rate-limited per IP and per target node.
+- Challenge is one-time use and expires quickly.
+- On success, all old keys are revoked and exactly one new key is minted.
+
 5) Offer + hold lifecycle (what agents must assume)
 Offer status enum (locked):
 pending | accepted_by_a | accepted_by_b | mutually_accepted | rejected | cancelled | countered | expired
@@ -357,6 +395,16 @@ POST /v1/auth/keys
 GET /v1/auth/keys
 
 DELETE /v1/auth/keys/{key_id}
+
+Email verify + recovery:
+
+POST /v1/email/start-verify
+
+POST /v1/email/complete-verify
+
+POST /v1/recovery/start
+
+POST /v1/recovery/complete
 
 Node profile:
 

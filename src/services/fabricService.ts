@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import * as repo from '../db/fabricRepo.js';
+import { sendEmail } from './emailProvider.js';
 
 function requirePublishFields(row: any) {
   if (!row.title) return 'title_required';
@@ -22,11 +23,12 @@ export const fabricService = {
     display_name: string;
     email: string | null;
     referral_code: string | null;
+    recovery_public_key: string | null;
     legal_version: string;
     legal_ip: string | null;
     legal_user_agent: string | null;
   }) {
-    const node = await repo.createNode(payload.display_name, payload.email, {
+    const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, {
       acceptedAt: new Date().toISOString(),
       version: payload.legal_version,
       ip: payload.legal_ip,
@@ -49,7 +51,17 @@ export const fabricService = {
       }
     }
     return {
-      node: { id: node.id, display_name: payload.display_name, email: payload.email, status: 'ACTIVE', plan: 'free', is_subscriber: false, created_at: node.created_at },
+      node: {
+        id: node.id,
+        display_name: payload.display_name,
+        email: normalizeEmail(payload.email),
+        email_verified_at: null,
+        recovery_public_key_configured: Boolean(payload.recovery_public_key),
+        status: 'ACTIVE',
+        plan: 'free',
+        is_subscriber: false,
+        created_at: node.created_at,
+      },
       api_key: { key_id: apiKey.id, api_key: apiKey.api_key, created_at: apiKey.created_at },
       credits: { granted: config.signupGrantCredits, reason: 'SIGNUP_GRANT' },
     };
@@ -155,12 +167,124 @@ export const fabricService = {
     const balance = await repo.creditBalance(nodeId);
     const responsePlan = planCodeForResponse(me.plan_code);
     return {
-      node: { id: me.id, display_name: me.display_name, email: me.email, status: me.status, plan: responsePlan, is_subscriber: me.sub_status === 'active', created_at: me.created_at },
+      node: {
+        id: me.id,
+        display_name: me.display_name,
+        email: me.email,
+        email_verified_at: me.email_verified_at,
+        recovery_public_key_configured: Boolean(me.recovery_public_key),
+        status: me.status,
+        plan: responsePlan,
+        is_subscriber: me.sub_status === 'active',
+        created_at: me.created_at,
+      },
       subscription: { plan: responsePlan, status: me.sub_status, period_start: me.current_period_start, period_end: me.current_period_end, credits_rollover_enabled: true },
       credits_balance: balance,
     };
   },
-  async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null }) { await repo.updateMe(nodeId, payload.display_name, payload.email); return this.me(nodeId); },
+  async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null; recovery_public_key?: string | null }) {
+    await repo.updateMe(nodeId, payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key);
+    return this.me(nodeId);
+  },
+  async startEmailVerify(nodeId: string, email: string) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return { validationError: 'email_required' };
+    await repo.setNodeEmailForVerification(nodeId, normalizedEmail);
+    const code = recoveryCode();
+    const challenge = await repo.createRecoveryChallenge(
+      nodeId,
+      'email_verify',
+      recoveryHash(code),
+      recoveryExpiresAtIso(),
+      config.recoveryChallengeMaxAttempts,
+      { email: normalizedEmail },
+    );
+    const sent = await sendEmail({
+      to: normalizedEmail,
+      subject: 'Fabric email verification code',
+      text: `Your Fabric verification code is ${code}. It expires in ${config.recoveryChallengeTtlMinutes} minutes.`,
+    });
+    if (!sent.ok) return { deliveryError: sent.reason, provider: sent.provider };
+    return { ok: true, challenge_id: challenge.id, expires_at: challenge.expires_at };
+  },
+  async completeEmailVerify(nodeId: string, email: string, code: string) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return { validationError: 'email_required' };
+    const normalizedCode = String(code ?? '').trim();
+    if (!/^\d{6}$/.test(normalizedCode)) return { validationError: 'code_format_invalid' };
+    const out = await repo.completeEmailVerificationChallenge(nodeId, normalizedEmail, recoveryHash(normalizedCode));
+    if (out.status === 'ok') return { ok: true };
+    return { failed: out.status };
+  },
+  async startRecovery(nodeId: string, method: 'pubkey' | 'email') {
+    const profile = await repo.getNodeRecoveryProfile(nodeId);
+    if (!profile) return { notFound: true };
+    if (method === 'pubkey') {
+      if (!profile.recovery_public_key) return { validationError: 'recovery_public_key_missing' };
+      const nonce = crypto.randomBytes(32).toString('hex');
+      const challenge = await repo.createRecoveryChallenge(
+        nodeId,
+        'pubkey',
+        nonce,
+        recoveryExpiresAtIso(),
+        config.recoveryChallengeMaxAttempts,
+        {},
+      );
+      return { challenge_id: challenge.id, nonce, expires_at: challenge.expires_at };
+    }
+
+    if (!profile.email || !profile.email_verified_at) return { validationError: 'email_not_verified' };
+    const code = recoveryCode();
+    const challenge = await repo.createRecoveryChallenge(
+      nodeId,
+      'email',
+      recoveryHash(code),
+      recoveryExpiresAtIso(),
+      config.recoveryChallengeMaxAttempts,
+      { email: profile.email },
+    );
+    const sent = await sendEmail({
+      to: profile.email,
+      subject: 'Fabric API key recovery code',
+      text: `Your Fabric API key recovery code is ${code}. It expires in ${config.recoveryChallengeTtlMinutes} minutes.`,
+    });
+    if (!sent.ok) return { deliveryError: sent.reason, provider: sent.provider };
+    return { ok: true, challenge_id: challenge.id, expires_at: challenge.expires_at };
+  },
+  async completeRecovery(payload: { challenge_id: string; signature?: string; code?: string }) {
+    if (payload.signature && payload.code) return { validationError: 'ambiguous_method' };
+    if (!payload.signature && !payload.code) return { validationError: 'method_payload_required' };
+
+    const challenge = await repo.getRecoveryChallenge(payload.challenge_id);
+    if (!challenge) return { notFound: true };
+
+    if (payload.signature) {
+      if (challenge.type !== 'pubkey') return { validationError: 'challenge_type_mismatch' };
+      const message = recoverySignedMessage(challenge.id, challenge.nonce_or_code_hash);
+      const verified = verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
+      const completion = await repo.completeRecoveryChallenge(
+        payload.challenge_id,
+        'pubkey',
+        verified ? challenge.nonce_or_code_hash : '__invalid_signature__',
+      );
+      if (completion.status !== 'ok') return { failed: completion.status };
+      return {
+        node_id: completion.node_id,
+        key_id: completion.key_id,
+        api_key: completion.api_key,
+      };
+    }
+
+    const code = String(payload.code ?? '').trim();
+    if (!/^\d{6}$/.test(code)) return { validationError: 'code_format_invalid' };
+    const completion = await repo.completeRecoveryChallenge(payload.challenge_id, 'email', recoveryHash(code));
+    if (completion.status !== 'ok') return { failed: completion.status };
+    return {
+      node_id: completion.node_id,
+      key_id: completion.key_id,
+      api_key: completion.api_key,
+    };
+  },
   async creditsBalance(nodeId: string) {
     const me = await repo.getMe(nodeId);
     return { credits_balance: await repo.creditBalance(nodeId), subscription: { plan: planCodeForResponse(me.plan_code), status: me.sub_status, period_start: me.current_period_start, period_end: me.current_period_end, credits_rollover_enabled: true } };
@@ -574,6 +698,54 @@ function extractStripeSubscriptionIdFromInvoice(invoiceObject: any): string | nu
   return null;
 }
 
+function normalizeEmail(value: string | null | undefined) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function recoveryCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function recoveryHash(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function recoveryExpiresAtIso() {
+  return new Date(Date.now() + (config.recoveryChallengeTtlMinutes * 60 * 1000)).toISOString();
+}
+
+function recoverySignedMessage(challengeId: string, nonce: string) {
+  return `fabric-recovery:${challengeId}:${nonce}`;
+}
+
+function decodeSignature(rawSignature: string) {
+  const sig = rawSignature.trim();
+  if (!sig) return null;
+  if (/^[0-9a-f]+$/i.test(sig) && sig.length % 2 === 0) return Buffer.from(sig, 'hex');
+  try {
+    const decoded = Buffer.from(sig, 'base64');
+    if (!decoded.length) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function verifyRecoverySignature(publicKey: string, message: string, signature: string) {
+  try {
+    const key = crypto.createPublicKey(publicKey);
+    const signatureBytes = decodeSignature(signature);
+    if (!signatureBytes) return false;
+    const keyType = key.asymmetricKeyType;
+    const algorithm = keyType === 'ed25519' || keyType === 'ed448' ? null : 'sha256';
+    return crypto.verify(algorithm as any, Buffer.from(message, 'utf8'), key, signatureBytes);
+  } catch {
+    return false;
+  }
+}
+
 function stripeId(value: any): string | null {
   if (!value) return null;
   if (typeof value === 'string') return value;
@@ -583,12 +755,64 @@ function stripeId(value: any): string | null {
 
 function stripeTimeToIso(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'number') return new Date(value * 1000).toISOString();
+  if (typeof value === 'number') {
+    const asMillis = value > 1_000_000_000_000 ? value : value * 1000;
+    return new Date(asMillis).toISOString();
+  }
   if (typeof value === 'string') {
-    if (/^\d+$/.test(value)) return new Date(Number(value) * 1000).toISOString();
+    if (/^\d+$/.test(value)) {
+      const numeric = Number(value);
+      const asMillis = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+      return new Date(asMillis).toISOString();
+    }
     return value;
   }
   return null;
+}
+
+function validPeriodWindow(periodStart: string | null, periodEnd: string | null) {
+  if (!periodStart || !periodEnd) return false;
+  const startMs = Date.parse(periodStart);
+  const endMs = Date.parse(periodEnd);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return false;
+  return startMs < endMs;
+}
+
+function invoiceLinePeriodWindow(invoiceObject: any) {
+  for (const line of invoiceLineItems(invoiceObject)) {
+    const periodStart = stripeTimeToIso(line?.period?.start ?? line?.period_start);
+    const periodEnd = stripeTimeToIso(line?.period?.end ?? line?.period_end);
+    if (validPeriodWindow(periodStart, periodEnd)) return { periodStart, periodEnd };
+  }
+  return null;
+}
+
+async function stripeSubscriptionPeriodWindow(stripeSubscriptionId: string | null) {
+  if (!stripeSubscriptionId) return null;
+  const subscription = await fetchStripeJson(`subscriptions/${encodeURIComponent(stripeSubscriptionId)}`);
+  const periodStart = stripeTimeToIso(subscription?.current_period_start);
+  const periodEnd = stripeTimeToIso(subscription?.current_period_end);
+  if (!validPeriodWindow(periodStart, periodEnd)) return null;
+  return { periodStart, periodEnd };
+}
+
+async function resolveInvoicePeriodWindow(invoiceObject: any, eventObject: any, stripeSubscriptionId: string | null) {
+  const invoicePeriodStart = stripeTimeToIso(invoiceObject?.period_start ?? eventObject?.period_start);
+  const invoicePeriodEnd = stripeTimeToIso(invoiceObject?.period_end ?? eventObject?.period_end);
+  if (validPeriodWindow(invoicePeriodStart, invoicePeriodEnd)) {
+    return { periodStart: invoicePeriodStart, periodEnd: invoicePeriodEnd };
+  }
+
+  const subscriptionWindow = await stripeSubscriptionPeriodWindow(stripeSubscriptionId);
+  if (subscriptionWindow) return subscriptionWindow;
+
+  const lineWindow = invoiceLinePeriodWindow(invoiceObject);
+  if (lineWindow) return lineWindow;
+
+  return {
+    periodStart: invoicePeriodStart ?? new Date().toISOString(),
+    periodEnd: invoicePeriodEnd,
+  };
 }
 
 async function fetchInvoiceForPlanResolution(event: any) {
@@ -1035,8 +1259,7 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     }
 
     const storedPlanCode = planCodeForStorage(effectivePlan);
-    const periodStart = stripeTimeToIso(invoiceObject?.period_start ?? object?.period_start) ?? new Date().toISOString();
-    const periodEnd = stripeTimeToIso(invoiceObject?.period_end ?? object?.period_end);
+    const { periodStart, periodEnd } = await resolveInvoicePeriodWindow(invoiceObject, object, stripeSubscriptionId);
     await repo.upsertSubscription(nodeId, storedPlanCode, 'active', periodStart, periodEnd, stripeCustomerId, stripeSubscriptionId);
 
     if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {

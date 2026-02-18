@@ -2,6 +2,17 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-18 - Self-serve recovery factors and key-rotation policy locked
+Decision:
+- Self-serve API key recovery supports two factors: recovery public-key signature (`pubkey`) and verified email OTP (`email`); either method can complete recovery.
+- Successful recovery must revoke all prior active API keys for the node and mint one new plaintext API key.
+Reason: Explicitly documented in thread notes and validated in live Cloud Run smoke for the `pubkey` path.
+Where captured:
+- `docs/project-files/thread-notes.md` ("What was decided" + live verification sections)
+Impact:
+- Recovery does not require admin/manual intervention when a configured factor is available.
+- Compromised/old keys are immediately invalidated on recovery completion.
+
 ## 2026-02-18 - Trial/referral policy and wrapper deferral locked
 Decision:
 - Trial entitlement bridge policy is fixed at: trigger on 10 uploads, grant 7-day trial entitlement, and grant +100 credits.
