@@ -183,3 +183,19 @@ Acquisition:
 
 ## 20) Vision invariant
 - Fabric is the shared substrate of allocatable reality.
+
+---
+
+## 21) Self-serve API key recovery invariants (MVP)
+- Recovery **MUST** be self-serve with no admin/manual step once recovery factors are configured.
+- Supported factors **MUST** include:
+  - recovery public-key challenge/response (`nonce` + signature), and
+  - verified email one-time code.
+- Recovery challenges **MUST** be single-use, time-bounded, and attempt-bounded:
+  - TTL default 10 minutes,
+  - max attempts default 5,
+  - expired/used challenges cannot be reused.
+- Successful recovery **MUST** revoke all previously active API keys for the Node and mint exactly one new plaintext API key.
+- Recovery starts **MUST** be rate-limited per IP and per target node.
+- Email recovery **MUST** require `email_verified_at` for the node and **MUST NOT** rely on unverified email ownership.
+- Recovery and email-verification completions **MUST** produce auditable events.

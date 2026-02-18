@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import * as repo from '../db/fabricRepo.js';
+import { sendEmail } from './emailProvider.js';
 
 function requirePublishFields(row: any) {
   if (!row.title) return 'title_required';
@@ -22,11 +23,12 @@ export const fabricService = {
     display_name: string;
     email: string | null;
     referral_code: string | null;
+    recovery_public_key: string | null;
     legal_version: string;
     legal_ip: string | null;
     legal_user_agent: string | null;
   }) {
-    const node = await repo.createNode(payload.display_name, payload.email, {
+    const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, {
       acceptedAt: new Date().toISOString(),
       version: payload.legal_version,
       ip: payload.legal_ip,
@@ -49,7 +51,17 @@ export const fabricService = {
       }
     }
     return {
-      node: { id: node.id, display_name: payload.display_name, email: payload.email, status: 'ACTIVE', plan: 'free', is_subscriber: false, created_at: node.created_at },
+      node: {
+        id: node.id,
+        display_name: payload.display_name,
+        email: normalizeEmail(payload.email),
+        email_verified_at: null,
+        recovery_public_key_configured: Boolean(payload.recovery_public_key),
+        status: 'ACTIVE',
+        plan: 'free',
+        is_subscriber: false,
+        created_at: node.created_at,
+      },
       api_key: { key_id: apiKey.id, api_key: apiKey.api_key, created_at: apiKey.created_at },
       credits: { granted: config.signupGrantCredits, reason: 'SIGNUP_GRANT' },
     };
@@ -155,12 +167,124 @@ export const fabricService = {
     const balance = await repo.creditBalance(nodeId);
     const responsePlan = planCodeForResponse(me.plan_code);
     return {
-      node: { id: me.id, display_name: me.display_name, email: me.email, status: me.status, plan: responsePlan, is_subscriber: me.sub_status === 'active', created_at: me.created_at },
+      node: {
+        id: me.id,
+        display_name: me.display_name,
+        email: me.email,
+        email_verified_at: me.email_verified_at,
+        recovery_public_key_configured: Boolean(me.recovery_public_key),
+        status: me.status,
+        plan: responsePlan,
+        is_subscriber: me.sub_status === 'active',
+        created_at: me.created_at,
+      },
       subscription: { plan: responsePlan, status: me.sub_status, period_start: me.current_period_start, period_end: me.current_period_end, credits_rollover_enabled: true },
       credits_balance: balance,
     };
   },
-  async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null }) { await repo.updateMe(nodeId, payload.display_name, payload.email); return this.me(nodeId); },
+  async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null; recovery_public_key?: string | null }) {
+    await repo.updateMe(nodeId, payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key);
+    return this.me(nodeId);
+  },
+  async startEmailVerify(nodeId: string, email: string) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return { validationError: 'email_required' };
+    await repo.setNodeEmailForVerification(nodeId, normalizedEmail);
+    const code = recoveryCode();
+    const challenge = await repo.createRecoveryChallenge(
+      nodeId,
+      'email_verify',
+      recoveryHash(code),
+      recoveryExpiresAtIso(),
+      config.recoveryChallengeMaxAttempts,
+      { email: normalizedEmail },
+    );
+    const sent = await sendEmail({
+      to: normalizedEmail,
+      subject: 'Fabric email verification code',
+      text: `Your Fabric verification code is ${code}. It expires in ${config.recoveryChallengeTtlMinutes} minutes.`,
+    });
+    if (!sent.ok) return { deliveryError: sent.reason, provider: sent.provider };
+    return { ok: true, challenge_id: challenge.id, expires_at: challenge.expires_at };
+  },
+  async completeEmailVerify(nodeId: string, email: string, code: string) {
+    const normalizedEmail = normalizeEmail(email);
+    if (!normalizedEmail) return { validationError: 'email_required' };
+    const normalizedCode = String(code ?? '').trim();
+    if (!/^\d{6}$/.test(normalizedCode)) return { validationError: 'code_format_invalid' };
+    const out = await repo.completeEmailVerificationChallenge(nodeId, normalizedEmail, recoveryHash(normalizedCode));
+    if (out.status === 'ok') return { ok: true };
+    return { failed: out.status };
+  },
+  async startRecovery(nodeId: string, method: 'pubkey' | 'email') {
+    const profile = await repo.getNodeRecoveryProfile(nodeId);
+    if (!profile) return { notFound: true };
+    if (method === 'pubkey') {
+      if (!profile.recovery_public_key) return { validationError: 'recovery_public_key_missing' };
+      const nonce = crypto.randomBytes(32).toString('hex');
+      const challenge = await repo.createRecoveryChallenge(
+        nodeId,
+        'pubkey',
+        nonce,
+        recoveryExpiresAtIso(),
+        config.recoveryChallengeMaxAttempts,
+        {},
+      );
+      return { challenge_id: challenge.id, nonce, expires_at: challenge.expires_at };
+    }
+
+    if (!profile.email || !profile.email_verified_at) return { validationError: 'email_not_verified' };
+    const code = recoveryCode();
+    const challenge = await repo.createRecoveryChallenge(
+      nodeId,
+      'email',
+      recoveryHash(code),
+      recoveryExpiresAtIso(),
+      config.recoveryChallengeMaxAttempts,
+      { email: profile.email },
+    );
+    const sent = await sendEmail({
+      to: profile.email,
+      subject: 'Fabric API key recovery code',
+      text: `Your Fabric API key recovery code is ${code}. It expires in ${config.recoveryChallengeTtlMinutes} minutes.`,
+    });
+    if (!sent.ok) return { deliveryError: sent.reason, provider: sent.provider };
+    return { ok: true, challenge_id: challenge.id, expires_at: challenge.expires_at };
+  },
+  async completeRecovery(payload: { challenge_id: string; signature?: string; code?: string }) {
+    if (payload.signature && payload.code) return { validationError: 'ambiguous_method' };
+    if (!payload.signature && !payload.code) return { validationError: 'method_payload_required' };
+
+    const challenge = await repo.getRecoveryChallenge(payload.challenge_id);
+    if (!challenge) return { notFound: true };
+
+    if (payload.signature) {
+      if (challenge.type !== 'pubkey') return { validationError: 'challenge_type_mismatch' };
+      const message = recoverySignedMessage(challenge.id, challenge.nonce_or_code_hash);
+      const verified = verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
+      const completion = await repo.completeRecoveryChallenge(
+        payload.challenge_id,
+        'pubkey',
+        verified ? challenge.nonce_or_code_hash : '__invalid_signature__',
+      );
+      if (completion.status !== 'ok') return { failed: completion.status };
+      return {
+        node_id: completion.node_id,
+        key_id: completion.key_id,
+        api_key: completion.api_key,
+      };
+    }
+
+    const code = String(payload.code ?? '').trim();
+    if (!/^\d{6}$/.test(code)) return { validationError: 'code_format_invalid' };
+    const completion = await repo.completeRecoveryChallenge(payload.challenge_id, 'email', recoveryHash(code));
+    if (completion.status !== 'ok') return { failed: completion.status };
+    return {
+      node_id: completion.node_id,
+      key_id: completion.key_id,
+      api_key: completion.api_key,
+    };
+  },
   async creditsBalance(nodeId: string) {
     const me = await repo.getMe(nodeId);
     return { credits_balance: await repo.creditBalance(nodeId), subscription: { plan: planCodeForResponse(me.plan_code), status: me.sub_status, period_start: me.current_period_start, period_end: me.current_period_end, credits_rollover_enabled: true } };
@@ -572,6 +696,54 @@ function extractStripeSubscriptionIdFromInvoice(invoiceObject: any): string | nu
     if (fromParent) return fromParent;
   }
   return null;
+}
+
+function normalizeEmail(value: string | null | undefined) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return normalized || null;
+}
+
+function recoveryCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function recoveryHash(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function recoveryExpiresAtIso() {
+  return new Date(Date.now() + (config.recoveryChallengeTtlMinutes * 60 * 1000)).toISOString();
+}
+
+function recoverySignedMessage(challengeId: string, nonce: string) {
+  return `fabric-recovery:${challengeId}:${nonce}`;
+}
+
+function decodeSignature(rawSignature: string) {
+  const sig = rawSignature.trim();
+  if (!sig) return null;
+  if (/^[0-9a-f]+$/i.test(sig) && sig.length % 2 === 0) return Buffer.from(sig, 'hex');
+  try {
+    const decoded = Buffer.from(sig, 'base64');
+    if (!decoded.length) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function verifyRecoverySignature(publicKey: string, message: string, signature: string) {
+  try {
+    const key = crypto.createPublicKey(publicKey);
+    const signatureBytes = decodeSignature(signature);
+    if (!signatureBytes) return false;
+    const keyType = key.asymmetricKeyType;
+    const algorithm = keyType === 'ed25519' || keyType === 'ed448' ? null : 'sha256';
+    return crypto.verify(algorithm as any, Buffer.from(message, 'utf8'), key, signatureBytes);
+  } catch {
+    return false;
+  }
 }
 
 function stripeId(value: any): string | null {

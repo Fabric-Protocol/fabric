@@ -100,6 +100,7 @@ Creates a Node and issues the first API key; applies one-time signup grant.
   "display_name": "string",
   "email": "string|null",
   "referral_code": "string|null",
+  "recovery_public_key": "string|null",
   "legal": {
     "accepted": true,
     "version": "2026-02-17"
@@ -114,6 +115,8 @@ Response 200
     "id": "uuid",
     "display_name": "string",
     "email": "string|null",
+    "email_verified_at": "iso|null",
+    "recovery_public_key_configured": true,
     "status": "ACTIVE|SUSPENDED",
     "plan": "free|basic|pro|business",
     "is_subscriber": false,
@@ -225,6 +228,172 @@ Errors
 
 401 unauthorized
 
+1b) Email verification + self-serve API key recovery
+POST /v1/email/start-verify
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Start email ownership verification for the authenticated Node and send a one-time code.
+
+Request
+{ "email": "string(email)" }
+
+Response 200
+{ "ok": true, "challenge_id": "uuid", "expires_at": "iso" }
+
+Rules / side effects
+
+- Stores an email verification challenge (`type='email_verify'`) with TTL and attempt limits.
+- Sends code through configured provider (`EMAIL_PROVIDER`).
+- Normalizes email to lowercase and resets prior verification state when email changes.
+
+Errors
+
+422 validation_error
+
+503 email_delivery_failed
+
+POST /v1/email/complete-verify
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Complete email ownership verification using the emailed code.
+
+Request
+{ "email": "string(email)", "code": "string(6 digits)" }
+
+Response 200
+{ "ok": true }
+
+Rules / side effects
+
+- Consumes most recent matching `email_verify` challenge for the Node.
+- On success sets `nodes.email_verified_at=now()` and writes recovery audit event.
+
+Errors
+
+422 validation_error
+
+429 rate_limit_exceeded (challenge attempts exceeded)
+
+POST /v1/recovery/start
+Auth
+
+None (public; rate-limited per IP and per node_id)
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Start API key recovery for a known Node ID.
+
+Request
+{ "node_id": "uuid", "method": "pubkey|email" }
+
+Response 200 (pubkey)
+{
+  "challenge_id": "uuid",
+  "nonce": "hex_string",
+  "expires_at": "iso"
+}
+
+Response 200 (email)
+{
+  "ok": true,
+  "challenge_id": "uuid",
+  "expires_at": "iso"
+}
+
+Rules / side effects
+
+- `method='pubkey'` requires `nodes.recovery_public_key`.
+- `method='email'` requires verified email (`nodes.email_verified_at`).
+- TTL and attempts use recovery challenge policy.
+
+Errors
+
+404 not_found
+
+422 validation_error
+
+429 rate_limit_exceeded
+
+503 email_delivery_failed
+
+POST /v1/recovery/complete
+Auth
+
+None (public)
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Complete API key recovery and mint exactly one new plaintext API key.
+
+Request (pubkey)
+{ "challenge_id": "uuid", "signature": "base64|hex signature over fabric-recovery:<challenge_id>:<nonce>" }
+
+Request (email)
+{ "challenge_id": "uuid", "code": "string(6 digits)" }
+
+Response 200
+{
+  "node_id": "uuid",
+  "key_id": "uuid",
+  "api_key": "string"
+}
+
+Rules / side effects
+
+- Successful completion revokes all prior active API keys for node, then mints one new key.
+- Recovery challenge is one-time use (`used_at`).
+- Writes audit event (`api_key_recovery_completed`).
+
+Errors
+
+404 not_found
+
+422 validation_error
+
+409 invalid_state_transition (challenge already used)
+
+429 rate_limit_exceeded (challenge attempts exceeded)
+
 2) Node profile
 GET /v1/me
 Auth
@@ -246,6 +415,8 @@ Response 200
     "id": "uuid",
     "display_name": "string",
     "email": "string|null",
+    "email_verified_at": "iso|null",
+    "recovery_public_key_configured": true,
     "status": "ACTIVE|SUSPENDED",
     "plan": "free|basic|pro|business",
     "is_subscriber": true,
@@ -284,7 +455,7 @@ Purpose
 Update basic node profile fields.
 
 Request
-{ "display_name": "string|null", "email": "string|null" }
+{ "display_name": "string|null", "email": "string|null", "recovery_public_key": "string|null" }
 
 Response 200
 

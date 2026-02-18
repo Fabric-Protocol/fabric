@@ -9,6 +9,12 @@ delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.STRIPE_TOPUP_PRICE_100;
 delete process.env.STRIPE_TOPUP_PRICE_300;
 delete process.env.STRIPE_TOPUP_PRICE_1000;
+delete process.env.EMAIL_PROVIDER;
+delete process.env.RECOVERY_CHALLENGE_TTL_MINUTES;
+delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
+delete process.env.RATE_LIMIT_RECOVERY_START_PER_HOUR;
+delete process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR;
+delete process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
@@ -20,6 +26,12 @@ process.env.STRIPE_TOPUP_PRICE_100 = 'price_topup_100_test';
 process.env.STRIPE_TOPUP_PRICE_300 = 'price_topup_300_test';
 process.env.STRIPE_TOPUP_PRICE_1000 = 'price_topup_1000_test';
 process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
+process.env.EMAIL_PROVIDER = 'stub';
+process.env.RECOVERY_CHALLENGE_TTL_MINUTES = '10';
+process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS = '5';
+process.env.RATE_LIMIT_RECOVERY_START_PER_HOUR = '1000';
+process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR = '1000';
+process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR = '1000';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 const LIVE_PRICE_IDS = {
@@ -36,6 +48,7 @@ const { config } = await import('../dist/src/config.js');
 const repo = await import('../dist/src/db/fabricRepo.js');
 const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
+const emailProvider = await import('../dist/src/services/emailProvider.js');
 
 async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', email: null, referral_code: null }) {
   const requestPayload = {
@@ -92,6 +105,11 @@ function sign(body) {
   const raw = JSON.stringify(body);
   const v1 = crypto.createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(`${t}.${raw}`).digest('hex');
   return { t, v1, raw, header: `t=${t},v1=${v1}` };
+}
+
+function signRecoveryChallenge(challengeId, nonce, privateKey) {
+  const payload = Buffer.from(`fabric-recovery:${challengeId}:${nonce}`, 'utf8');
+  return crypto.sign(null, payload, privateKey).toString('base64');
 }
 
 function jsonResponse(status, payload) {
@@ -1062,6 +1080,42 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
   await app.close();
 });
 
+test('diagnostic: invoice.paid with equal period_start/period_end is persisted as-is', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-equal-period');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const customerId = `cus_equal_period_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_equal_period_${nodeId.slice(0, 8)}`;
+  const periodPoint = 1735689600;
+  const expectedIso = new Date(periodPoint * 1000).toISOString();
+
+  const invoiceEvent = {
+    id: `evt_equal_period_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: `in_equal_period_${nodeId.slice(0, 8)}`,
+        customer: customerId,
+        subscription: subscriptionId,
+        period_start: periodPoint,
+        period_end: periodPoint,
+        metadata: { node_id: nodeId, plan_code: 'pro' },
+      },
+    },
+  };
+  const sig = sign(invoiceEvent);
+  const invoiceRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(invoiceRes.statusCode, 200);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().subscription.period_start, expectedIso);
+  assert.equal(me.json().subscription.period_end, expectedIso);
+  assert.equal(me.json().subscription.period_start, me.json().subscription.period_end);
+  await app.close();
+});
+
 test('webhook awards referral credits once on first paid invoice and dedupes by payment reference', async () => {
   const app = buildApp();
   const referrer = await bootstrap(app, 'boot-referrer-first-paid', { display_name: 'Referrer', email: null, referral_code: null });
@@ -1815,5 +1869,299 @@ test('admin projection rebuild endpoint requires admin auth and responds shape',
   assert.equal(ok.json().ok, true);
   assert.ok(ok.json().counts.public_listings_written >= 0);
   assert.ok(ok.json().counts.public_requests_written >= 0);
+  await app.close();
+});
+
+test('email verification happy path updates verified timestamp', async () => {
+  const app = buildApp();
+  emailProvider.clearStubEmailOutbox();
+  const b = await bootstrap(app, 'boot-email-verify-happy');
+  const apiKey = b.json().api_key.api_key;
+  const email = `verify.happy.${crypto.randomBytes(4).toString('hex')}@example.com`;
+
+  const start = await app.inject({
+    method: 'POST',
+    url: '/v1/email/start-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-start-happy' },
+    payload: { email },
+  });
+  assert.equal(start.statusCode, 200);
+
+  const code = emailProvider.getStubEmailCode(email);
+  assert.match(String(code ?? ''), /^\d{6}$/);
+
+  const complete = await app.inject({
+    method: 'POST',
+    url: '/v1/email/complete-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-complete-happy' },
+    payload: { email, code },
+  });
+  assert.equal(complete.statusCode, 200);
+  assert.equal(complete.json().ok, true);
+
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().node.email, email);
+  assert.equal(typeof me.json().node.email_verified_at, 'string');
+  await app.close();
+});
+
+test('email verification rejects wrong code and expired challenge', async () => {
+  const app = buildApp();
+  emailProvider.clearStubEmailOutbox();
+  const b = await bootstrap(app, 'boot-email-verify-failures');
+  const apiKey = b.json().api_key.api_key;
+
+  const wrongEmail = `verify.wrong.${crypto.randomBytes(4).toString('hex')}@example.com`;
+  const startWrong = await app.inject({
+    method: 'POST',
+    url: '/v1/email/start-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-start-wrong' },
+    payload: { email: wrongEmail },
+  });
+  assert.equal(startWrong.statusCode, 200);
+  const wrongCode = emailProvider.getStubEmailCode(wrongEmail);
+  const definitelyWrong = wrongCode === '000000' ? '999999' : '000000';
+  const completeWrong = await app.inject({
+    method: 'POST',
+    url: '/v1/email/complete-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-complete-wrong' },
+    payload: { email: wrongEmail, code: definitelyWrong },
+  });
+  assert.equal(completeWrong.statusCode, 422);
+  assert.equal(completeWrong.json().error.code, 'validation_error');
+  assert.equal(completeWrong.json().error.details.reason, 'invalid_code');
+
+  const expiredEmail = `verify.expired.${crypto.randomBytes(4).toString('hex')}@example.com`;
+  const startExpired = await app.inject({
+    method: 'POST',
+    url: '/v1/email/start-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-start-expired' },
+    payload: { email: expiredEmail },
+  });
+  assert.equal(startExpired.statusCode, 200);
+  const expiredChallengeId = startExpired.json().challenge_id;
+  const expiredCode = emailProvider.getStubEmailCode(expiredEmail);
+  await query("update recovery_challenges set expires_at=now()-interval '1 minute' where id=$1", [expiredChallengeId]);
+  const completeExpired = await app.inject({
+    method: 'POST',
+    url: '/v1/email/complete-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-verify-complete-expired' },
+    payload: { email: expiredEmail, code: expiredCode },
+  });
+  assert.equal(completeExpired.statusCode, 422);
+  assert.equal(completeExpired.json().error.code, 'validation_error');
+  assert.equal(completeExpired.json().error.details.reason, 'expired');
+  await app.close();
+});
+
+test('pubkey recovery rotates keys and old keys are revoked', async () => {
+  const app = buildApp();
+  const recoveryPair = crypto.generateKeyPairSync('ed25519');
+  const recoveryPublicKey = recoveryPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const b = await bootstrap(app, 'boot-pubkey-recovery', {
+    display_name: 'Recovery Node',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKey,
+  });
+  const nodeId = b.json().node.id;
+  const primaryKey = b.json().api_key.api_key;
+
+  const extra = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${primaryKey}`, 'idempotency-key': 'mint-extra-key-before-recovery' },
+    payload: { label: 'secondary-before-recovery' },
+  });
+  assert.equal(extra.statusCode, 200);
+  const extraKey = extra.json().api_key;
+
+  const start = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-start' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(start.statusCode, 200);
+  const challengeId = start.json().challenge_id;
+  const nonce = start.json().nonce;
+  const signature = signRecoveryChallenge(challengeId, nonce, recoveryPair.privateKey);
+
+  const complete = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-complete' },
+    payload: { challenge_id: challengeId, signature },
+  });
+  assert.equal(complete.statusCode, 200);
+  const newApiKey = complete.json().api_key;
+  assert.equal(typeof newApiKey, 'string');
+
+  const oldMe = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${primaryKey}` } });
+  assert.equal(oldMe.statusCode, 403);
+  const extraMe = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${extraKey}` } });
+  assert.equal(extraMe.statusCode, 403);
+
+  const newMe = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${newApiKey}` } });
+  assert.equal(newMe.statusCode, 200);
+  assert.equal(newMe.json().node.id, nodeId);
+
+  const activeRows = await query("select count(*)::text as c from api_keys where node_id=$1 and revoked_at is null", [nodeId]);
+  assert.equal(Number(activeRows[0].c), 1);
+  await app.close();
+});
+
+test('pubkey recovery rejects wrong signature and expired nonce', async () => {
+  const app = buildApp();
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const recoveryPublicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const b = await bootstrap(app, 'boot-pubkey-recovery-failures', {
+    display_name: 'Recovery Node Fail',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKey,
+  });
+  const nodeId = b.json().node.id;
+
+  const startWrongSig = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-start-wrong-sig' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(startWrongSig.statusCode, 200);
+  const challengeWrongSig = startWrongSig.json().challenge_id;
+  const nonceWrongSig = startWrongSig.json().nonce;
+  const wrongPair = crypto.generateKeyPairSync('ed25519');
+  const wrongSig = signRecoveryChallenge(challengeWrongSig, nonceWrongSig, wrongPair.privateKey);
+  const completeWrongSig = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-complete-wrong-sig' },
+    payload: { challenge_id: challengeWrongSig, signature: wrongSig },
+  });
+  assert.equal(completeWrongSig.statusCode, 422);
+  assert.equal(completeWrongSig.json().error.code, 'validation_error');
+  assert.equal(completeWrongSig.json().error.details.reason, 'invalid_secret');
+
+  const startExpired = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-start-expired' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(startExpired.statusCode, 200);
+  const challengeExpired = startExpired.json().challenge_id;
+  const nonceExpired = startExpired.json().nonce;
+  await query("update recovery_challenges set expires_at=now()-interval '1 minute' where id=$1", [challengeExpired]);
+  const sigExpired = signRecoveryChallenge(challengeExpired, nonceExpired, pair.privateKey);
+  const completeExpired = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-complete-expired' },
+    payload: { challenge_id: challengeExpired, signature: sigExpired },
+  });
+  assert.equal(completeExpired.statusCode, 422);
+  assert.equal(completeExpired.json().error.code, 'validation_error');
+  assert.equal(completeExpired.json().error.details.reason, 'expired');
+  await app.close();
+});
+
+test('email recovery challenge enforces attempts limit', async () => {
+  const app = buildApp();
+  emailProvider.clearStubEmailOutbox();
+  const b = await bootstrap(app, 'boot-email-recovery-attempts', { display_name: 'Email Recovery', email: null, referral_code: null });
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const email = `recover.attempts.${crypto.randomBytes(4).toString('hex')}@example.com`;
+
+  const startVerify = await app.inject({
+    method: 'POST',
+    url: '/v1/email/start-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-recovery-verify-start' },
+    payload: { email },
+  });
+  assert.equal(startVerify.statusCode, 200);
+  const verifyCode = emailProvider.getStubEmailCode(email);
+  const completeVerify = await app.inject({
+    method: 'POST',
+    url: '/v1/email/complete-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-recovery-verify-complete' },
+    payload: { email, code: verifyCode },
+  });
+  assert.equal(completeVerify.statusCode, 200);
+
+  const startRecovery = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'email-recovery-start-attempts' },
+    payload: { node_id: nodeId, method: 'email' },
+  });
+  assert.equal(startRecovery.statusCode, 200);
+  const challengeId = startRecovery.json().challenge_id;
+  const sentRecoveryCode = emailProvider.getStubEmailCode(email);
+  const wrongCode = sentRecoveryCode === '123456' ? '654321' : '123456';
+
+  for (let i = 0; i < config.recoveryChallengeMaxAttempts; i += 1) {
+    const attempt = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/complete',
+      headers: { 'idempotency-key': `email-recovery-wrong-attempt-${i}` },
+      payload: { challenge_id: challengeId, code: wrongCode },
+    });
+    assert.equal(attempt.statusCode, 422);
+    assert.equal(attempt.json().error.code, 'validation_error');
+  }
+
+  const blocked = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'email-recovery-wrong-attempt-blocked' },
+    payload: { challenge_id: challengeId, code: wrongCode },
+  });
+  assert.equal(blocked.statusCode, 429);
+  assert.equal(blocked.json().error.code, 'rate_limit_exceeded');
+  await app.close();
+});
+
+test('recovery start enforces per-node rate limit', async () => {
+  const app = buildApp();
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const recoveryPublicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const b = await bootstrap(app, 'boot-recovery-rate-limit', {
+    display_name: 'Recovery Rate',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKey,
+  });
+  const nodeId = b.json().node.id;
+
+  await withConfigOverrides({ rateLimitRecoveryStartPerNodePerHour: 2 }, async () => {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/start',
+      headers: { 'idempotency-key': 'recovery-rate-limit-1' },
+      payload: { node_id: nodeId, method: 'pubkey' },
+    });
+    const second = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/start',
+      headers: { 'idempotency-key': 'recovery-rate-limit-2' },
+      payload: { node_id: nodeId, method: 'pubkey' },
+    });
+    const third = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/start',
+      headers: { 'idempotency-key': 'recovery-rate-limit-3' },
+      payload: { node_id: nodeId, method: 'pubkey' },
+    });
+    assert.equal(first.statusCode, 200);
+    assert.equal(second.statusCode, 200);
+    assert.equal(third.statusCode, 429);
+    assert.equal(third.json().error.code, 'rate_limit_exceeded');
+    assert.equal(third.json().error.details.rule, 'recovery_start_node');
+  });
+
   await app.close();
 });

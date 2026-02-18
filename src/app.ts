@@ -273,6 +273,8 @@ function routePath(url: string) {
 
 function isPublicRoute(path: string) {
   return path === '/v1/bootstrap'
+    || path === '/v1/recovery/start'
+    || path === '/v1/recovery/complete'
     || path === '/v1/webhooks/stripe'
     || path === '/healthz'
     || path === '/openapi.json'
@@ -285,6 +287,13 @@ function isPublicRoute(path: string) {
     || path === '/legal/refunds'
     || path === '/legal/agents'
     || path === '/legal/aup';
+}
+
+function isAnonIdempotentRoute(url: string) {
+  const path = routePath(url);
+  return path === '/v1/bootstrap'
+    || path === '/v1/recovery/start'
+    || path === '/v1/recovery/complete';
 }
 
 function firstHeaderValue(value: string | string[] | undefined) {
@@ -341,6 +350,8 @@ function extractUserAgent(req: FastifyRequest) {
 
 function selectRateLimitRule(method: string, path: string): RateLimitRule | null {
   if (method === 'POST' && path === '/v1/bootstrap') return { name: 'bootstrap', limit: config.rateLimitBootstrapPerHour, windowSeconds: 3600, subject: 'ip' };
+  if (method === 'POST' && path === '/v1/recovery/start') return { name: 'recovery_start_ip', limit: config.rateLimitRecoveryStartPerHour, windowSeconds: 3600, subject: 'ip' };
+  if (method === 'POST' && path === '/v1/email/start-verify') return { name: 'email_verify_start', limit: config.rateLimitEmailVerifyStartPerHour, windowSeconds: 3600, subject: 'node' };
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
@@ -358,9 +369,8 @@ function rateLimitSubjectValue(req: FastifyRequest, rule: RateLimitRule) {
   return 'global';
 }
 
-function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
+function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string) {
   const now = Date.now();
-  const subject = rateLimitSubjectValue(req, rule);
   const key = `${rule.name}:${subject}`;
   let state = rateLimitState.get(key);
   if (!state || now >= state.resetAtMs) {
@@ -386,6 +396,11 @@ function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
   }
   state.count += 1;
   return true;
+}
+
+function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
+  const subject = rateLimitSubjectValue(req, rule);
+  return applyRateLimitSubject(reply, rule, subject);
 }
 
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
@@ -518,7 +533,10 @@ export function buildApp() {
       return;
     }
 
-    if (isPublicRoute(path)) return;
+    if (isPublicRoute(path)) {
+      if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
+      return;
+    }
 
     if (path.startsWith('/v1/admin/')) {
       if (req.headers['x-admin-key'] !== config.adminKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
@@ -548,7 +566,7 @@ export function buildApp() {
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
     const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
 
-    if (req.url === '/v1/bootstrap') {
+    if (isAnonIdempotentRoute(req.url)) {
       const keyScope = `${req.method}:${req.routeOptions.url}:${String(idemKey)}`;
       const existing = anonIdem.get(keyScope);
       if (existing) {
@@ -574,7 +592,7 @@ export function buildApp() {
     const idem = (req as AuthedRequest).idem;
     if (!idem) return payload;
     const responseJson = typeof payload === 'string' ? JSON.parse(payload) : payload;
-    if (req.url === '/v1/bootstrap') {
+    if (isAnonIdempotentRoute(req.url)) {
       anonIdem.set(idem.keyScope, { hash: idem.hash, status: reply.statusCode, response: responseJson });
       return payload;
     }
@@ -600,6 +618,7 @@ export function buildApp() {
       display_name: z.string(),
       email: z.string().nullable(),
       referral_code: z.string().nullable(),
+      recovery_public_key: z.string().nullable().optional(),
       legal: z.unknown().optional(),
     });
     const parsed = schema.safeParse(req.body);
@@ -633,6 +652,7 @@ export function buildApp() {
       display_name: parsed.data.display_name,
       email: parsed.data.email,
       referral_code: parsed.data.referral_code,
+      recovery_public_key: parsed.data.recovery_public_key ?? null,
       legal_version: legalVersion,
       legal_ip: extractClientIp(req),
       legal_user_agent: extractUserAgent(req),
@@ -653,9 +673,100 @@ export function buildApp() {
 
   app.get('/v1/me', async (req) => fabricService.me((req as AuthedRequest).nodeId!));
   app.patch('/v1/me', async (req, reply) => {
-    const parsed = z.object({ display_name: z.string().nullable(), email: z.string().nullable() }).safeParse(req.body);
+    const parsed = z.object({
+      display_name: z.string().nullable(),
+      email: z.string().nullable(),
+      recovery_public_key: z.string().nullable().optional(),
+    }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     return fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);
+  });
+
+  app.post('/v1/email/start-verify', async (req, reply) => {
+    const parsed = z.object({ email: z.string().email() }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const out = await fabricService.startEmailVerify((req as AuthedRequest).nodeId!, parsed.data.email);
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid email verification request', { reason: (out as any).validationError }));
+    }
+    if ((out as any).deliveryError) {
+      return reply.status(503).send(errorEnvelope('email_delivery_failed', 'Unable to send verification email', {
+        reason: (out as any).deliveryError,
+        provider: (out as any).provider,
+      }));
+    }
+    return out;
+  });
+
+  app.post('/v1/email/complete-verify', async (req, reply) => {
+    const parsed = z.object({ email: z.string().email(), code: z.string() }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const out = await fabricService.completeEmailVerify((req as AuthedRequest).nodeId!, parsed.data.email, parsed.data.code);
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid verification code', { reason: (out as any).validationError }));
+    }
+    if ((out as any).failed) {
+      const reason = (out as any).failed;
+      if (reason === 'attempts_exceeded') {
+        return reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Too many verification attempts', { reason }));
+      }
+      if (reason === 'not_found') {
+        return reply.status(404).send(errorEnvelope('not_found', 'Verification challenge not found'));
+      }
+      return reply.status(422).send(errorEnvelope('validation_error', 'Verification failed', { reason }));
+    }
+    return out;
+  });
+
+  app.post('/v1/recovery/start', async (req, reply) => {
+    const parsed = z.object({
+      node_id: z.string().uuid(),
+      method: z.enum(['pubkey', 'email']),
+    }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+
+    const nodeRateRule: RateLimitRule = {
+      name: 'recovery_start_node',
+      limit: config.rateLimitRecoveryStartPerNodePerHour,
+      windowSeconds: 3600,
+      subject: 'node',
+    };
+    if (!applyRateLimitSubject(reply, nodeRateRule, parsed.data.node_id)) return;
+
+    const out = await fabricService.startRecovery(parsed.data.node_id, parsed.data.method);
+    if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to start recovery', { reason: (out as any).validationError }));
+    }
+    if ((out as any).deliveryError) {
+      return reply.status(503).send(errorEnvelope('email_delivery_failed', 'Unable to send recovery email', {
+        reason: (out as any).deliveryError,
+        provider: (out as any).provider,
+      }));
+    }
+    return out;
+  });
+
+  app.post('/v1/recovery/complete', async (req, reply) => {
+    const parsed = z.object({
+      challenge_id: z.string().uuid(),
+      signature: z.string().optional(),
+      code: z.string().optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const out = await fabricService.completeRecovery(parsed.data);
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid recovery completion request', { reason: (out as any).validationError }));
+    }
+    if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Recovery challenge not found'));
+    if ((out as any).failed) {
+      const reason = (out as any).failed;
+      if (reason === 'attempts_exceeded') return reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Too many recovery attempts', { reason }));
+      if (reason === 'expired') return reply.status(422).send(errorEnvelope('validation_error', 'Recovery challenge expired', { reason }));
+      if (reason === 'used') return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Recovery challenge already used', { reason }));
+      return reply.status(422).send(errorEnvelope('validation_error', 'Recovery validation failed', { reason }));
+    }
+    return out;
   });
 
   app.get('/v1/credits/balance', async (req) => fabricService.creditsBalance((req as AuthedRequest).nodeId!));

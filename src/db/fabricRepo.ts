@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { query } from './client.js';
+import { pool, query } from './client.js';
 
 export type NodeContext = { nodeId: string };
 
@@ -49,13 +49,14 @@ export async function saveIdempotency(nodeId: string, key: string, method: strin
 export async function createNode(
   displayName: string,
   email: string | null,
+  recoveryPublicKey: string | null,
   legal: { acceptedAt: string; version: string; ip: string | null; userAgent: string | null },
 ) {
-  const rows = await query<{ id: string; created_at: string; legal_accepted_at: string; legal_version: string }>(
-    `insert into nodes(display_name,email,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
-     values($1,$2,'ACTIVE',$3,$4,$5,$6)
+  const rows = await query<{ id: string; created_at: string; legal_accepted_at: string; legal_version: string; email_verified_at: string | null }>(
+    `insert into nodes(display_name,email,recovery_public_key,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
+     values($1,$2,$3,'ACTIVE',$4,$5,$6,$7)
      returning id,created_at,legal_accepted_at,legal_version`,
-    [displayName, email, legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
+    [displayName, email, recoveryPublicKey, legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
   );
   return rows[0];
 }
@@ -94,10 +95,27 @@ export async function addCreditIdempotent(nodeId: string, type: string, amount: 
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
-      n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,
+      n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,n.email_verified_at,n.recovery_public_key,
       coalesce(s.plan_code,'free') as plan_code, coalesce(s.status,'none') as sub_status,
       s.current_period_start,s.current_period_end
      from nodes n left join subscriptions s on s.node_id=n.id where n.id=$1 and n.deleted_at is null`,
+    [nodeId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function getNodeRecoveryProfile(nodeId: string) {
+  const rows = await query<{
+    id: string;
+    email: string | null;
+    email_verified_at: string | null;
+    recovery_public_key: string | null;
+    status: string;
+  }>(
+    `select id,email,email_verified_at,recovery_public_key,status
+     from nodes
+     where id=$1 and deleted_at is null
+     limit 1`,
     [nodeId],
   );
   return rows[0] ?? null;
@@ -120,14 +138,223 @@ export async function getTrialEntitlement(nodeId: string) {
   return rows[0] ?? null;
 }
 
-export async function updateMe(nodeId: string, displayName: string | null | undefined, email: string | null | undefined) {
+export async function updateMe(
+  nodeId: string,
+  displayName: string | null | undefined,
+  email: string | null | undefined,
+  recoveryPublicKey: string | null | undefined = undefined,
+) {
   const rows = await query<any>(
     `update nodes
-     set display_name = coalesce($2, display_name), email = coalesce($3, email)
+     set display_name = coalesce($2, display_name),
+         email = coalesce($3, email),
+         email_verified_at = case
+           when $3 is not null and lower($3) <> lower(coalesce(email, '')) then null
+           else email_verified_at
+         end,
+         recovery_public_key = coalesce($4, recovery_public_key)
      where id=$1 returning id`,
-    [nodeId, displayName, email],
+    [nodeId, displayName, email, recoveryPublicKey],
   );
   return rows[0] ?? null;
+}
+
+export async function setNodeEmailForVerification(nodeId: string, email: string) {
+  const rows = await query<any>(
+    `update nodes
+     set email=$2,
+         email_verified_at = case
+           when lower($2) <> lower(coalesce(email, '')) then null
+           else email_verified_at
+         end
+     where id=$1 and deleted_at is null
+     returning id,email,email_verified_at`,
+    [nodeId, email],
+  );
+  return rows[0] ?? null;
+}
+
+export async function createRecoveryChallenge(
+  nodeId: string,
+  type: 'pubkey' | 'email' | 'email_verify',
+  nonceOrCodeHash: string,
+  expiresAt: string,
+  maxAttempts: number,
+  meta: Record<string, unknown> = {},
+) {
+  const rows = await query<{ id: string; expires_at: string }>(
+    `insert into recovery_challenges(node_id,type,nonce_or_code_hash,expires_at,max_attempts,meta)
+     values($1,$2,$3,$4,$5,$6)
+     returning id,expires_at`,
+    [nodeId, type, nonceOrCodeHash, expiresAt, maxAttempts, meta],
+  );
+  return rows[0];
+}
+
+export async function getRecoveryChallenge(challengeId: string) {
+  const rows = await query<any>(
+    `select
+       rc.id,
+       rc.node_id,
+       rc.type,
+       rc.nonce_or_code_hash,
+       rc.expires_at,
+       rc.attempts,
+       rc.max_attempts,
+       rc.meta,
+       rc.used_at,
+       rc.created_at,
+       n.email,
+       n.email_verified_at,
+       n.recovery_public_key
+     from recovery_challenges rc
+     join nodes n on n.id=rc.node_id and n.deleted_at is null
+     where rc.id=$1
+     limit 1`,
+    [challengeId],
+  );
+  return rows[0] ?? null;
+}
+
+type CompleteEmailVerificationResult = {
+  status: 'ok' | 'not_found' | 'invalid_code' | 'expired' | 'attempts_exceeded' | 'used';
+};
+
+export async function completeEmailVerificationChallenge(
+  nodeId: string,
+  email: string,
+  codeHash: string,
+): Promise<CompleteEmailVerificationResult> {
+  const client = await (pool as any).connect();
+  try {
+    await client.query('begin');
+    const challengeRows = await client.query(
+      `select *
+       from recovery_challenges
+       where node_id=$1
+         and type='email_verify'
+         and lower(coalesce(meta->>'email','')) = lower($2)
+       order by created_at desc
+       limit 1
+       for update`,
+      [nodeId, email],
+    );
+    const challenge = challengeRows.rows[0];
+    if (!challenge) {
+      await client.query('rollback');
+      return { status: 'not_found' };
+    }
+    if (challenge.used_at) {
+      await client.query('rollback');
+      return { status: 'used' };
+    }
+    if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+      await client.query('rollback');
+      return { status: 'expired' };
+    }
+    if (Number(challenge.attempts) >= Number(challenge.max_attempts)) {
+      await client.query('rollback');
+      return { status: 'attempts_exceeded' };
+    }
+    if (challenge.nonce_or_code_hash !== codeHash) {
+      await client.query('update recovery_challenges set attempts=attempts+1 where id=$1', [challenge.id]);
+      await client.query('commit');
+      return { status: 'invalid_code' };
+    }
+
+    await client.query('update recovery_challenges set used_at=now() where id=$1', [challenge.id]);
+    await client.query(
+      `update nodes
+       set email=$2, email_verified_at=now()
+       where id=$1`,
+      [nodeId, email],
+    );
+    await client.query(
+      `insert into recovery_events(node_id, challenge_id, event_type, meta)
+       values($1,$2,'email_verification_completed',$3)`,
+      [nodeId, challenge.id, { email }],
+    );
+    await client.query('commit');
+    return { status: 'ok' };
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+type CompleteRecoveryResult = {
+  status: 'ok' | 'not_found' | 'type_mismatch' | 'invalid_secret' | 'expired' | 'attempts_exceeded' | 'used';
+  api_key?: string;
+  key_id?: string;
+  node_id?: string;
+};
+
+export async function completeRecoveryChallenge(
+  challengeId: string,
+  expectedType: 'pubkey' | 'email',
+  expectedSecret: string,
+): Promise<CompleteRecoveryResult> {
+  const client = await (pool as any).connect();
+  try {
+    await client.query('begin');
+    const challengeRows = await client.query('select * from recovery_challenges where id=$1 limit 1 for update', [challengeId]);
+    const challenge = challengeRows.rows[0];
+    if (!challenge) {
+      await client.query('rollback');
+      return { status: 'not_found' };
+    }
+    if (challenge.type !== expectedType) {
+      await client.query('rollback');
+      return { status: 'type_mismatch' };
+    }
+    if (challenge.used_at) {
+      await client.query('rollback');
+      return { status: 'used' };
+    }
+    if (new Date(challenge.expires_at).getTime() <= Date.now()) {
+      await client.query('rollback');
+      return { status: 'expired' };
+    }
+    if (Number(challenge.attempts) >= Number(challenge.max_attempts)) {
+      await client.query('rollback');
+      return { status: 'attempts_exceeded' };
+    }
+    if (challenge.nonce_or_code_hash !== expectedSecret) {
+      await client.query('update recovery_challenges set attempts=attempts+1 where id=$1', [challenge.id]);
+      await client.query('commit');
+      return { status: 'invalid_secret' };
+    }
+
+    const apiKey = crypto.randomUUID() + crypto.randomUUID();
+    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const keyPrefix = apiKey.slice(0, 8);
+
+    await client.query('update recovery_challenges set used_at=now() where id=$1', [challenge.id]);
+    await client.query('update api_keys set revoked_at=now() where node_id=$1 and revoked_at is null', [challenge.node_id]);
+    const keyRows = await client.query(
+      'insert into api_keys(node_id,label,key_prefix,key_hash) values($1,$2,$3,$4) returning id',
+      [challenge.node_id, `recovery_${expectedType}`, keyPrefix, keyHash],
+    );
+    await client.query(
+      `insert into recovery_events(node_id, challenge_id, event_type, meta)
+       values($1,$2,'api_key_recovery_completed',$3)`,
+      [challenge.node_id, challenge.id, { method: expectedType }],
+    );
+    await client.query('commit');
+    return {
+      status: 'ok',
+      node_id: challenge.node_id,
+      key_id: keyRows.rows[0].id,
+      api_key: apiKey,
+    };
+  } catch (err) {
+    await client.query('rollback');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function creditBalance(nodeId: string) {
