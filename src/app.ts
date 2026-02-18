@@ -53,99 +53,460 @@ const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 </body>
 </html>`;
 
-const legalPlaceholderBanner = '<p><strong>PLACEHOLDER - replace with final legal text before public go-live.</strong></p>';
-
 const legalPages = {
   terms: legalPageTemplate('Fabric Terms of Service', `
-    ${legalPlaceholderBanner}
-    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
-    <h2>1) Service and eligibility</h2>
-    <p>Fabric provides API services for agent-native marketplace workflows. You must be legally allowed to use the service and to bind the represented principal.</p>
-    <h2>2) Acceptable operation</h2>
-    <p>You must comply with applicable law, this policy set, and endpoint contracts. You may not misuse credentials, bypass access controls, or run abusive automation.</p>
-    <h2>3) Billing and credits</h2>
-    <p>Subscriptions and top-ups are billed through Stripe. Credits are consumed by metered operations according to API contracts. Charges and grants are recorded in the credit ledger.</p>
-    <h2>4) Suspension and termination</h2>
-    <p>Fabric may suspend or terminate access for abuse, security risk, fraud signals, or policy violations. Suspension can include API key revocation and projection removal.</p>
-    <h2>5) Warranty and liability (MVP)</h2>
-    <p>The service is provided on an “as is” and “as available” basis during MVP. Use at your own risk.</p>
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <h2>1. Agreement and eligibility</h2>
+    <p>By accessing or using the Fabric Protocol (the "Service"), you agree to these Terms and the documents incorporated by reference: the Acceptable Use Policy and Privacy Policy.</p>
+    <p>You must be at least 18 years old (or the age of majority where you live) to create an account, obtain an API key, or act as the account holder for a Node.</p>
+
+    <h2>2. What Fabric is</h2>
+    <p>Fabric is an agent-native backend/protocol for coordinating allocatable resources between participants ("Nodes"). Fabric is infrastructure for identity, publication, discovery, and workflow coordination. Fabric is <strong>not</strong> an escrow service, payment processor, broker, or intermediary for off-platform transactions between Nodes.</p>
+
+    <h2>3. Accounts, Nodes, and responsibility for agents</h2>
+    <p>A "Node" is a principal identity in the Service. API keys are issued for access and map requests to a Node identity.</p>
+    <p>You are responsible for all activity performed using your API keys and any agents, automation, or clients you deploy or authorize-whether those actions are initiated by you, your software, or an autonomous agent operating under your keys. You must secure keys, rotate them on suspected compromise, and promptly notify support of suspected misuse.</p>
+
+    <h2>4. Using the API</h2>
+    <p>You must use the Service in accordance with the endpoint contracts, required headers (including Idempotency-Key on non-GET endpoints and If-Match on PATCH where required), rate limits, and metering rules. You may not bypass access controls, interfere with Service operation, or attempt to access data you are not authorized to access.</p>
+
+    <h2>5. Acceptable Use</h2>
+    <p>You must comply with the Acceptable Use Policy. Violations may result in rate limiting, suspension, API key revocation, removal of projections, and/or termination, including immediate action for suspected abuse, fraud, security threats, or illegal activity.</p>
+
+    <h2>6. Billing, subscriptions, and credits</h2>
+    <p><strong>Billing platform.</strong> Subscriptions and top-ups are billed through Stripe or another payment processor designated by the Operator.</p>
+    <p><strong>Credits.</strong> Credits are a metering mechanism for consumption of Service capabilities. Credits are not legal tender, are not redeemable for cash, have no cash value, and are non-transferable unless expressly permitted by the Operator in writing.</p>
+    <p><strong>Top-ups.</strong> Credit top-ups are <strong>non-refundable</strong> except where required by law.</p>
+    <p><strong>Subscription credits; rollover cap.</strong> Subscription plans may include periodic credit grants. Unused subscription credits roll over up to a maximum balance equal to <strong>two months</strong> of that plan's periodic credit amount (i.e., rollover is capped at one additional month beyond the current month's grant).</p>
+    <p><strong>Plan changes.</strong> Plan upgrades/downgrades and credit-grant semantics follow the Service's published billing policy and API documentation as in effect at the time of change.</p>
+    <p><strong>Taxes.</strong> You are responsible for all applicable taxes related to your use.</p>
+
+    <h2>7. Suspension, revocation, and termination</h2>
+    <p>The Operator may suspend or terminate your access (including revoking API keys and disabling Nodes) at any time for security, abuse prevention, fraud risk, policy violations, legal compliance, or operational integrity.</p>
+    <p>Upon termination, you must stop using the Service. The Operator may retain and log information as described in the Privacy Policy and as required for security/compliance.</p>
+
+    <h2>8. Your content and data</h2>
+    <p>You retain rights to your content. You grant the Operator a limited license to host, process, and transmit your content solely to provide and secure the Service, enforce policies, and comply with law. You represent you have all rights necessary to submit content and that your content and use comply with law and the Acceptable Use Policy.</p>
+
+    <h2>9. Marketplace content; no verification ("buyer beware")</h2>
+    <p>Fabric hosts and transmits information provided by Nodes (including listings, requests, descriptions, and other content). The Operator does not verify, endorse, guarantee, or warrant the accuracy, completeness, legality, quality, safety, or availability of any Node-provided content or any off-platform transaction. Any reliance on Node-provided content is at your own risk. You are solely responsible for evaluating other Nodes and conducting appropriate due diligence ("buyer beware").</p>
+
+    <h2>10. Privacy</h2>
+    <p>The Privacy Policy describes how the Operator collects, uses, and shares data.</p>
+
+    <h2>11. Disclaimers</h2>
+    <p>The Service is provided <strong>"as is"</strong> and <strong>"as available."</strong> The Operator disclaims all warranties to the fullest extent permitted by law, including implied warranties of merchantability, fitness for a particular purpose, and non-infringement. The Operator does not guarantee uninterrupted availability, error-free operation, or that the Service will meet your requirements.</p>
+
+    <h2>12. Limitation of liability</h2>
+    <p>To the fullest extent permitted by law, the Operator will not be liable for indirect, incidental, special, consequential, or punitive damages, or any loss of profits, revenue, data, or goodwill.</p>
+    <p>The Operator's total liability for any claims arising out of or related to the Service will not exceed the amounts you paid to the Operator for the Service in the <strong>12 months</strong> preceding the event giving rise to the claim.</p>
+
+    <h2>13. Indemnification</h2>
+    <p>You agree to indemnify and hold harmless the Operator from any claims, liabilities, damages, losses, and expenses (including reasonable attorneys' fees) arising from your use of the Service, your agents' actions, your content, or your violation of these Terms or the Acceptable Use Policy.</p>
+
+    <h2>14. Changes to the Service or Terms</h2>
+    <p>The Operator may modify the Service and these Terms. Material changes will be posted with an updated effective date. Continued use after the effective date constitutes acceptance of the updated Terms.</p>
+
+    <h2>15. Governing law; venue</h2>
+    <p>These Terms are governed by the laws of the State of California, excluding conflict-of-law rules. Venue for disputes will be in the state or federal courts located in <strong>Santa Clara County, California</strong>, unless otherwise required by law.</p>
+
+    <h2>16. Contact</h2>
+    <p>Questions or notices: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   privacy: legalPageTemplate('Fabric Privacy Policy', `
-    ${legalPlaceholderBanner}
-    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
-    <h2>1) Data we process</h2>
-    <p>Fabric processes Node profile data, API usage metadata, billing event metadata, and operational logs needed to run the platform.</p>
-    <h2>2) Why we process it</h2>
-    <p>Data is used for authentication, anti-abuse controls, billing reconciliation, reliability monitoring, and contract enforcement.</p>
-    <h2>3) Retention baseline</h2>
-    <p>Search event retention follows the MVP retention model documented in specs and runbooks. Billing and security records are retained for operational and compliance needs.</p>
-    <h2>4) Sharing</h2>
-    <p>Fabric shares required payment data with Stripe and required infrastructure metadata with cloud providers. We do not sell personal data.</p>
-    <h2>5) Security</h2>
-    <p>Access is controlled by API keys/admin keys, webhook signatures, and operational safeguards. Report suspected incidents via the support/security channel.</p>
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <h2>1. Overview</h2>
+    <p>This Privacy Policy explains how the Operator collects, uses, shares, and retains information when you use the Fabric Protocol and related web pages (the "Service"). The Service is designed for agent-native workflows where Nodes (principals) interact through authenticated interfaces.</p>
+
+    <h2>2. Information we collect</h2>
+    <p>We collect the following categories of information:</p>
+
+    <h3>A) Account and Node information</h3>
+    <ul>
+      <li>Email address (if provided).</li>
+      <li>Node profile information you submit (for example, display name and other profile fields).</li>
+      <li>Optional contact handles you may provide (for example, messaging usernames), if the Service offers these fields.</li>
+    </ul>
+
+    <h3>B) Content you submit</h3>
+    <ul>
+      <li>Listings, requests, descriptions, metadata, and other content you submit through the Service.</li>
+    </ul>
+    <p><strong>Important:</strong> you control what you include in content fields. <strong>Do not submit sensitive personal data</strong> (for example, government IDs, financial account numbers, precise location data you do not want shared, medical information, or other sensitive information) in listings/requests/descriptions.</p>
+
+    <h3>C) Usage, device, and log information</h3>
+    <ul>
+      <li>Request and response metadata (timestamps, endpoints, status codes, request IDs).</li>
+      <li>IP address, user-agent, and related technical data needed for security and reliability.</li>
+      <li>Rate-limit and abuse-prevention signals.</li>
+      <li>Audit and metering records related to Service usage (including credit ledger entries).</li>
+    </ul>
+
+    <h3>D) Billing information</h3>
+    <ul>
+      <li>Subscription and purchase metadata handled through Stripe (such as customer identifiers, plan and purchase status, invoice identifiers, and payment status).</li>
+      <li>The Operator does not store full payment card numbers; payment processing is handled by Stripe.</li>
+    </ul>
+
+    <h2>3. How we use information</h2>
+    <p>We use information to:</p>
+    <ul>
+      <li>Provide, operate, maintain, and secure the Service (including authenticating requests and enforcing access controls).</li>
+      <li>Process billing-related events and reconcile subscriptions and top-ups.</li>
+      <li>Measure usage, apply metering and rate limits, and prevent fraud and abuse.</li>
+      <li>Monitor reliability, debug issues, and improve the Service.</li>
+      <li>Comply with legal obligations and enforce our policies (including the Terms of Service and Acceptable Use Policy).</li>
+    </ul>
+
+    <h2>4. How information is shared</h2>
+    <p>We share information in the following ways:</p>
+
+    <h3>A) With other Nodes (Service visibility)</h3>
+    <ul>
+      <li>Listings/requests and associated public projection data may be visible to other authenticated Nodes through search and discovery.</li>
+    </ul>
+    <p><strong>Contact information is not intended to be public.</strong> If the Service supports contact reveal, contact handles (if provided) are shared only after an offer is accepted and only between Nodes that meet eligibility requirements (for example, both being subscribers), consistent with the Service workflow.</p>
+
+    <h3>B) With service providers</h3>
+    <ul>
+      <li>Stripe: to process payments and billing events.</li>
+      <li>Cloud infrastructure providers and logging/monitoring vendors: to host the Service and support reliability and security.</li>
+    </ul>
+
+    <h3>C) For legal and safety reasons</h3>
+    <p>We may disclose information to comply with law, respond to lawful requests, protect rights and safety, investigate abuse/fraud, and enforce policies.</p>
+
+    <p>We do not sell personal information.</p>
+
+    <h2>5. Your responsibilities for content</h2>
+    <p>You are responsible for the content you submit and for ensuring you have the rights to submit it. You should avoid including sensitive personal data in public or shared fields. The Operator does not verify content submitted by Nodes.</p>
+
+    <h2>6. Retention</h2>
+    <ul>
+      <li><strong>Operational logs:</strong> retained for up to <strong>90 days</strong> for reliability, security, and debugging.</li>
+      <li><strong>Billing and accounting records:</strong> retained as needed for reconciliation, dispute handling, fraud prevention, and compliance.</li>
+      <li><strong>Security and abuse records:</strong> may be retained longer as needed to investigate and prevent repeat abuse and maintain system integrity.</li>
+    </ul>
+    <p>Some data may persist in backups for a limited period.</p>
+
+    <h2>7. Security</h2>
+    <p>We use reasonable administrative, technical, and organizational measures designed to protect information, including access controls, key-based authentication, and monitoring for abuse. No system is perfectly secure, and we cannot guarantee absolute security.</p>
+
+    <h2>8. Account closure and deletion requests</h2>
+    <p>You may request account closure by contacting us at <strong>mapmoiras@gmail.com</strong>. Where feasible, we will delete or de-identify personal data associated with your account, subject to retention needs for billing, security, fraud prevention, and legal compliance. Public projections may take time to update due to caching/eventual consistency, and data already shared with other Nodes or third parties may not be retrievable.</p>
+
+    <h2>9. Children</h2>
+    <p>The Service is not directed to children. Account holders must be at least 18 years old (or the age of majority where they live).</p>
+
+    <h2>10. EEA/UK notice</h2>
+    <p>If you are located in the European Economic Area (EEA) or the United Kingdom, you may have certain rights regarding your personal data, including to request access, correction, deletion, or restriction of processing, and to object to certain processing. You may also have the right to lodge a complaint with your local data protection authority. To make a request, contact us at <strong>mapmoiras@gmail.com</strong>.</p>
+
+    <h2>11. International users</h2>
+    <p>If you access the Service from outside the United States, your information may be processed and stored in the United States or other locations where our service providers operate.</p>
+
+    <h2>12. Changes to this policy</h2>
+    <p>We may update this Privacy Policy from time to time. We will post the updated policy with a new effective date. Continued use of the Service after the effective date constitutes acceptance of the updated policy.</p>
+
+    <h2>13. Contact</h2>
+    <p>Questions or requests regarding privacy: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   aup: legalPageTemplate('Fabric Acceptable Use Policy', `
-    ${legalPlaceholderBanner}
-    <p><strong>Effective date:</strong> 2026-02-17 (MVP policy)</p>
-    <h2>Prohibited uses</h2>
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <h2>1. Overview</h2>
+    <p>This Acceptable Use Policy ("AUP") governs use of the Fabric Protocol and related web pages (the "Service"). It applies to all activity performed by account holders, operators, deployers, and any automated agents or clients using the Service.</p>
+
+    <h2>2. General obligations</h2>
+    <p>You must:</p>
     <ul>
-      <li>Illegal activity, fraud, harassment, or deceptive automation.</li>
-      <li>Credential abuse, key sharing beyond authorized scope, or bypassing auth/rate limits.</li>
-      <li>Unauthorized security testing, exploitation attempts, or traffic amplification attacks.</li>
-      <li>Abusive scraping or collection of protected/private information.</li>
+      <li>Comply with all applicable laws and regulations in the jurisdictions relevant to your use and any transaction you facilitate.</li>
+      <li>Use the Service in accordance with the Terms of Service and API/feature rules (including access controls, rate limits, and metering).</li>
+      <li>Ensure that any agent or automation you deploy is configured to comply with this AUP. You are responsible for your agents' actions.</li>
     </ul>
-    <h2>Security testing</h2>
-    <p>Coordinated testing requires explicit written authorization. Unapproved testing may be treated as abuse.</p>
-    <h2>Enforcement</h2>
-    <p>Violations may trigger immediate rate limiting, suspension, API key revocation, and/or account termination.</p>
+
+    <h2>3. Prohibited content, listings, and services</h2>
+    <p>You may not use the Service to create, publish, facilitate, or solicit:</p>
+
+    <h3>A) Sexually explicit content and sexual services</h3>
+    <ul>
+      <li>Pornography or sexually explicit content.</li>
+      <li>The sale, solicitation, or facilitation of sexual acts or sexual services.</li>
+    </ul>
+
+    <h3>B) Exploitation and harm</h3>
+    <ul>
+      <li>Any content involving minors in a sexual context.</li>
+      <li>Human trafficking, sexual exploitation, or coercion.</li>
+      <li>Non-consensual sexual content or harassment.</li>
+    </ul>
+
+    <h3>C) Controlled substances and drug-related activity</h3>
+    <ul>
+      <li>Controlled substances, including cannabis, and drug paraphernalia intended for illegal use.</li>
+      <li>Instructions or services intended to facilitate illegal drug manufacture, distribution, or evasion of law enforcement.</li>
+    </ul>
+
+    <h3>D) Illegal services and violent wrongdoing</h3>
+    <ul>
+      <li>Services intended to facilitate violence or wrongdoing, including assassination, robbery, burglary, extortion, or threats.</li>
+      <li>Instructions, services, or coordination intended to commit crimes.</li>
+    </ul>
+
+    <h3>E) Stolen goods and fraud</h3>
+    <ul>
+      <li>Stolen property, stolen credentials, or trafficking in unlawfully obtained goods.</li>
+      <li>Fraudulent, deceptive, or misleading listings/requests, including misrepresentation of identity, ownership, or authority.</li>
+    </ul>
+
+    <h3>F) Malware and phishing</h3>
+    <ul>
+      <li>Malware, spyware, credential theft, phishing, or links/content intended to compromise systems or accounts.</li>
+    </ul>
+
+    <h2>4. Regulated items and jurisdictional restrictions</h2>
+    <p>Some categories may be regulated or restricted depending on jurisdiction (for example, regulated weapons, ammunition, or parts/accessories). If you engage with regulated categories:</p>
+    <ul>
+      <li>You must ensure the activity is lawful in all relevant jurisdictions and comply with all applicable requirements.</li>
+      <li>You are solely responsible for verifying legality, eligibility, and compliance.</li>
+    </ul>
+    <p>The Operator may restrict or remove any category or activity at any time.</p>
+
+    <h2>5. Contact information and off-platform solicitation</h2>
+    <p>Contact information is not intended to be published in public fields (including Node profiles, listings, or descriptions). You may not:</p>
+    <ul>
+      <li>Publish phone numbers, emails, messaging handles, or other direct contact details in public content fields.</li>
+      <li>Attempt to extract, infer, or solicit contact details outside the Service's contact-reveal workflow.</li>
+    </ul>
+    <p>Violations may result in immediate removal, suspension, or termination.</p>
+
+    <h2>6. Harassment, abuse, and hateful conduct</h2>
+    <p>You may not harass, threaten, or abuse others, or engage in hateful conduct. This includes targeted harassment, intimidation, and attempts to coordinate abuse.</p>
+
+    <h2>7. Data misuse and privacy violations</h2>
+    <p>You may not:</p>
+    <ul>
+      <li>Collect, store, or distribute personal data about others without lawful basis and consent.</li>
+      <li>Doxx, expose private information, or attempt to bypass privacy controls and contact-reveal gating.</li>
+      <li>Use the Service to surveil, profile, or track individuals in a way that violates law or rights.</li>
+    </ul>
+
+    <h2>8. Spam, scraping, and abusive automation</h2>
+    <p>You may not:</p>
+    <ul>
+      <li>Spam offers/requests, send excessive automated actions, or generate abusive traffic.</li>
+      <li>Scrape or harvest data in a manner that violates rate limits, access controls, or intended use.</li>
+      <li>Use automation to degrade Service reliability or to evade enforcement.</li>
+    </ul>
+
+    <h2>9. Security and platform integrity</h2>
+    <p>You may not:</p>
+    <ul>
+      <li>Attempt to bypass authentication, authorization, metering, or rate limits.</li>
+      <li>Interfere with the Service, probe for vulnerabilities at scale, or attempt exploitation.</li>
+    </ul>
+    <p><strong>Security testing requires written permission.</strong> Coordinated testing (including scanning, fuzzing, or exploitation attempts) is prohibited unless you have explicit written authorization from the Operator. Responsible disclosure is encouraged: report suspected vulnerabilities to <strong>mapmoiras@gmail.com</strong> and do not access data you are not authorized to access.</p>
+
+    <h2>10. Enforcement</h2>
+    <p>Violations may result in one or more of the following actions, at the Operator's discretion:</p>
+    <ul>
+      <li>Content removal or suppression from projections/search.</li>
+      <li>Rate limiting.</li>
+      <li>Suspension of Nodes or principals.</li>
+      <li>API key revocation.</li>
+      <li>Termination of access.</li>
+    </ul>
+    <p>We may also cooperate with law enforcement or comply with lawful requests.</p>
+
+    <h2>11. Changes to this policy</h2>
+    <p>We may update this AUP from time to time. We will post the updated policy with a new effective date. Continued use after the effective date constitutes acceptance of the updated policy.</p>
+
+    <h2>12. Contact</h2>
+    <p>Questions or reports regarding abuse, security, or policy issues: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   refunds: legalPageTemplate('Fabric Refunds and Cancellation Policy', `
-    ${legalPlaceholderBanner}
-    <p><strong>Effective date:</strong> 2026-02-17 (MVP placeholder)</p>
-    <h2>Subscription cancellation</h2>
-    <p>PLACEHOLDER - define cancellation timing and next-renewal behavior for each plan tier.</p>
-    <h2>Refund eligibility</h2>
-    <p>PLACEHOLDER - define refund windows, exclusions, and required evidence for review.</p>
-    <h2>Credit balances</h2>
-    <p>PLACEHOLDER - define whether unused credits roll forward, expire, or are non-refundable.</p>
-    <h2>Support path</h2>
-    <p>Submit billing disputes through <a href="mailto:support@fabric.local">support@fabric.local</a> with invoice ids.</p>
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <h2>1. Overview</h2>
+    <p>This policy explains cancellation, refunds, and credit handling for subscriptions and credit top-ups purchased through the Fabric Protocol (the "Service").</p>
+
+    <h2>2. Subscription cancellation</h2>
+    <ul>
+      <li>You may cancel your subscription at any time.</li>
+      <li>Unless required by law, cancellation takes effect at the end of your current billing period. You will retain subscription benefits through the end of that period.</li>
+    </ul>
+
+    <h2>3. Subscription refunds</h2>
+    <ul>
+      <li><strong>No prorated refunds.</strong> Except where required by law, we do not provide refunds for partial billing periods, unused time, or unused subscription benefits.</li>
+      <li>If we suspend or terminate access for policy violations or abuse, refunds may be denied to the extent permitted by law.</li>
+    </ul>
+
+    <h2>4. Top-ups (one-time credit purchases)</h2>
+    <ul>
+      <li><strong>Top-ups are non-refundable</strong> except where required by law.</li>
+      <li>Top-up credits are <strong>not redeemable for cash</strong> and have no cash value.</li>
+    </ul>
+
+    <h2>5. Credits: rollover, caps, and expiration</h2>
+    <ul>
+      <li><strong>Subscription credits:</strong> Subscription plans may include periodic credit grants. Unused subscription credits roll over, but the balance of subscription-granted credits is capped at <strong>two months</strong> of the plan's periodic credit amount (i.e., rollover is capped at one additional month beyond the current month's grant). We apply this as a <strong>grant-up-to-cap</strong> rule at renewal.</li>
+      <li><strong>Top-up credits:</strong> Top-up credits <strong>do not expire</strong> (subject to suspension/termination and enforcement actions described in the Terms/AUP).</li>
+      <li>Subscription credits and top-up credits may be tracked as separate sources for accounting and enforcement. Any cap described above applies to <strong>subscription-granted credits</strong>, not purchased top-up credits.</li>
+    </ul>
+
+    <h2>6. Failed payments and subscription lapse</h2>
+    <p>If a subscription renewal payment fails or is reversed, subscription status may lapse or be downgraded until payment is successfully completed. During a lapse, subscription-only benefits (including eligibility conditions tied to subscription status) may be unavailable.</p>
+
+    <h2>7. Chargebacks and payment disputes</h2>
+    <p>If a charge is reversed (including through a chargeback) or is reasonably suspected to be fraudulent:</p>
+    <ul>
+      <li>We may suspend access, revoke subscription benefits, and/or adjust credit balances to reflect the reversal.</li>
+      <li>We may require resolution of the dispute before restoring access.</li>
+    </ul>
+
+    <h2>8. Price and plan changes</h2>
+    <p>We may change subscription pricing, credit grants, or plan features from time to time. Changes typically take effect at the next renewal or at the time of plan change, as applicable.</p>
+
+    <h2>9. Taxes and fees</h2>
+    <p>To the extent permitted by law, taxes and third-party fees already remitted or incurred may be non-refundable.</p>
+
+    <h2>10. Contact</h2>
+    <p>For billing questions or disputes, email <strong>mapmoiras@gmail.com</strong> and include relevant invoice IDs and timestamps where possible.</p>
   `),
-  agentsLegal: legalPageTemplate('Fabric Agent/API Terms', `
-    ${legalPlaceholderBanner}
-    <h2>Scope (Agent/API use)</h2>
-    <p>These terms apply to API access and automated operation through deployed agents.</p>
-    <h2>Operator/Deployer responsibility</h2>
-    <p>Agent Operators, Deployers, and Account Holders are responsible for actions taken using issued keys.</p>
-    <h2>Keys/security</h2>
-    <p>Protect API keys, rotate on suspected compromise, and avoid embedding secrets in public artifacts.</p>
-    <h2>Rate limits/metering</h2>
-    <p>Endpoints are rate-limited and metered as specified in API contracts.</p>
-    <h2>Prohibited use</h2>
-    <p>No abuse, fraud, credential misuse, or policy evasion.</p>
-    <h2>Data/retention</h2>
-    <p>Retention follows documented platform policy and runbooks.</p>
-    <h2>Suspension/termination</h2>
-    <p>Fabric may suspend or terminate access for policy, security, or abuse reasons.</p>
-    <h2>Disclaimers/limitation of liability</h2>
-    <p>PLACEHOLDER - add final disclaimer and liability cap language before go-live.</p>
-    <h2>Marketplace intermediary disclaimer</h2>
-    <p>PLACEHOLDER - clarify marketplace intermediary role and transaction responsibilities.</p>
+  agentsLegal: legalPageTemplate('Fabric Agent Terms', `
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <p>These Fabric Agent Terms apply to automated operation of the Fabric Protocol, including access via APIs, MCP wrappers, SDKs, or other programmatic interfaces (the "Agent Interfaces"). These terms apply <strong>in addition to</strong> the Fabric Terms of Service, Acceptable Use Policy, Privacy Policy, and any billing policies.</p>
+
+    <h2>1. Operator responsibility for agents</h2>
+    <p>If you deploy, operate, or authorize an automated agent or client to access the Service, you (the account holder/operator) are responsible for:</p>
+    <ul>
+      <li>All actions performed using your credentials, whether initiated by a human or automation.</li>
+      <li>Ensuring your agents comply with the Terms, AUP, metering, and rate limits.</li>
+      <li>Implementing reasonable safeguards to prevent abusive behavior (including offer spam, scraping, and credential leakage).</li>
+    </ul>
+
+    <h2>2. Credentials and security</h2>
+    <p>You must protect secrets and credentials used to access the Service.</p>
+    <ul>
+      <li>Do not embed secrets in public code, logs, or artifacts.</li>
+      <li>Rotate credentials on suspected compromise.</li>
+      <li>Do not disclose full secrets when contacting support.</li>
+    </ul>
+
+    <h2>3. No key sharing; no resale; no multi-tenant service bureau</h2>
+    <p>API keys and access credentials are issued to and for the use of the account holder and their authorized systems.</p>
+    <ul>
+      <li>You may not sell, transfer, sublicense, or share keys/accounts to third parties.</li>
+      <li>You may not operate the Service as a multi-tenant access product or "service bureau" (reselling access or providing third parties access under your credentials) without the Operator's prior written permission.</li>
+    </ul>
+
+    <h2>4. Usage limits, metering, and integrity protections</h2>
+    <p>The Service is rate-limited and metered. You must not attempt to bypass or evade:</p>
+    <ul>
+      <li>Authentication/authorization controls,</li>
+      <li>metering or credit consumption,</li>
+      <li>rate limits or throttles,</li>
+      <li>idempotency and concurrency controls.</li>
+    </ul>
+    <p>The Operator may throttle, restrict, or suspend access to protect system integrity and other users.</p>
+
+    <h2>5. Auditability</h2>
+    <p>You acknowledge that the Service may log and retain information about agent actions (including request metadata, rate-limit events, and metering/ledger activity) for security, abuse prevention, reliability, billing reconciliation, and policy enforcement, consistent with the Privacy Policy.</p>
+
+    <h2>6. Interoperability and third-party runtimes</h2>
+    <p>MCP wrappers, SDKs, examples, and integration guidance (if provided) are provided "as is." The Operator does not guarantee compatibility with third-party runtimes, registries, or tooling, and may change interfaces or behavior as the Service evolves.</p>
+
+    <h2>7. Transactions and third-party responsibility</h2>
+    <p>Fabric Protocol provides coordination infrastructure. The Operator does not verify Node-provided content and is not an escrow or payment intermediary for off-platform transactions. You are solely responsible for evaluating counterparties, complying with law, and managing any off-platform exchange, delivery, or performance of goods/services.</p>
+
+    <h2>8. Contact reveal and public contact information</h2>
+    <p>Direct contact information must not be posted in public fields (including Node profiles, listings, or descriptions). If contact reveal is supported, contact details may be shared only through the Service's workflow (for example, after acceptance and only between eligible Nodes). Attempts to circumvent contact gating may be treated as abuse.</p>
+
+    <h2>9. Resource-locking abuse and offer spam</h2>
+    <p>You may not use automation to lock or attempt to lock resources without legitimate intent (for example, repeated offers intended to block availability). Abusive offer patterns, spam, or manipulation of workflow state may result in throttling, suspension, or termination.</p>
+
+    <h2>10. Suspension and termination consequences</h2>
+    <p>Suspension or termination may disable automation immediately, revoke credentials, and remove public projections. You are responsible for designing agents and systems to fail safely and to handle revocation or downtime without causing harm.</p>
+
+    <h2>11. Changes</h2>
+    <p>We may update these Agent Terms from time to time. Updated terms will be posted with a new effective date. Continued use after the effective date constitutes acceptance.</p>
+
+    <h2>12. Contact</h2>
+    <p>Questions about these Agent Terms: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   support: legalPageTemplate('Fabric Support', `
-    ${legalPlaceholderBanner}
-    <h2>Support contacts (MVP)</h2>
-    <p>General support: <a href="mailto:support@fabric.local">support@fabric.local</a></p>
-    <p>Security and abuse: <a href="mailto:security@fabric.local">security@fabric.local</a></p>
-    <h2>Include in your report</h2>
+    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Effective date:</strong> 2026-02-17</p>
+
+    <h2>Contact</h2>
+    <p>Email: <strong>mapmoiras@gmail.com</strong></p>
+    <p>Use this for:</p>
     <ul>
-      <li>Timestamp (UTC), environment, and service URL</li>
-      <li>Request path, method, and request id (if available)</li>
-      <li>Error envelope payload and relevant webhook event ids</li>
-      <li>Whether impact is billing, delivery, security, or abuse</li>
+      <li>Support requests (how-to, account issues, billing questions)</li>
+      <li>Security and abuse reports (suspected compromise, fraud, policy violations)</li>
     </ul>
-    <h2>Abuse and takedown</h2>
-    <p>For urgent abuse concerns, include evidence and impact summary. Manual takedown/suspension can be applied under MVP incident response procedures.</p>
+
+    <h2>Before you email</h2>
+    <ul>
+      <li><strong>Do not send secrets</strong> (full API keys, webhook secrets, private keys). If you need to reference a key, include only a partial identifier (e.g., last 4 characters) and the approximate creation time.</li>
+      <li>If you suspect fraud involving real-world harm or immediate danger, contact local authorities first.</li>
+    </ul>
+
+    <h2>What to include</h2>
+    <p>Please include as much of the following as possible:</p>
+    <ul>
+      <li>Timestamp (UTC) and the Service URL you were using</li>
+      <li>Request path + method</li>
+      <li>Request ID (if available)</li>
+      <li>The error response (the JSON error envelope)</li>
+      <li>Any relevant Stripe event IDs (for billing/webhooks) or invoice IDs</li>
+      <li>Steps to reproduce (if applicable)</li>
+    </ul>
+
+    <h2>Abuse reporting (helpful details)</h2>
+    <ul>
+      <li>Node IDs involved (yours and the other party, if known)</li>
+      <li>Listing/request IDs and any share links involved</li>
+      <li>Screenshots or copied payloads (with secrets removed)</li>
+      <li>Clear description of harm/impact and why it violates policy</li>
+    </ul>
+
+    <h2>Billing issues</h2>
+    <p>For billing disputes or subscription issues, include:</p>
+    <ul>
+      <li>Stripe invoice ID (if available)</li>
+      <li>The plan and approximate time of checkout</li>
+    </ul>
+
+    <h2>Security and compromised keys</h2>
+    <p>If you believe an API key is compromised:</p>
+    <ul>
+      <li>Revoke/rotate keys immediately (if you have access)</li>
+      <li>Email us with the details above and any relevant evidence</li>
+    </ul>
+
+    <h2>Service metadata check</h2>
+    <p>If you're unsure you're hitting the correct environment or legal version, check:</p>
+    <ul>
+      <li><strong>GET /v1/meta</strong> on the service URL you're using (it returns canonical legal links and required legal version).</li>
+    </ul>
+
+    <h2>Scope note (important)</h2>
+    <p>Fabric Protocol provides coordination infrastructure. The Operator does not verify Node-provided content and is not an escrow or payment intermediary for off-platform transactions between Nodes.</p>
+
+    <h2>Legal requests</h2>
+    <p>For legal process requests, email <strong>mapmoiras@gmail.com</strong> with <strong>"LEGAL"</strong> in the subject.</p>
+
+    <h2>Response expectations (MVP)</h2>
+    <p>Support is provided on a best-effort basis during MVP. Response times are not guaranteed.</p>
   `),
   agentsDocs: legalPageTemplate('Fabric Agent Quickstart', `
     <p>See GET /docs/agents runtime-rendered page for the live quickstart content.</p>
@@ -158,7 +519,7 @@ function buildAgentsDocs(req: FastifyRequest) {
   const openapiUrl = absoluteUrl(req, '/openapi.json');
   return legalPageTemplate('Fabric Agent Quickstart', `
     <p><strong>Production quickstart for Agent Operators, Deployers, and Account Holders.</strong></p>
-    <p>Fabric is an agent-native marketplace API where Nodes are principals and keys map all writes to a Node identity.</p>
+    <p>Fabric Protocol is an agent-native marketplace API where Nodes are principals and keys map all writes to a Node identity.</p>
     <p>Use API keys to bootstrap Node identity, create/publish canonical objects, search public projections, and negotiate offers.</p>
     <p>All non-GET requests require <code>Idempotency-Key</code>. PATCH requests require <code>If-Match</code> for optimistic concurrency.</p>
     <p>All non-2xx responses use the canonical envelope:</p>
@@ -1197,3 +1558,4 @@ export function buildApp() {
 
   return app;
 }
+

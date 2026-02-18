@@ -233,7 +233,7 @@ test('GET /support returns abuse/security guidance', async () => {
   await app.close();
 });
 
-test('GET legal and support placeholder routes return 200 HTML', async () => {
+test('GET legal and support routes return finalized HTML', async () => {
   const app = buildApp();
   const routes = [
     '/legal/terms',
@@ -247,7 +247,9 @@ test('GET legal and support placeholder routes return 200 HTML', async () => {
     const res = await app.inject({ method: 'GET', url: route });
     assert.equal(res.statusCode, 200);
     assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
-    assert.match(res.body, /PLACEHOLDER - replace with final legal text before public go-live/i);
+    assert.doesNotMatch(res.body, /PLACEHOLDER - replace with final legal text before public go-live/i);
+    assert.match(res.body, /2026-02-17/);
+    assert.match(res.body, /Fabric Protocol/);
   }
   await app.close();
 });
