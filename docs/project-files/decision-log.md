@@ -2,6 +2,26 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-18 - Agent-commerce positioning baseline locked
+Decision:
+- Fabric's primary moat is network coverage + trust/policy + protocol correctness.
+- Speed/latency remains important for pipeline performance but is not the primary moat.
+Reason: Explicitly stated in thread notes as clarified positioning after "How to Sell to Agents" alignment.
+Where captured:
+- `docs/project-files/thread-notes.md` (What we did section)
+Impact:
+- Go-live prioritization should bias toward coverage, trust diagnostics, and coordination correctness over speed-only optimization work.
+
+## 2026-02-18 - Collaboration invariants for thread execution locked
+Decision:
+- Keep responses concise to conserve context budget.
+- Do not assume missing source content; request the missing artifact/text instead.
+Reason: Explicitly recorded in thread notes as new workflow/collaboration invariants.
+Where captured:
+- `docs/project-files/thread-notes.md` (Workflow / collaboration updates section)
+Impact:
+- Future thread execution should be shorter by default and avoid speculative assumptions when source artifacts are unavailable.
+
 ## 2026-02-18 - Legal policy constants for hosted pages locked
 Decision:
 - MVP hosted legal/support pages use operator identity `Pilsang Park (operating the Fabric Protocol)`.

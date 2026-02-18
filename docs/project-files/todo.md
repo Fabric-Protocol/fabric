@@ -176,6 +176,27 @@ Last updated: 2026-02-18
 - [ ] Enforce `display_name` uniqueness:
   - add/verify DB constraint + API behavior + tests
 
+### Phase 0.5 — Agent-commerce go-live deltas (latest thread notes)
+- [ ] Add network stats surface:
+  - running totals for `registered_nodes_total` and `visible_units_total`
+  - plan `offers_accepted_total` for Phase 2 after metric definition is stable
+- [ ] Add onboarding and response-level reminders:
+  - explain early network sparsity and that results improve as nodes join/publish
+  - include referral/advertising growth reminder on key check-in/search responses and docs
+- [ ] Add Search Budget Contract fields to search responses:
+  - `credits_requested`, `credits_charged`, `search_strategy` (`broad|balanced|precise`)
+  - `eligible_count`, `queried_count`, `coverage_ratio`, `returned_count`
+  - sparse-result reason codes (`no_supply`, `policy_blocked`, `low_confidence_filtered`, `timeouts`)
+- [ ] Add ex-post search quality diagnostics (MVP):
+  - `coverage_ratio`, `duplicates_merged_count`, `stale_filtered_count`, `timeouts_count`
+  - optional `result_quality_score` heuristic (0-1) if low-cost to add
+- [ ] Add near-real-time offer lifecycle notifications for agents:
+  - webhooks plus polling cursor fallback (`/events?since=cursor`)
+  - optional SSE/long-poll for near-instant delivery without inbound endpoints
+- [ ] Review agent onboarding docs and flows for gaps.
+- [ ] Review full agent workflows for MVP feature/anti-abuse gaps:
+  - search -> offer -> acceptance -> contact reveal -> fulfillment
+
 ### Decisions locked
 - Subscription-only gating (credits do not unlock subscriber-gated actions).
 
@@ -202,15 +223,25 @@ Last updated: 2026-02-18
 - [ ] SDKs (full): TS + Python, versioned, CI publish, examples
 - [ ] MCP server (official): hosted on Cloud Run; discoverable via `/v1/meta`
 - [ ] Docs portal expansion: `/docs/api`, `/docs/errors`, `/docs/security`, `/docs/credits`, `/docs/webhooks`
+- [ ] Add pre-charge search quote/preview:
+  - estimated credits, expected result band, likely coverage before charging
+- [ ] Separate search `effort` from `selectivity`:
+  - higher credits increase effort without implicit narrowing unless requested
+- [ ] Add per-node reputation metrics plus routing:
+  - success rate, response timeliness, dispute rate
+- [ ] Add `offers_accepted_total` to network stats after metric definition is finalized
 
 ## Phase 3 — Hardening / abuse / trust
 - [ ] Abuse controls: tiered limits by plan; anomaly detection; automated suspension triggers + review
 - [ ] Admin endpoints for suspension (optional later)
 - [ ] Audit & compliance: retention enforcement, deletion/export flows, security disclosure policy
 - [ ] Backups / restore drill: documented restore; periodic verification
+- [ ] Add machine-readable compliance metadata:
+  - retention, licensing, and data-handling declarations
+- [ ] Add verification/provenance framework and dispute/recourse primitives
 
 ## Consolidated phased list (canonical)
 - Phase 0.5: OpenAPI publish, real /docs/agents, legal/support content, ops runbooks, verify gating + rate limits + retention, manual suspension
 - Phase 1: /v1/credits/quote, credit packs top-ups, plan-change credit semantics
-- Phase 2: SDKs + MCP + expanded docs
-- Phase 3: hardening + admin endpoints + anomaly detection + compliance
+- Phase 2: SDKs + MCP + expanded docs + search quote/preview + effort/selectivity split + reputation/routing
+- Phase 3: hardening + admin endpoints + anomaly detection + compliance + compliance metadata + provenance/recourse

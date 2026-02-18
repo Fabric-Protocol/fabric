@@ -5,65 +5,65 @@ Last updated: 2026-02-18
 ## Repo and branches
 - Repo: `fabric-api`
 - Current branch: `main`
-- Target branch: `main` (recommended: do next work on feature branch, then merge back)
+- Target branch: `feat/agent-commerce-go-live` (create from `main`)
 
 ## Current snapshot
 - Snapshot commands run:
-  - `git status -sb` -> `## main...origin/main`
-  - `git log -1 --oneline` -> `1f954c2 merge: feat/self-serve-recovery`
+  - `git status -sb` -> `## main...origin/main [ahead 1]` and local untracked `docs/project-files/agent-commerce-fit.md`
+  - `git log -1 --oneline` -> `e2c740a project-files: update handoff/todo/decisions from thread notes`
+- Last merged product commit on `main`:
+  - `1f954c2 merge: feat/self-serve-recovery`
 - Cloud Run service:
   - Service: `fabric-api`
   - Region: `us-west1`
   - URL: `https://fabric-api-2x2ettafia-uw.a.run.app`
-  - Active revision after post-merge deploy: `fabric-api-00048-cx9`
 
 ## What just changed
-- Fixed Stripe subscription period mapping bug (`period_start == period_end` issue) and added regression coverage.
-- Finalized legal/support HTML pages in backend (`src/app.ts`) with non-placeholder content and clean encoding.
-- Deployed feature branch, verified legal/support/docs routes return HTTP 200 without `PLACEHOLDER` and without mojibake.
-- Merged `feat/self-serve-recovery` into `main` and redeployed from `main`.
+- Thread notes were updated from the "How to Sell to Agents" alignment review.
+- TODO now includes the explicit go-live additions:
+  - network stats surface (`registered_nodes_total`, `visible_units_total`)
+  - onboarding/search reminders for early network sparsity and referral growth
+  - Search Budget Contract response fields + sparse-result reason codes
+  - ex-post search diagnostics and near-real-time offer lifecycle notifications
+  - explicit onboarding/workflow review tasks
+  - Phase 2/3 carry-forward items (quote preview improvements, effort/selectivity split, reputation metrics, compliance metadata/provenance)
+- Decision log now records:
+  - positioning baseline (coverage/trust/protocol correctness over speed-only moat)
+  - collaboration invariants (concise output, no assumptions when source artifacts are missing)
 
 ## Current blocker
-- No blocker for period fix or legal pages.
-- Remaining go-live blocker: production email provider secrets for full email recovery smoke are not configured.
-- Remaining implementation TODOs: holds ownership invariant enforcement and display-name uniqueness enforcement.
+- No new human-only blocker from this thread.
+- Execution blockers from prior threads still open:
+  - production email provider secrets for live email recovery smoke
+  - holds ownership invariant enforcement
+  - `display_name` uniqueness enforcement
 
 ## Exact next command sequence (PowerShell)
-1) Baseline + branch:
+1) Baseline and branch:
    - `git switch main`
    - `git pull --ff-only`
-   - `git switch -c feat/phase05-email-holds-uniqueness`
+   - `git switch -c feat/agent-commerce-go-live`
    - `git status -sb`
-2) GCP context:
-   - `gcloud config set project fabric-487608`
-   - `$PROJECT="fabric-487608"`
-   - `$REGION="us-west1"`
-   - `$BASE=(gcloud run services describe fabric-api --region $REGION --project $PROJECT --format "value(status.url)")`
-3) Configure production email provider (choose one):
-   - SendGrid:
-     - `gcloud run services update fabric-api --project $PROJECT --region $REGION --update-env-vars EMAIL_PROVIDER=sendgrid,EMAIL_FROM=<from_email> --set-secrets SENDGRID_API_KEY=<sendgrid_secret_name>:latest`
-   - SMTP:
-     - `gcloud run services update fabric-api --project $PROJECT --region $REGION --update-env-vars EMAIL_PROVIDER=smtp,EMAIL_FROM=<from_email>,SMTP_HOST=<smtp_host>,SMTP_PORT=<smtp_port>,SMTP_USER=<smtp_user>,SMTP_SECURE=<true_or_false> --set-secrets SMTP_PASS=<smtp_pass_secret_name>:latest`
-4) Confirm env wiring:
-   - `gcloud run services describe fabric-api --project $PROJECT --region $REGION --format="get(spec.template.spec.containers[0].env[].name)"`
-5) Run live email recovery smoke:
-   - `$META=Invoke-RestMethod "$BASE/v1/meta"`
-   - `$EMAIL="<real_inbox_you_can_read>"`
-   - `$BOOT_BODY=@{ display_name="email-smoke-$(Get-Date -Format yyyyMMddHHmmss)"; email=$EMAIL; referral_code=$null; recovery_public_key=$null; legal=@{ accepted=$true; version=$META.required_legal_version } } | ConvertTo-Json -Depth 6 -Compress`
-   - `$BOOT=Invoke-RestMethod "$BASE/v1/bootstrap" -Method Post -Headers @{ "Idempotency-Key"="boot-email-$(New-Guid)"; "Content-Type"="application/json" } -Body $BOOT_BODY`
-   - `$API_KEY_1=$BOOT.api_key.api_key`
-   - `$NODE_ID=$BOOT.node.id`
-   - `Invoke-RestMethod "$BASE/v1/email/start-verify" -Method Post -Headers @{ Authorization="ApiKey $API_KEY_1"; "Idempotency-Key"="email-start-$(New-Guid)"; "Content-Type"="application/json" } -Body (@{ email=$EMAIL } | ConvertTo-Json -Compress)`
-   - `$CODE="<otp_from_email>"`
-   - `Invoke-RestMethod "$BASE/v1/email/complete-verify" -Method Post -Headers @{ Authorization="ApiKey $API_KEY_1"; "Idempotency-Key"="email-complete-$(New-Guid)"; "Content-Type"="application/json" } -Body (@{ email=$EMAIL; code=$CODE } | ConvertTo-Json -Compress)`
-   - `$REC_START=Invoke-RestMethod "$BASE/v1/recovery/start" -Method Post -Headers @{ "Idempotency-Key"="recovery-email-start-$(New-Guid)"; "Content-Type"="application/json" } -Body (@{ node_id=$NODE_ID; method="email" } | ConvertTo-Json -Compress)`
-   - `$REC_COMPLETE=Invoke-RestMethod "$BASE/v1/recovery/complete" -Method Post -Headers @{ "Idempotency-Key"="recovery-email-complete-$(New-Guid)"; "Content-Type"="application/json" } -Body (@{ challenge_id=$REC_START.challenge_id; code=$CODE } | ConvertTo-Json -Compress)`
-   - `$API_KEY_2=$REC_COMPLETE.api_key`
-   - `try { Invoke-WebRequest "$BASE/v1/me" -Headers @{ Authorization="ApiKey $API_KEY_1" } -UseBasicParsing } catch { $_.Exception.Response.StatusCode.value__ }`
-   - `Invoke-RestMethod "$BASE/v1/me" -Headers @{ Authorization="ApiKey $API_KEY_2" } | ConvertTo-Json -Depth 20`
-6) Start remaining Phase 0.5 audits:
-   - `rg -n "lock|hold|offer|unit_ids|owner|node_id|display_name|unique" src tests`
+2) Locate implementation touchpoints for new go-live priorities:
+   - `rg -n "search|credits|coverage|events|offer|cursor|meta|registered_nodes|visible_units" src tests docs/specs`
+3) Implement network stats surface first:
+   - `rg -n "v1/meta|meta" src tests`
+   - `npm test -- --runInBand`
+4) Implement Search Budget Contract + diagnostics fields:
+   - `rg -n "credits_charged|search_strategy|coverage_ratio|returned_count|timeout" src tests`
+   - `npm test -- --runInBand`
+5) Implement near-real-time offer lifecycle delivery fallback:
+   - `rg -n "webhook|events|cursor|offer" src tests`
+   - `npm test -- --runInBand`
+6) Update onboarding/reminder messaging in API responses/docs paths:
+   - `rg -n "bootstrap|search|docs/agents|onboarding|sparsity|referral" src docs`
+   - `npm test -- --runInBand`
+7) Final quality gates:
    - `npm test`
+   - `npm run lint`
+   - `npm run build`
+   - `git status -sb`
 
 ## Carry-forward notes
-- Non-blocking GCP warning still appears: project lacks `environment` tag metadata.
+- Keep thread responses concise by default.
+- If any referenced source text/artifact is missing, request it explicitly instead of assuming content.
