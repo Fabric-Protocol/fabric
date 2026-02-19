@@ -1,6 +1,6 @@
 ﻿# Fabric - TODO (thread-active)
 
-Last updated: 2026-02-18
+Last updated: 2026-02-19
 
 ## ✅ Completed (P0) — Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
@@ -219,6 +219,26 @@ Last updated: 2026-02-18
 - [ ] Review full agent workflows for MVP feature/anti-abuse gaps:
   - search -> offer -> acceptance -> contact reveal -> fulfillment
 
+### Phase 0.5 / Phase 1 — Contact/comms + recovery docs (thread notes)
+- [ ] Lock docs precedence guidance:
+  - treat `docs/specs/*` as normative source-of-truth
+  - treat `docs/runbooks/*` as operational checklists with lower precedence
+- [ ] Document auth and email role explicitly:
+  - `Authorization: ApiKey <api_key>` is the only normal auth factor
+  - email is required at account creation as backup/recovery, not as runtime auth
+- [ ] Require signup/onboarding setup of recovery public key and document two self-serve recovery lanes (`pubkey` + `email`).
+- [ ] Add optional node `messaging_handles[]` with validation/sanitization rules; treat handles as unverified user-provided contact data.
+- [ ] Update reveal-contact contract to return `messaging_handles[]` alongside required email and optional phone.
+- [ ] Add near-real-time offer lifecycle eventing:
+  - webhooks plus `/events?since=cursor` polling fallback
+  - events for `offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed`
+- [ ] Add legal/docs disclaimer:
+  - contact/messaging identity is user-provided
+  - Fabric does not guarantee identity or fulfillment; settlement is off-platform
+- [ ] Expand onboarding docs:
+  - add "multi-dimensional trading flexibility"
+  - add 5-8 concrete mixed-consideration examples and how terms live in offer notes
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
 - [ ] Saved searches / scheduled alerts after corpus density improves.
@@ -226,6 +246,14 @@ High likelihood:
 - [ ] Compute and surface visibility/discoverability scoring (private first; weighting to be decided).
 - [ ] Implement photos/media using future `unit_media` references (no DB blobs); select storage provider later.
 - [ ] Revisit basket/bundle pricing mode once sparse-corpus risk is lower.
+- [ ] Add post-accept report/complaint endpoint with one-report-per-side-per-offer uniqueness and reason enum (`no_show|unresponsive|refused_after_accept|fraud_suspected|other`).
+- [ ] Define trust policy constants:
+  - `REPORT_WINDOW_DAYS` (suggested default: 14)
+  - per-node report rate limits
+  - conservative enforcement threshold based on unique counterparties
+- [ ] Add trust enforcement ladder and routing effects:
+  - `good|watch|limited|suspended|banned`
+  - admin override path and audit logging
 Medium likelihood:
 - [ ] Add bounded lexical expansion mode as opt-in, while preserving diagnostics.
 - [ ] Refine search-by-node operational pricing (cheap shallow pages + anti-scrape guardrails).

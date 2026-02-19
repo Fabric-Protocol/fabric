@@ -2,6 +2,66 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-19 - Auth factor and email role boundary locked
+Decision:
+- Runtime auth remains API-key only: `Authorization: ApiKey <api_key>`.
+- Email is required at account creation as backup/recovery, not as a normal request auth factor.
+Rationale:
+- Keeps agent auth deterministic and automation-friendly.
+- Preserves a recovery lane without coupling request auth to inbox access.
+Scope/impact:
+- API, onboarding, infra.
+
+## 2026-02-19 - Recovery lanes locked to self-serve pubkey + email
+Decision:
+- Fabric supports two self-serve recovery lanes: recovery public-key signature and email code recovery.
+- Normal recovery flows should not require manual operator intervention.
+Rationale:
+- Reduces recovery friction and support burden.
+- Maintains recoverability when one factor is unavailable.
+Scope/impact:
+- API, onboarding, ops.
+
+## 2026-02-19 - Offer lifecycle updates are eventing, not in-app messaging
+Decision:
+- Near-real-time offer lifecycle updates use webhooks with `/events?since=cursor` polling fallback.
+- This replaces in-platform messaging for go-live offer status propagation.
+Rationale:
+- Reduces polling/wait friction with a simpler delivery model.
+- Avoids introducing chat/moderation scope in MVP paths.
+Scope/impact:
+- API, infra, onboarding.
+
+## 2026-02-19 - Contact reveal includes unverified messaging handles
+Decision:
+- Nodes can publish `messaging_handles[]` entries (`kind`, `handle`, optional `url`) as user-provided unverified data.
+- `reveal-contact` returns `messaging_handles[]` in addition to required email and optional phone.
+Rationale:
+- Speeds post-accept coordination without requiring in-app messaging.
+- Keeps trust boundaries explicit by marking handles as unverified.
+Scope/impact:
+- API, onboarding.
+
+## 2026-02-19 - Onboarding lock: multi-dimensional trading guidance required
+Decision:
+- Onboarding/docs must explicitly teach multi-dimensional trading (physical, digital, services/experience/time, and monetary terms).
+- Include concrete examples and clarify that Fabric enforces state/holds while settlement is off-platform after contact reveal.
+Rationale:
+- Reduces confusion in non-standard deal construction.
+- Improves first-run success for agent implementers.
+Scope/impact:
+- Onboarding, API usage guidance.
+
+## 2026-02-19 - Phase 2 trust model direction locked
+Decision:
+- Treat mutual acceptance as assumed completed for analytics (no completion-step dependency).
+- Add time-bounded post-accept reporting and derive trust from multi-counterparty patterns rather than arbitration.
+Rationale:
+- Enables practical reliability signals without escrow/arbitration scope.
+- Prioritizes scalable pattern-based trust over case-by-case adjudication.
+Scope/impact:
+- API, economics, infra.
+
 ## 2026-02-18 - Search Budget Contract is top-level and budget-capped
 Decision:
 - Search responses must expose the Search Budget Contract at top-level, and `credits_requested` is a hard ceiling (`credits_charged <= credits_requested` always).
