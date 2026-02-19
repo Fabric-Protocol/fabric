@@ -29,6 +29,7 @@ export const config = {
   adminKey: process.env.ADMIN_KEY ?? '',
   defaultRateLimitLimit: Number(process.env.DEFAULT_RATE_LIMIT_LIMIT ?? 1000),
   searchCreditCost: Number(process.env.SEARCH_CREDIT_COST ?? 2),
+  searchTargetCreditCost: Number(process.env.SEARCH_TARGET_CREDIT_COST ?? 1),
   nodeCategoryDrilldownCost: Number(process.env.NODE_CATEGORY_DRILLDOWN_COST ?? 1),
   searchPageAddOnSmall: Number(process.env.SEARCH_PAGE_ADD_ON_SMALL ?? 1),
   searchPageAddOnLarge: Number(process.env.SEARCH_PAGE_ADD_ON_LARGE ?? 4),

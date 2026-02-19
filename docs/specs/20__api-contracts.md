@@ -1072,6 +1072,7 @@ target is optional:
 - if provided, restrict search to that node (scope filters still apply).
 - if both node_id and username are provided and resolve to different nodes -> 422 validation_error.
 - node_id takes precedence if both refer to the same node.
+- target-constrained search is a low-cost follow-up query: when target resolves, `budget.breakdown.base_search_cost` uses `SEARCH_TARGET_CREDIT_COST` instead of the global search base cost.
 
 Response 200
 
@@ -1100,7 +1101,7 @@ Request (locked)
   "cursor": "string|null"
 }
 
-Validation and budgeting rules are identical to /v1/search/listings.
+Validation and budgeting rules are identical to /v1/search/listings (including low-cost target-constrained base pricing).
 
 Response 200
 

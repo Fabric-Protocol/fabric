@@ -391,7 +391,7 @@ export const fabricService = {
     const targetNodeId = targetResolution.targetNodeId;
 
     const parsedCursor = decodeSearchCursor(body?.cursor ?? null);
-    const baseSearchCost = config.searchCreditCost;
+    const baseSearchCost = targetNodeId ? config.searchTargetCreditCost : config.searchCreditCost;
     const broadeningLevel = Number(body?.broadening?.level ?? 0);
     const broadeningCost = broadeningLevel;
     const pageIndex = parsedCursor.pageIndex;

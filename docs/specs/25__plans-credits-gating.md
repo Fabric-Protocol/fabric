@@ -44,7 +44,9 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 
 ### 2.2 Base costs
 - `SEARCH_CREDIT_COST = 2`
+- `SEARCH_TARGET_CREDIT_COST = 1` (target-constrained follow-up)
 - Search listing/request call base (page 1): 2 credits.
+- Target-constrained search (`target` resolves by `node_id`/`username`) uses the lower target base cost for page 1.
 - Public node inventory expansion call base: 2 credits.
 - Node per-category drilldown call base: cheap fixed cost (see 2.5).
 

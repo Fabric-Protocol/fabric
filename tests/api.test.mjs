@@ -2002,6 +2002,62 @@ test('search target.username restricts results and returns budget/node summaries
   await app.close();
 });
 
+test('target-constrained search uses low-cost base pricing', async () => {
+  const app = buildApp();
+
+  const searcherBoot = await bootstrap(app, 'boot-target-cheap-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_target_cheap')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-target-cheap-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `target-cheap-${TEST_RUN_SUFFIX}-${searcherNodeId.slice(0, 6)}`;
+  const unit = await repo.createResource('units', targetNodeId, {
+    ...unitPayload('Target cheap item', scopeNotes),
+    category_ids: [515],
+  });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+
+  const globalSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-target-cheap-global' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: scopeNotes },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: 200 },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(globalSearch.statusCode, 200);
+
+  const targetedSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-target-cheap-targeted' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: scopeNotes },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: 200 },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(targetedSearch.statusCode, 200);
+  assert.equal(targetedSearch.json().budget.breakdown.base_search_cost, config.searchTargetCreditCost);
+  assert.equal(targetedSearch.json().budget.credits_charged, config.searchTargetCreditCost);
+  assert.equal(globalSearch.json().budget.credits_charged > targetedSearch.json().budget.credits_charged, true);
+  await app.close();
+});
+
 test('search rejects mismatched target.node_id and target.username', async () => {
   const app = buildApp();
   const searcherBoot = await bootstrap(app, 'boot-target-mismatch-searcher');
@@ -2104,7 +2160,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page1.statusCode, 200);
   assert.equal(page1.json().budget.breakdown.page_index, 1);
   assert.equal(page1.json().budget.breakdown.page_cost, 0);
-  assert.equal(page1.json().budget.credits_charged, config.searchCreditCost + 1);
+  assert.equal(page1.json().budget.credits_charged, config.searchTargetCreditCost + 1);
 
   const page2 = await app.inject({
     method: 'POST',
@@ -2115,7 +2171,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page2.statusCode, 200);
   assert.equal(page2.json().budget.breakdown.page_index, 2);
   assert.equal(page2.json().budget.breakdown.page_cost, config.searchPageAddOnSmall);
-  assert.equal(page2.json().budget.credits_charged, config.searchCreditCost + 1 + config.searchPageAddOnSmall);
+  assert.equal(page2.json().budget.credits_charged, config.searchTargetCreditCost + 1 + config.searchPageAddOnSmall);
 
   const page3 = await app.inject({
     method: 'POST',
@@ -2134,7 +2190,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page4.statusCode, 200);
   assert.equal(page4.json().budget.breakdown.page_index, 4);
   assert.equal(page4.json().budget.breakdown.page_cost, config.searchPageAddOnLarge);
-  assert.equal(page4.json().budget.credits_charged, config.searchCreditCost + 1 + config.searchPageAddOnLarge);
+  assert.equal(page4.json().budget.credits_charged, config.searchTargetCreditCost + 1 + config.searchPageAddOnLarge);
 
   const page5 = await app.inject({
     method: 'POST',
@@ -2145,7 +2201,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page5.statusCode, 200);
 
   const beforePage6Balance = await repo.creditBalance(searcherNodeId);
-  const modestBudget = config.searchCreditCost + 1;
+  const modestBudget = config.searchTargetCreditCost + 1;
   const page6 = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',

@@ -318,6 +318,11 @@ Pagination add-on policy:
 - pages 4-5: page_cost = large add-on
 - pages 6+: page_cost = prohibitive add-on (expected to cap for typical request budgets)
 
+Target-constrained pricing policy:
+
+- If `target` resolves to a node, search uses low-cost base pricing for this call.
+- `budget.breakdown.base_search_cost` MUST reflect `SEARCH_TARGET_CREDIT_COST` for target-constrained calls and `SEARCH_CREDIT_COST` otherwise.
+
 If budget.credits_requested prevents executing requested broadening/page, return partial results within budget with:
 
 - budget.was_capped=true
