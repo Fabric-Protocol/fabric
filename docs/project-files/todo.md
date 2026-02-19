@@ -249,8 +249,22 @@ Last updated: 2026-02-19
   - liquidity/reliability metrics
   - webhook health (when applicable)
 
+### Phase 0.5 — Workflow hardening (latest thread notes)
+- [ ] Update `docs/project-files/00__read-first__workflow.md`:
+  - require DB/DDL APPLY + VERIFY SQL script handoff for manual Supabase execution
+  - require end-of-thread "project files to refresh" list derived from git
+- [ ] Update `AGENTS.md` DB/DDL wording:
+  - explicitly state generated SQL scripts are for manual Supabase execution, not agent execution
+- [ ] Thread-switch hygiene:
+  - include unique changed paths from `docs/spec/**` plus refresh-set files (`AGENTS.md`, `docs/project-files/00__read-first__workflow.md`, `docs/project-files/agent-commerce-fit.md`, `docs/project-files/decision-log.md`, `docs/project-files/todo.md`)
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
+- [ ] Internationalization baseline (Phase 1):
+  - verify Supabase/Postgres UTF-8 encoding (manual SQL check)
+  - add optional `language_tag` (BCP-47) for user-entered free-text in units/requests
+  - ensure Unicode-safe normalization for matching while preserving original text
+  - keep structured discovery fields language-neutral and first-class (categories/capabilities/regions)
 - [ ] Add crypto pay-per-use rail (x402-like) for wallet-based top-ups/payment-required flows with node credit-attribution mapping.
 - [ ] Support saved payment method + Stripe off-session top-ups for agents (auto-top-up product logic on low-credit threshold).
 - [ ] Saved searches / scheduled alerts after corpus density improves.
@@ -267,6 +281,9 @@ High likelihood:
   - `good|watch|limited|suspended|banned`
   - admin override path and audit logging
 Medium likelihood:
+- [ ] Cross-language free-text discovery (Phase Next):
+  - decide bridging approach (pivot MT fields vs multilingual embeddings vs hybrid) with search budget/credit metering integration
+  - add indexing/storage, abuse controls, and diagnostics for cross-language matches
 - [ ] Add moderation heuristics/pattern flags and escalation logic (Phase 2).
 - [ ] Add bounded lexical expansion mode as opt-in, while preserving diagnostics.
 - [ ] Refine search-by-node operational pricing (cheap shallow pages + anti-scrape guardrails).

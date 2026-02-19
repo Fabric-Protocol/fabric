@@ -2,6 +2,34 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-19 - DB/DDL changes require explicit Supabase APPLY + VERIFY handoff
+Decision:
+- When schema/DDL changes are introduced, Codex must generate APPLY and VERIFY SQL scripts for manual Supabase execution and must not assume DB state is updated until human confirmation.
+Rationale:
+- Codex cannot execute SQL directly against Supabase in this workflow.
+- Prevents code/spec drift when DB migrations are not manually applied.
+Scope/impact:
+- Infra, API.
+
+## 2026-02-19 - End-of-thread refresh list must be derived from git changes
+Decision:
+- End each thread with an explicit refresh list for changed canonical docs and project files, derived from git diffs.
+- Minimum refresh set includes changed paths in `docs/spec/**`, `AGENTS.md`, and in `docs/project-files`: `00__read-first__workflow.md`, `agent-commerce-fit.md`, `decision-log.md`, `todo.md`.
+Rationale:
+- Prevents thread-switch misses when canonical docs changed but project-files were not refreshed.
+- Keeps handoff discipline deterministic and auditable.
+Scope/impact:
+- Onboarding, infra.
+
+## 2026-02-19 - Cross-language free-text search is deferred pending international usage
+Decision:
+- Do not implement cross-language free-text search now; only prep minimal internationalization baseline and defer translation/embeddings until international usage exists.
+Rationale:
+- Large implementation cost with low immediate value for current usage profile.
+- Preserves focus on Phase 0.5/1 go-live-critical work.
+Scope/impact:
+- API, economics, onboarding.
+
 ## 2026-02-19 - Targeted-search pricing must be canonically specified before implementation
 Decision:
 - Define target-constrained search pricing (`target { node_id?, username? }`) in canonical specs before implementing low-cost follow-up pricing behavior in code.
