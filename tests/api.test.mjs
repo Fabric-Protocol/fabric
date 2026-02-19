@@ -3267,6 +3267,16 @@ test('pubkey recovery rotates keys and old keys are revoked', async () => {
   const newApiKey = complete.json().api_key;
   assert.equal(typeof newApiKey, 'string');
 
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-complete-replay' },
+    payload: { challenge_id: challengeId, signature },
+  });
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.json().error.code, 'invalid_state_transition');
+  assert.equal(replay.json().error.details.reason, 'used');
+
   const oldMe = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${primaryKey}` } });
   assert.equal(oldMe.statusCode, 403);
   const extraMe = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${extraKey}` } });
@@ -3337,60 +3347,47 @@ test('pubkey recovery rejects wrong signature and expired nonce', async () => {
   await app.close();
 });
 
-test('email recovery challenge enforces attempts limit', async () => {
+test('email recovery method is rejected as phase 2 only', async () => {
   const app = buildApp();
-  emailProvider.clearStubEmailOutbox();
-  const b = await bootstrap(app, 'boot-email-recovery-attempts', { display_name: 'Email Recovery', email: null, referral_code: null });
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const recoveryPublicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const b = await bootstrap(app, 'boot-email-recovery-disabled', {
+    display_name: 'Email Recovery Disabled',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKey,
+  });
   const nodeId = b.json().node.id;
-  const apiKey = b.json().api_key.api_key;
-  const email = `recover.attempts.${crypto.randomBytes(4).toString('hex')}@example.com`;
-
-  const startVerify = await app.inject({
-    method: 'POST',
-    url: '/v1/email/start-verify',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-recovery-verify-start' },
-    payload: { email },
-  });
-  assert.equal(startVerify.statusCode, 200);
-  const verifyCode = emailProvider.getStubEmailCode(email);
-  const completeVerify = await app.inject({
-    method: 'POST',
-    url: '/v1/email/complete-verify',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-recovery-verify-complete' },
-    payload: { email, code: verifyCode },
-  });
-  assert.equal(completeVerify.statusCode, 200);
 
   const startRecovery = await app.inject({
     method: 'POST',
     url: '/v1/recovery/start',
-    headers: { 'idempotency-key': 'email-recovery-start-attempts' },
+    headers: { 'idempotency-key': 'email-recovery-start-disabled' },
     payload: { node_id: nodeId, method: 'email' },
   });
-  assert.equal(startRecovery.statusCode, 200);
-  const challengeId = startRecovery.json().challenge_id;
-  const sentRecoveryCode = emailProvider.getStubEmailCode(email);
-  const wrongCode = sentRecoveryCode === '123456' ? '654321' : '123456';
+  assert.equal(startRecovery.statusCode, 422);
+  assert.equal(startRecovery.json().error.code, 'validation_error');
+  assert.equal(startRecovery.json().error.message, 'Email recovery is not supported in MVP; use pubkey recovery.');
+  assert.equal(startRecovery.json().error.details.reason, 'email_recovery_not_supported');
 
-  for (let i = 0; i < config.recoveryChallengeMaxAttempts; i += 1) {
-    const attempt = await app.inject({
-      method: 'POST',
-      url: '/v1/recovery/complete',
-      headers: { 'idempotency-key': `email-recovery-wrong-attempt-${i}` },
-      payload: { challenge_id: challengeId, code: wrongCode },
-    });
-    assert.equal(attempt.statusCode, 422);
-    assert.equal(attempt.json().error.code, 'validation_error');
-  }
-
-  const blocked = await app.inject({
+  const startPubkey = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-start-disabled-test' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(startPubkey.statusCode, 200);
+  const challengeId = startPubkey.json().challenge_id;
+  const codeComplete = await app.inject({
     method: 'POST',
     url: '/v1/recovery/complete',
-    headers: { 'idempotency-key': 'email-recovery-wrong-attempt-blocked' },
-    payload: { challenge_id: challengeId, code: wrongCode },
+    headers: { 'idempotency-key': 'email-recovery-complete-disabled' },
+    payload: { challenge_id: challengeId, code: '123456' },
   });
-  assert.equal(blocked.statusCode, 429);
-  assert.equal(blocked.json().error.code, 'rate_limit_exceeded');
+  assert.equal(codeComplete.statusCode, 422);
+  assert.equal(codeComplete.json().error.code, 'validation_error');
+  assert.equal(codeComplete.json().error.message, 'Email recovery is not supported in MVP; use pubkey recovery.');
+  assert.equal(codeComplete.json().error.details.reason, 'email_recovery_not_supported');
   await app.close();
 });
 

@@ -246,67 +246,36 @@ export const fabricService = {
     return { failed: out.status };
   },
   async startRecovery(nodeId: string, method: 'pubkey' | 'email') {
+    if (method !== 'pubkey') return { validationError: 'email_recovery_not_supported' };
     const profile = await repo.getNodeRecoveryProfile(nodeId);
     if (!profile) return { notFound: true };
-    if (method === 'pubkey') {
-      if (!profile.recovery_public_key) return { validationError: 'recovery_public_key_missing' };
-      const nonce = crypto.randomBytes(32).toString('hex');
-      const challenge = await repo.createRecoveryChallenge(
-        nodeId,
-        'pubkey',
-        nonce,
-        recoveryExpiresAtIso(),
-        config.recoveryChallengeMaxAttempts,
-        {},
-      );
-      return { challenge_id: challenge.id, nonce, expires_at: challenge.expires_at };
-    }
-
-    if (!profile.email || !profile.email_verified_at) return { validationError: 'email_not_verified' };
-    const code = recoveryCode();
+    if (!profile.recovery_public_key) return { validationError: 'recovery_public_key_missing' };
+    const nonce = crypto.randomBytes(32).toString('hex');
     const challenge = await repo.createRecoveryChallenge(
       nodeId,
-      'email',
-      recoveryHash(code),
+      'pubkey',
+      nonce,
       recoveryExpiresAtIso(),
       config.recoveryChallengeMaxAttempts,
-      { email: profile.email },
+      {},
     );
-    const sent = await sendEmail({
-      to: profile.email,
-      subject: 'Fabric API key recovery code',
-      text: `Your Fabric API key recovery code is ${code}. It expires in ${config.recoveryChallengeTtlMinutes} minutes.`,
-    });
-    if (!sent.ok) return { deliveryError: sent.reason, provider: sent.provider };
-    return { ok: true, challenge_id: challenge.id, expires_at: challenge.expires_at };
+    return { challenge_id: challenge.id, nonce, expires_at: challenge.expires_at };
   },
   async completeRecovery(payload: { challenge_id: string; signature?: string; code?: string }) {
-    if (payload.signature && payload.code) return { validationError: 'ambiguous_method' };
-    if (!payload.signature && !payload.code) return { validationError: 'method_payload_required' };
+    if (payload.code) return { validationError: 'email_recovery_not_supported' };
+    if (!payload.signature) return { validationError: 'signature_required' };
 
     const challenge = await repo.getRecoveryChallenge(payload.challenge_id);
     if (!challenge) return { notFound: true };
 
-    if (payload.signature) {
-      if (challenge.type !== 'pubkey') return { validationError: 'challenge_type_mismatch' };
-      const message = recoverySignedMessage(challenge.id, challenge.nonce_or_code_hash);
-      const verified = verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
-      const completion = await repo.completeRecoveryChallenge(
-        payload.challenge_id,
-        'pubkey',
-        verified ? challenge.nonce_or_code_hash : '__invalid_signature__',
-      );
-      if (completion.status !== 'ok') return { failed: completion.status };
-      return {
-        node_id: completion.node_id,
-        key_id: completion.key_id,
-        api_key: completion.api_key,
-      };
-    }
-
-    const code = String(payload.code ?? '').trim();
-    if (!/^\d{6}$/.test(code)) return { validationError: 'code_format_invalid' };
-    const completion = await repo.completeRecoveryChallenge(payload.challenge_id, 'email', recoveryHash(code));
+    if (challenge.type !== 'pubkey') return { validationError: 'challenge_type_mismatch' };
+    const message = recoverySignedMessage(challenge.id, challenge.nonce_or_code_hash);
+    const verified = verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
+    const completion = await repo.completeRecoveryChallenge(
+      payload.challenge_id,
+      'pubkey',
+      verified ? challenge.nonce_or_code_hash : '__invalid_signature__',
+    );
     if (completion.status !== 'ok') return { failed: completion.status };
     return {
       node_id: completion.node_id,

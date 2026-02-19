@@ -1233,6 +1233,13 @@ export function buildApp() {
       method: z.enum(['pubkey', 'email']),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (parsed.data.method === 'email') {
+      return reply.status(422).send(errorEnvelope(
+        'validation_error',
+        'Email recovery is not supported in MVP; use pubkey recovery.',
+        { reason: 'email_recovery_not_supported' },
+      ));
+    }
 
     const nodeRateRule: RateLimitRule = {
       name: 'recovery_start_node',
@@ -1245,6 +1252,13 @@ export function buildApp() {
     const out = await fabricService.startRecovery(parsed.data.node_id, parsed.data.method);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
     if ((out as any).validationError) {
+      if ((out as any).validationError === 'email_recovery_not_supported') {
+        return reply.status(422).send(errorEnvelope(
+          'validation_error',
+          'Email recovery is not supported in MVP; use pubkey recovery.',
+          { reason: 'email_recovery_not_supported' },
+        ));
+      }
       return reply.status(422).send(errorEnvelope('validation_error', 'Unable to start recovery', { reason: (out as any).validationError }));
     }
     if ((out as any).deliveryError) {
@@ -1263,8 +1277,22 @@ export function buildApp() {
       code: z.string().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (parsed.data.code) {
+      return reply.status(422).send(errorEnvelope(
+        'validation_error',
+        'Email recovery is not supported in MVP; use pubkey recovery.',
+        { reason: 'email_recovery_not_supported' },
+      ));
+    }
     const out = await fabricService.completeRecovery(parsed.data);
     if ((out as any).validationError) {
+      if ((out as any).validationError === 'email_recovery_not_supported') {
+        return reply.status(422).send(errorEnvelope(
+          'validation_error',
+          'Email recovery is not supported in MVP; use pubkey recovery.',
+          { reason: 'email_recovery_not_supported' },
+        ));
+      }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid recovery completion request', { reason: (out as any).validationError }));
     }
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Recovery challenge not found'));

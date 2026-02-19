@@ -160,19 +160,18 @@ export const openApiDocument = {
     },
     '/v1/recovery/start': {
       post: {
-        summary: 'Start public API key recovery challenge',
+        summary: 'Start public API key recovery challenge (pubkey only in MVP)',
         responses: {
           '200': { description: 'Recovery challenge created' },
           '404': { description: 'Node not found' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
-          '503': { description: 'Email delivery failed' },
         },
       },
     },
     '/v1/recovery/complete': {
       post: {
-        summary: 'Complete public API key recovery challenge',
+        summary: 'Complete public API key recovery challenge (signature only in MVP)',
         responses: {
           '200': { description: 'New API key minted' },
           '404': { description: 'Challenge not found' },
