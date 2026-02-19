@@ -2,6 +2,112 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-19 - 402 is economic gating; 403 is entitlement gating
+Decision:
+- Use HTTP `402` only for economic gating (e.g., `credits_exhausted`) and HTTP `403` for permission/entitlement gating.
+Rationale:
+- Keeps "payment required" semantics consistent for machine customers.
+- Separates entitlement failure from credit-balance failure.
+Scope/impact:
+- API, economics, onboarding.
+
+## 2026-02-19 - Phase 2 payment rails: crypto top-up rail and Stripe off-session top-ups
+Decision:
+- Add Phase 2 crypto pay-per-use (x402-like) rail for wallet-based top-ups/payment-required flows.
+- Add Phase 2 support for saved payment method + Stripe off-session top-ups (auto-top-up logic).
+Rationale:
+- Crypto rail enables machine-native payment without bank-controlled SCA events.
+- Stripe off-session top-ups provide near-autonomous operation with lower integration complexity.
+Scope/impact:
+- API, economics, infra.
+
+## 2026-02-19 - Onboarding payment guidance is required in Phase 0.5/1
+Decision:
+- Onboarding/docs must recommend dedicated payment methods, corporate/virtual cards with limits, and owner-side spending controls.
+Rationale:
+- Reduces fraud/SCA friction while preserving safe delegation.
+- Keeps responsibility framing explicit without "bypass bank controls" messaging.
+Scope/impact:
+- Onboarding, economics.
+
+## 2026-02-19 - Offer/deal progression is not subscriber-gated
+Decision:
+- Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal.
+- Enforce not-suspended, legal-accepted, and rate-limit/throttle controls instead.
+Rationale:
+- Credit-pack-only nodes must still be able to complete core marketplace dealflow.
+- Subscription is a recurring grant mechanism, not a prerequisite for core actions.
+Scope/impact:
+- API, economics, enforcement.
+
+## 2026-02-19 - Offer/request expiration contract is hours-input, server-authoritative storage
+Decision:
+- Offers accept `expires_in_hours`; server stores authoritative `expires_at`; clients do not set `expires_at` directly.
+- Offer bounds: default 8h, floor 15m, ceiling 7d; requests gain expiration with default 1 week and configurable `expires_in_hours`.
+Rationale:
+- Reduces ambiguity and simplifies expiry-sweep behavior.
+- Limits stale supply/demand while keeping agent control simple.
+Scope/impact:
+- API, infra, economics.
+
+## 2026-02-19 - Expiry and digest jobs run via Cloud Scheduler on Cloud Run
+Decision:
+- Run a 5-minute offer expiry sweep to expire offers and release holds.
+- Use Cloud Scheduler to invoke internal job endpoints for offer sweep and daily digest.
+Rationale:
+- Avoids relying on read-time checks for lifecycle correctness.
+- Fits Cloud Run's request-driven execution model.
+Scope/impact:
+- Infra, enforcement.
+
+## 2026-02-19 - Add thread history endpoint for negotiation visibility
+Decision:
+- Add `GET /v1/threads/{thread_id}` returning ordered negotiation chain plus current active offer.
+Rationale:
+- Avoids client-side reconstruction across multiple calls.
+- Improves agent integration reliability and speed.
+Scope/impact:
+- API, onboarding.
+
+## 2026-02-19 - Contact reveal remains non-paywalled in MVP with anti-abuse controls
+Decision:
+- Do not require "ever paid" for contact reveal in MVP.
+- Apply revealer-focused rate limits, idempotent per-thread reveal, and progressive trust-tier limit relaxation.
+Rationale:
+- Preserves low-friction first-deal path for network growth.
+- Adds abuse resistance without reintroducing subscription paywall gating.
+Scope/impact:
+- API, economics, enforcement.
+
+## 2026-02-19 - Bootstrap and enforcement persistence policy
+Decision:
+- Bootstrap rate limits are per-IP: 5/hour and 20/day, returning 429 when exceeded.
+- Implement `node_suspensions` history and keep IP data hashed in bootstrap/abuse tracking (not core business tables).
+Rationale:
+- Reduces node-farming risk where identity is weak at bootstrap.
+- Preserves enforcement history/escalation while minimizing sensitive data spread.
+Scope/impact:
+- Enforcement, infra, API.
+
+## 2026-02-19 - Moderation policy split across Phase 1 and Phase 2
+Decision:
+- Phase 1 bans via reports + manual review cover controlled substances, pornography, sale of sexual activities, and illegal activity.
+- Phase 2 adds heuristic/pattern flags and escalation logic.
+Rationale:
+- Establishes immediate baseline enforcement with minimal automation.
+- Defers heavier automation to a later phase.
+Scope/impact:
+- Enforcement, infra, onboarding.
+
+## 2026-02-19 - Daily metrics endpoint is pre-go-live operational blocker
+Decision:
+- Add `GET /internal/admin/daily-metrics` as the single source for daily digest reporting.
+Rationale:
+- Centralizes abuse, billing/credits, liquidity, reliability, and webhook-health operational visibility.
+- Explicitly identified as the last TODO before go-live in thread notes.
+Scope/impact:
+- Infra, ops, economics.
+
 ## 2026-02-19 - Auth factor and email role boundary locked
 Decision:
 - Runtime auth remains API-key only: `Authorization: ApiKey <api_key>`.

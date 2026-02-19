@@ -239,8 +239,23 @@ Last updated: 2026-02-19
   - add "multi-dimensional trading flexibility"
   - add 5-8 concrete mixed-consideration examples and how terms live in offer notes
 
+### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
+- [ ] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
+- [ ] Keep "credit packs" terminology consistent in Stripe display naming and docs.
+- [ ] Add onboarding payment guidance:
+  - recommend dedicated payment method for agent usage
+  - prefer corporate/virtual cards with spending limits
+  - emphasize owner controls (spending caps/monitoring) and avoid "bypass bank controls" framing
+- [ ] Add `GET /internal/admin/daily-metrics` as the source for daily email digest:
+  - abuse/throttles/suspensions
+  - Stripe + credits health
+  - liquidity/reliability metrics
+  - webhook health (when applicable)
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
+- [ ] Add crypto pay-per-use rail (x402-like) for wallet-based top-ups/payment-required flows with node credit-attribution mapping.
+- [ ] Support saved payment method + Stripe off-session top-ups for agents (auto-top-up product logic on low-credit threshold).
 - [ ] Saved searches / scheduled alerts after corpus density improves.
 - [ ] Revisit supply-vs-demand pricing divergence using observed market behavior.
 - [ ] Compute and surface visibility/discoverability scoring (private first; weighting to be decided).
@@ -255,6 +270,7 @@ High likelihood:
   - `good|watch|limited|suspended|banned`
   - admin override path and audit logging
 Medium likelihood:
+- [ ] Add moderation heuristics/pattern flags and escalation logic (Phase 2).
 - [ ] Add bounded lexical expansion mode as opt-in, while preserving diagnostics.
 - [ ] Refine search-by-node operational pricing (cheap shallow pages + anti-scrape guardrails).
 - [ ] Add storefront-tier higher limits for paid/verified nodes after abuse controls mature.
@@ -263,7 +279,7 @@ Low likelihood:
 - [ ] No additional low-likelihood items locked in current thread notes.
 
 ### Decisions locked
-- Subscription-only gating (credits do not unlock subscriber-gated actions).
+- Offer/deal progression is not subscriber-gated; use suspension/legal/rate-limit controls.
 
 ## Phase 1 — Near-term product completeness
 ### Credits UX
