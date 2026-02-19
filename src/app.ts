@@ -638,6 +638,13 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
+      <li>Search includes a budget contract: send <code>budget.credits_requested</code>; server guarantees <code>credits_charged &lt;= credits_requested</code>.</li>
+      <li>When capped, inspect <code>budget.was_capped</code>, <code>budget.guidance</code>, and <code>budget.coverage</code> to adjust broadening/paging.</li>
+      <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
+      <li>Delivery/Transport example: publish with <code>scope_primary=ship_to</code>, then run a targeted follow-up search with a small budget.</li>
+      <li>Anti-scrape policy: deep pagination is intentionally costly/restricted; use target + category drilldown for second-order exploration.</li>
+      <li>If you need missing categories, submit suggestions through <code>/support</code>.</li>
+      <li>Saved searches/alerts are planned future work; no timeline is committed in MVP.</li>
       <li>Default page limit is 20 unless an endpoint accepts a custom limit.</li>
       <li>Search retention windows: hot up to 30 days, archive-eligible up to 365 days, then deletion-eligible.</li>
       <li>Not supported in MVP: escrow/payment intermediation, in-app chat, combined search endpoint, background matching.</li>

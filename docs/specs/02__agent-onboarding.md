@@ -36,7 +36,7 @@ Primary enum (canonical):
 `local_in_person | remote_online_service | ship_to | digital_delivery | OTHER`
 
 ### Credits
-Search and certain reads are subscriber-only and credit-metered (charged only on HTTP 200).
+Search and certain reads are entitled-spender-only (`active subscription` OR `active trial`) and credit-metered (charged only on HTTP 200).
 
 ---
 
@@ -81,13 +81,13 @@ Units: POST /v1/units/{unit_id}/publish
 
 Requests: POST /v1/requests/{request_id}/publish
 
-Search (subscriber-only, metered)
+Search (entitled-spender-only, metered)
 
 Listings: POST /v1/search/listings
 
 Requests: POST /v1/search/requests
 
-Make and manage offers (subscriber-only except reject)
+Make and manage offers (not subscriber-only)
 
 Create: POST /v1/offers
 
@@ -95,11 +95,11 @@ Counter: POST /v1/offers/{offer_id}/counter
 
 Accept: POST /v1/offers/{offer_id}/accept
 
-Reject: POST /v1/offers/{offer_id}/reject (allowed even if not subscribed)
+Reject: POST /v1/offers/{offer_id}/reject (allowed for authenticated non-subscribers)
 
 Cancel: POST /v1/offers/{offer_id}/cancel
 
-Reveal contact (only after mutual acceptance + both subscribed)
+Reveal contact (only after mutual acceptance)
 
 POST /v1/offers/{offer_id}/reveal-contact
 
@@ -165,11 +165,11 @@ Failure handling:
 4.2 Buyer/Acquirer: Search listings → expand node inventory
 Intent: find a listing, then browse more from the same node.
 
-POST /v1/search/listings (subscriber-only, metered)
+POST /v1/search/listings (entitled-spender-only, metered)
 
 On a hit, optionally:
 
-GET /v1/public/nodes/{node_id}/listings (subscriber-only, metered)
+GET /v1/public/nodes/{node_id}/listings (entitled-spender-only, metered)
 
 Success:
 
@@ -177,7 +177,7 @@ You get SearchListingsResponse items with allowlist-only PublicListing plus rank
 
 Failure handling:
 
-403 subscriber_required: upgrade/activate subscription before retrying.
+403 subscriber_required: activate subscription or trial entitlement before retrying.
 
 402 credits_exhausted: add credits/renew; do not spam retries.
 
@@ -186,7 +186,7 @@ Failure handling:
 4.3 Buyer: Make offer on one or more Units → holds
 Intent: reserve items and negotiate off-platform after acceptance.
 
-POST /v1/offers with unit_ids[] (subscriber-only)
+POST /v1/offers with unit_ids[] (legal assent + auth required; not subscriber-only)
 
 Rules/side effects (locked):
 
@@ -202,7 +202,7 @@ Offer status starts pending; holds are active for held units.
 
 Failure handling:
 
-403 subscriber_required: must be subscribed to create offers.
+422 legal_required: accept current legal version (see GET /v1/meta) and retry.
 
 409 invalid_state_transition / conflict: adjust your offer or thread usage and retry with new Idempotency-Key.
 
@@ -211,7 +211,7 @@ Failure handling:
 4.4 Negotiation: Counter-offer (threaded)
 Intent: revise offer terms while keeping a single negotiation thread.
 
-POST /v1/offers/{offer_id}/counter (subscriber-only)
+POST /v1/offers/{offer_id}/counter (legal assent + auth required; not subscriber-only)
 
 Rules/side effects (locked):
 
@@ -240,15 +240,13 @@ offer status mutually_accepted
 
 caller is a party
 
-both nodes are subscribers (fairness rule)
-
 If not mutually accepted: 409 offer_not_mutually_accepted
 
-If either party not subscriber: 403 subscriber_required
+If caller lacks legal assent/version: 422 legal_required
 
 Success:
 
-Response includes contact email and optional phone.
+Response includes contact email, optional phone, and optional unverified messaging_handles[].
 
 4.6 Rejecting an offer (free recipients allowed)
 Intent: allow recipients to reject inbound offers even without subscription.
@@ -333,11 +331,31 @@ POST /v1/search/listings
 
 POST /v1/search/requests
 
-Subscriber-only + credit-metered; charged only on HTTP 200.
+Entitled-spender-only (`active subscription` OR `active trial`) + credit-metered; charged only on HTTP 200.
+
+Budget behavior is explicit and machine-readable:
+
+- Send `budget.credits_requested` on each search call.
+- Server guarantees `budget.credits_charged <= budget.credits_requested`.
+- When requested work exceeds budget, response is still 200 with:
+  - `budget.was_capped=true`
+  - `budget.cap_reason="insufficient_budget"`
+  - actionable `budget.guidance`
+- Use `budget.coverage.*` to decide whether to raise budget or narrow query.
 
 Filters are scope-validated; unknown keys must be rejected with 422.
 
 Broadening is explicit (broadening.allow/level), paid, and auditable.
+
+Anti-scrape economics are intentional:
+
+- Page 1 is included in base cost.
+- Later pages have escalating add-ons; deep paging is restrictive and can trigger stricter rate limiting.
+- Prefer targeted follow-up (`target`) and per-node category drilldown over broad deep pagination.
+
+Category suggestions:
+
+- If a needed category key is missing, submit a suggestion through support channels documented on `/support`.
 
 Search logs must not store raw queries by default; store redacted + hash only; retention rules apply.
 
@@ -384,6 +402,29 @@ request idempotency keys + resulting resource ids
 offer/thread ids and hold expiry
 
 metering outcomes (credits spent) for search/expansion calls
+
+11a) Offer lifecycle events (webhooks + polling)
+
+- Register optional `event_webhook_url` via `PATCH /v1/me` for best-effort webhook delivery.
+- Poll fallback: `GET /events?since=<cursor>&limit=<n>`.
+- Event types:
+  - `offer_created`
+  - `offer_countered`
+  - `offer_accepted`
+  - `offer_cancelled`
+  - `offer_contact_revealed`
+
+11b) Practical onboarding examples
+
+- Delivery/Transport example:
+  - Publish a `ship_to` listing with `origin_region`/`dest_region`.
+  - Search with narrow filters + budget cap.
+  - Use targeted follow-up + category drilldown before making offer.
+- Mixed-consideration example:
+  - Keep monetary and non-monetary terms in offer `note` as structured text.
+  - Fabric enforces state/holds; settlement and identity verification remain off-platform.
+
+Saved searches/alerts are planned future capability; no timeline is committed in MVP.
 
 11) Reference endpoint index (MVP)
 Bootstrap + keys:
@@ -478,6 +519,10 @@ GET /v1/offers/{offer_id}
 
 POST /v1/offers/{offer_id}/reveal-contact
 
+Offer events:
+
+GET /events
+
 Referrals:
 
 POST /v1/referrals/claim
@@ -494,5 +539,4 @@ POST /v1/admin/credits/adjust
 
 POST /v1/admin/projections/rebuild
 
-makefile
-Copy code
+GET /internal/admin/daily-metrics

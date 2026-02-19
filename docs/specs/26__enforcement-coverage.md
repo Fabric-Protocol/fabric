@@ -1,6 +1,6 @@
 # Enforcement Coverage Checklist (MVP)
 
-Last updated: 2026-02-18
+Last updated: 2026-02-19
 
 This checklist maps endpoint groups to required enforcement behavior from `10__invariants.md` and `20__api-contracts.md`.
 
@@ -23,16 +23,19 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 | `GET /v1/units/:id` | ApiKey | No | No | (default read) | `401 unauthorized`, `404 not_found`, `403 forbidden` |
 | `GET /v1/requests` | ApiKey | No | No | (default read) | `401 unauthorized` |
 | `GET /v1/requests/:id` | ApiKey | No | No | (default read) | `401 unauthorized`, `404 not_found`, `403 forbidden` |
-| `POST /v1/offers` | ApiKey | Yes | No | `offer_write` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `409 conflict`, `422 validation_error`, `429 rate_limit_exceeded` |
-| `POST /v1/offers/:id/counter` | ApiKey | Yes | No | `offer_write` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `404 not_found`, `422 validation_error`, `429 rate_limit_exceeded` |
-| `POST /v1/offers/:id/accept` | ApiKey | Yes | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 subscriber_required`, `404 not_found`, `409 invalid_state_transition`, `429 rate_limit_exceeded` |
+| `POST /v1/offers` | ApiKey | Legal assent required (not subscriber-only) | No | `offer_write` (per node, minutely) | `401 unauthorized`, `409 conflict`, `422 validation_error`, `422 legal_required`, `429 rate_limit_exceeded` |
+| `POST /v1/offers/:id/counter` | ApiKey | Legal assent required (not subscriber-only) | No | `offer_write` (per node, minutely) | `401 unauthorized`, `404 not_found`, `422 validation_error`, `422 legal_required`, `429 rate_limit_exceeded` |
+| `POST /v1/offers/:id/accept` | ApiKey | Legal assent required (not subscriber-only) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `409 invalid_state_transition`, `422 legal_required`, `429 rate_limit_exceeded` |
 | `POST /v1/offers/:id/reject` | ApiKey | No (auth required) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `429 rate_limit_exceeded` |
-| `POST /v1/offers/:id/cancel` | ApiKey | No (auth required) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `429 rate_limit_exceeded` |
-| `POST /v1/offers/:id/reveal-contact` | ApiKey | Preconditions require both subscribers | No | `reveal_contact` (per node, hourly) | `401 unauthorized`, `403 subscriber_required`, `409 offer_not_mutually_accepted`, `429 rate_limit_exceeded` |
+| `POST /v1/offers/:id/cancel` | ApiKey | Legal assent required (not subscriber-only) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `422 legal_required`, `429 rate_limit_exceeded` |
+| `POST /v1/offers/:id/reveal-contact` | ApiKey | Legal assent + mutual acceptance preconditions (not subscriber-only) | No | `reveal_contact` (per node, hourly) | `401 unauthorized`, `403 forbidden`, `409 offer_not_mutually_accepted`, `422 legal_required`, `429 rate_limit_exceeded` |
+| `GET /events` | ApiKey | No | No | (default read) | `401 unauthorized`, `422 validation_error` |
+| `GET /internal/admin/daily-metrics` | Admin key | Admin only | No | (default read) | `401 unauthorized` |
 | `POST /v1/auth/keys` | ApiKey | No | No | `auth_key_issue` (per node, daily) | `401 unauthorized`, `422 validation_error`, `429 rate_limit_exceeded` |
 
 ## Notes
-- Spend-gated endpoints require active subscription or active trial; credits alone do not bypass gating.
+- Spend-gated endpoints require active subscription or active trial; credits alone do not bypass spend-gated search/inventory actions.
+- Offer lifecycle endpoints are no longer subscriber-gated; legal assent + auth + rate limits are enforced instead.
 - Metered endpoints charge credits only on successful HTTP 200 responses.
 - Search includes request-level spend ceiling via `budget.credits_requested`; when capped, response is HTTP 200 with `budget.was_capped=true` and actionable guidance.
 - The `search_scrape_guard` rule is triggered by prohibitive paging (page 6+) and/or repeated broad queries.

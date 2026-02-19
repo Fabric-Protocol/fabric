@@ -10,13 +10,13 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 
 - **Auth**: unless noted, endpoints are authenticated via `Authorization: ApiKey <api_key>`.
 - **Auth key state**: revoked API keys return `403 forbidden`; missing/invalid keys return `401 unauthorized`.
-- **Admin auth**: endpoints under `/v1/admin/*` require `X-Admin-Key: <admin_key>`.
+- **Admin auth**: endpoints under `/v1/admin/*` and `/internal/admin/*` require `X-Admin-Key: <admin_key>`.
 - **Idempotency-Key**: required on all non-GET endpoints except webhooks.
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Gating**: spend-gated endpoints allow active subscription OR active trial entitlement; offer/reveal gating remains subscriber-only.
+- **Gating**: spend-gated endpoints allow active subscription OR active trial entitlement; offer lifecycle endpoints require legal assent + auth + rate-limit controls (not subscriber-only).
 
 ---
 
@@ -101,6 +101,13 @@ Creates a Node and issues the first API key; applies one-time signup grant.
   "email": "string|null",
   "referral_code": "string|null",
   "recovery_public_key": "string|null",
+  "messaging_handles": [
+    {
+      "kind": "string",
+      "handle": "string",
+      "url": "https://example.com|null"
+    }
+  ],
   "legal": {
     "accepted": true,
     "version": "2026-02-17"
@@ -117,6 +124,14 @@ Response 200
     "email": "string|null",
     "email_verified_at": "iso|null",
     "recovery_public_key_configured": true,
+    "messaging_handles": [
+      {
+        "kind": "string",
+        "handle": "string",
+        "url": "https://example.com|null"
+      }
+    ],
+    "event_webhook_url": "https://example.com/webhook|null",
     "status": "ACTIVE|SUSPENDED",
     "plan": "free|basic|pro|business",
     "is_subscriber": false,
@@ -417,6 +432,14 @@ Response 200
     "email": "string|null",
     "email_verified_at": "iso|null",
     "recovery_public_key_configured": true,
+    "messaging_handles": [
+      {
+        "kind": "string",
+        "handle": "string",
+        "url": "https://example.com|null"
+      }
+    ],
+    "event_webhook_url": "https://example.com/webhook|null",
     "status": "ACTIVE|SUSPENDED",
     "plan": "free|basic|pro|business",
     "is_subscriber": true,
@@ -455,7 +478,24 @@ Purpose
 Update basic node profile fields.
 
 Request
-{ "display_name": "string|null", "email": "string|null", "recovery_public_key": "string|null" }
+{
+  "display_name": "string|null",
+  "email": "string|null",
+  "recovery_public_key": "string|null",
+  "messaging_handles": [
+    {
+      "kind": "string(1..32, [A-Za-z0-9._-]+)",
+      "handle": "string(1..128)",
+      "url": "absolute URL|null"
+    }
+  ],
+  "event_webhook_url": "absolute URL|null"
+}
+
+Validation notes
+
+- `messaging_handles` max length: 10.
+- Server normalizes `messaging_handles` values (trimmed; `kind` lower-cased) before persistence and reveal responses.
 
 Response 200
 
@@ -1223,7 +1263,7 @@ Offer outcomes persisted:
 - Rejected, cancelled, and expired outcomes are persisted as `rejected`, `cancelled`, and `expired`.
 - These persisted statuses are returned by offer APIs (`POST /v1/offers/*`, `GET /v1/offers`, `GET /v1/offers/{offer_id}`).
 
-10) Offers (subscriber-only create/accept/counter; free recipients can reject)
+10) Offers (legal-gated, auth-gated, rate-limited)
 
 Offer status enum (locked):
 pending | accepted_by_a | accepted_by_b | mutually_accepted | rejected | cancelled | countered | expired
@@ -1255,9 +1295,9 @@ Auth
 
 Required
 
-Subscriber-only
+Legal assent required
 
-Yes
+Yes (`legal_required` if caller has not accepted current legal version)
 
 Idempotency-Key
 
@@ -1291,20 +1331,20 @@ If thread_id is present, this is a counter-offer within an existing thread.
 
 Errors
 
-403 subscriber_required
-
 409 invalid_state_transition / conflict
 
 422 validation_error
+
+422 legal_required
 
 POST /v1/offers/{offer_id}/counter
 Auth
 
 Required
 
-Subscriber-only
+Legal assent required
 
-Yes
+Yes (`legal_required` if caller has not accepted current legal version)
 
 Idempotency-Key
 
@@ -1329,14 +1369,22 @@ Sets original offer status to countered.
 
 Releases original holds; creates new holds for counter-offer.
 
+Errors
+
+404 not_found
+
+422 validation_error
+
+422 legal_required
+
 POST /v1/offers/{offer_id}/accept
 Auth
 
 Required
 
-Subscriber-only
+Legal assent required
 
-Yes
+Yes (`legal_required` if caller has not accepted current legal version)
 
 Idempotency-Key
 
@@ -1361,14 +1409,24 @@ If other side already accepted → mutually_accepted.
 
 On mutually_accepted, holds become committed (units remain unavailable).
 
+Errors
+
+403 forbidden
+
+404 not_found
+
+409 invalid_state_transition
+
+422 legal_required
+
 POST /v1/offers/{offer_id}/reject
 Auth
 
 Required
 
-Subscriber-only
+Legal assent required
 
-NO (allowed for non-subscribers)
+No (rejection remains available to authenticated non-subscribers)
 
 Idempotency-Key
 
@@ -1390,6 +1448,12 @@ Rules / side effects
 Offer status becomes rejected (terminal).
 
 Releases holds immediately.
+
+Errors
+
+403 forbidden
+
+404 not_found
 
 POST /v1/offers/{offer_id}/cancel
 Auth
@@ -1416,6 +1480,14 @@ Rules / side effects
 Only the offer creator can cancel.
 
 Cancelling releases holds immediately.
+
+Errors
+
+403 forbidden
+
+404 not_found
+
+422 legal_required
 
 GET /v1/offers
 Auth
@@ -1467,9 +1539,9 @@ Auth
 
 Required
 
-Subscriber-only
+Legal assent required
 
-Implied by preconditions (both parties must be subscribers)
+Yes (`legal_required` if caller has not accepted current legal version)
 
 Idempotency-Key
 
@@ -1489,21 +1561,73 @@ Offer status is mutually_accepted.
 
 Caller is a party to the offer.
 
-Both nodes are subscribers (fairness rule).
-
 Errors
 
 409 if not mutually accepted (error.code="offer_not_mutually_accepted")
 
-403 if either party not subscriber (error.code="subscriber_required")
+403 if caller is not a party (error.code="forbidden")
+
+422 legal_required if caller has not accepted current legal version
 
 Response 200
 {
   "contact": {
     "email": "string",
-    "phone": "string|null"
+    "phone": "string|null",
+    "messaging_handles": [
+      {
+        "kind": "string",
+        "handle": "string",
+        "url": "https://example.com|null"
+      }
+    ]
   }
 }
+
+12b) Offer lifecycle events (webhook + polling fallback)
+
+Node profile event webhook registration:
+
+- `PATCH /v1/me` supports optional `event_webhook_url` to register a per-node webhook sink.
+- Deliveries are best-effort and audited server-side.
+
+`GET /events`
+
+Auth
+
+Required
+
+Metering
+
+None
+
+Purpose
+
+Poll offer lifecycle events for the authenticated node using cursor pagination.
+
+Query
+
+`since` (opaque cursor|null), `limit` (1..100, default 50)
+
+Response 200
+{
+  "events": [
+    {
+      "id": "uuid",
+      "type": "offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed",
+      "offer_id": "uuid",
+      "actor_node_id": "uuid",
+      "recipient_node_id": "uuid",
+      "payload": {},
+      "created_at": "iso"
+    }
+  ],
+  "next_cursor": "string|null"
+}
+
+Errors
+
+422 validation_error (`invalid_since_cursor`, `limit_out_of_range`)
 
 13) Referrals (claim + award)
 POST /v1/referrals/claim
@@ -1777,6 +1901,54 @@ Response 200
   "counts": {
     "public_listings_written": 0,
     "public_requests_written": 0
+  }
+}
+
+GET /internal/admin/daily-metrics
+Auth
+
+Admin (X-Admin-Key)
+
+Metering
+
+None
+
+Purpose
+
+Return 24-hour operational digest metrics for abuse, credits/billing health, liquidity, reliability, and webhook delivery health.
+
+Response 200
+{
+  "generated_at": "iso",
+  "window_hours": 24,
+  "abuse": {
+    "suspended_nodes": 0,
+    "active_takedowns": 0,
+    "recovery_attempts_exceeded": 0
+  },
+  "stripe_credits_health": {
+    "stripe_events_received": 0,
+    "stripe_processing_errors": 0,
+    "credit_grants": 0,
+    "credit_debits": 0,
+    "credit_net": 0
+  },
+  "liquidity": {
+    "public_listings": 0,
+    "public_requests": 0,
+    "offers_created": 0,
+    "offers_mutually_accepted": 0
+  },
+  "reliability": {
+    "searches": 0,
+    "active_nodes": 0,
+    "active_api_keys": 0
+  },
+  "webhook_health": {
+    "stripe_events_received": 0,
+    "stripe_processing_errors": 0,
+    "offer_webhook_deliveries": 0,
+    "offer_webhook_failures": 0
   }
 }
 

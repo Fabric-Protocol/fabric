@@ -32,7 +32,7 @@ If any requirement conflicts, resolve in this order:
 - **Search**: authenticated, entitled-spender-only (`active subscription` OR `active trial`), credit-metered query over projections (two endpoints: listings vs requests).
 - **Offer**: structured negotiation action targeting either a Unit or a Request (MVP offers are unit-based via `unit_ids` lines); includes state machine, holds summary, concurrency version.
 - **Hold**: reservation record created on offer creation (partial holds allowed); released/committed/expired by offer lifecycle rules.
-- **Contact reveal**: controlled handoff returning contact fields only after mutual acceptance and subscriber gating.
+- **Contact reveal**: controlled handoff returning contact fields only after mutual acceptance; caller must satisfy legal/auth/rate-limit controls.
 - **Credits**: metering currency; primarily charged on search and certain metered reads. Ledger is authoritative.
 - **Broadening**: explicit paid expansion of search beyond narrow defaults; must be auditable.
 - **Scope**: primary modality enum that determines required publish fields and allowed search filters.
@@ -173,7 +173,7 @@ Projections are allowlisted and must never expose precise geo or contact info.
 
 No in-platform messaging in MVP; use structured actions + controlled contact handoff.
 
-Contact reveal only after mutual acceptance and fails until both parties are subscribers.
+Contact reveal only after mutual acceptance; subscriber status is not a prerequisite for offer progression in MVP.
 
 Search is entitled-spender-only (`active subscription` OR `active trial`), credit-metered, and split into two endpoints (/search/listings and /search/requests).
 

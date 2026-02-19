@@ -26,15 +26,21 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 - `GET /v1/public/nodes/{node_id}/listings/categories/{category_id}`
 - `GET /v1/public/nodes/{node_id}/requests/categories/{category_id}`
 
-### 1.3 Subscriber-only actions
+### 1.3 Legal-assent-gated offer lifecycle actions
 - `POST /v1/offers`
 - `POST /v1/offers/{offer_id}/counter`
 - `POST /v1/offers/{offer_id}/accept`
+- `POST /v1/offers/{offer_id}/cancel`
 - `POST /v1/offers/{offer_id}/reveal-contact`
 
-### 1.4 Two-sided subscriber requirement
-- Contact reveal requires both offer parties to be subscribers.
-- If either side is non-subscriber, return `403 subscriber_required`.
+Rules:
+- These endpoints are **not** subscriber-only.
+- Caller must satisfy legal assent/version checks (`422 legal_required` when missing/outdated).
+- Caller must pass auth/not-suspended checks and endpoint rate limits.
+
+### 1.4 Offer rejection availability
+- `POST /v1/offers/{offer_id}/reject` remains available to authenticated nodes (including non-subscribers).
+- Reject remains authorization-gated by participation in the offer thread.
 
 ## 2) Credits and metering
 ### 2.1 Charging model

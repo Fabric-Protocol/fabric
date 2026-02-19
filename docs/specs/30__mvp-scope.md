@@ -164,11 +164,9 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 ## Offers + deal lifecycle
 
 ### Gating (final)
-- Create Offer: subscriber-only
-- Accept Offer: subscriber-only
-- Counter Offer: subscriber-only
-- Reject Offer: allowed for free recipients (still requires auth)
-- Free users may create/publish Requests (so they can receive Offers and be incentivized to subscribe to accept)
+- Create/accept/counter/cancel/reveal-contact: legal-assent + auth + rate-limit gated (not subscriber-only).
+- Reject Offer: allowed for authenticated recipients (including non-subscribers).
+- Free users may create/publish Requests.
 
 ### Offer status model (locked)
 - `pending`
@@ -199,8 +197,8 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 ## Contact reveal
 
 - Contact reveal occurs after **mutual acceptance**.
-- Reveal **fails until both parties are subscribers** (fairness rule).
-- Contact fields: **email required**, phone optional.
+- Reveal requires caller legal assent and party authorization checks.
+- Contact fields: **email required**, phone optional, `messaging_handles[]` optional (user-provided/unverified).
 - Safety disclaimers shown at publish, offer, and contact reveal.
 
 ---

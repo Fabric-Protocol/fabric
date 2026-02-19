@@ -53,7 +53,7 @@ This document is **normative**: requirements here are **MUST / MUST NOT** unless
 
 ## 8) Contact reveal is controlled by handoff rules
 - Contact information **MUST** be revealed only after mutual acceptance.
-- Contact reveal **MUST** fail until both parties are subscribers (fairness rule).
+- Contact reveal **MUST** enforce caller authorization and current legal assent.
 - Safety disclaimers **MUST** be included at publish, offer, and reveal.
 
 ---
@@ -105,7 +105,7 @@ MVP note:
 ---
 
 ## 14) Subscription + abuse controls are built-in (incl. rate limits)
-- Offer create / accept / counter **MUST** be subscriber-only and rate-limited.
+- Offer create / accept / counter / cancel / reveal-contact **MUST** be auth-gated, legal-assent-gated, and rate-limited.
 - Offer recipients **MAY** reject even if not subscribed (still authenticated as a Node).
 - Free users **MAY** create/publish Requests (growth wedge).
 - Admin controls **MUST** exist for suspension/takedown and anomaly response hooks.
