@@ -39,6 +39,7 @@
 ## Canonical objects
 
 - **Units** (private-by-default). Create requires only `title/name`. Other fields optional (quantity nullable; measure optional until publish; type required at publish).
+- Units include optional, non-binding `estimated_value` (number|null).
 - **Requests** are first-class canonical objects (private-by-default), with publish/unpublish and their own projections.
 - **Locations** are optional metadata.
   - Public projections use only coarse `location_text_public` or structured regions (**never precise geo**).
@@ -54,7 +55,7 @@
   - no precise geo
   - no contact info
   - no addresses
-- Projections allow: `public_summary`, `type`, `scope_primary`, `scope_secondary[]`, `condition`, `quantity` (nullable), `measure`, coarse availability fields.
+- Projections allow: `public_summary`, `type`, `scope_primary`, `scope_secondary[]`, `condition`, `quantity` (nullable), `measure`, coarse availability fields, and optional `estimated_value` (non-binding).
 
 ---
 
@@ -88,6 +89,18 @@ Notes:
 - Metered endpoints are covered by the global write-safety rule:
   - **Idempotency-Key REQUIRED** to avoid double-charges on retries.
 
+### Go-live matching lock (Phase 0.5)
+Allowed:
+- structured eligibility filters (scope-specific)
+- lexical/keyword ranking (FTS) + recency (and scope-specific tie-breakers like distance for local)
+
+Disallowed at go-live:
+- semantic/vector retrieval
+- query expansion/synonyms/lexical override inputs
+- any “semantic infrastructure” in the request/implementation path
+
+Requests that attempt disallowed search inputs MUST be rejected with `422 validation_error`.
+
 ### Scope matrix (deterministic)
 - `local_in_person`:
   - Required search filters: `center + radius_miles` (or explicit `regions`; see contracts)
@@ -103,6 +116,9 @@ Notes:
 - `digital_delivery`:
   - Required: `country_code` (default user country); optional delivery_format
   - Ranking: FTS then recency
+- `OTHER`:
+  - Required: `scope_notes`
+  - Ranking: FTS then recency
 
 ### MVP filters
 - keyword (FTS), scope (incl. secondary), type
@@ -112,19 +128,17 @@ Notes:
 - distance band (local only)
 - route specificity (ship only)
 
-### Credit metering (locked form)
-- Linear per-page pricing:
-  - `cost_per_page = base_page_cost + active_broadening_adders`
-- Broadening increases **per-page** cost (not a one-time fee).
-
-### Broadening (locked principle)
-- Defaults are narrow; broadening expands results deterministically.
-- Broadening dimensions can include:
-  - radius (local)
-  - recency window
-  - region specificity (ship/remote/digital, only where publisher coverage allows)
-  - FTS cutoff relaxation
-  - tag/category relaxation
+### Credit metering (Phase 0.5)
+- Base cost applies to page 1.
+- Broadening increases cost additively (see contracts).
+- Pagination add-ons (anti-scrape aligned):
+  - pages 2–3: small add-on
+  - pages 4–5: large add-on
+  - pages 6+: prohibitive add-on (typically capped by request budget)
+- Search requests include a request-level spend ceiling:
+  - `budget.credits_requested` (hard cap)
+  - response returns `budget.credits_charged <= credits_requested`
+  - capped executions return 200 with `budget.was_capped=true` and guidance
 
 ### Search privacy + retention (MVP locked)
 - Do **not** store raw search queries by default.
@@ -136,6 +150,14 @@ Notes:
   - **Hot retention:** 30 days queryable in primary DB.
   - **Archive:** up to 1 year (access-controlled; not in primary DB).
   - **Delete after 1 year** (no indefinite retention of event logs).
+
+---
+
+## Visibility (MVP)
+- Persist visibility events:
+  - `search_impression` for each unit returned in search results (includes `search_id` and position).
+  - `detail_view` emitted on unit/request detail reads (private detail endpoints).
+- Offer outcomes must persist: `accepted|rejected|expired|cancelled` (plus intermediate statuses per offer state model).
 
 ---
 
@@ -183,10 +205,11 @@ Notes:
 
 ---
 
-## Node “inventory expansion”
+## Node “inventory expansion” + drilldown
 
 - Dedicated endpoints to view all public requests/listings for a Node after a hit (to support multi-unit offers).
 - Metered as a search-like call (credits + pagination), and rate-limited.
+- Per-category drilldown endpoints exist (cheap, paginated, rate-limited) for node inventory exploration by category.
 
 ---
 
@@ -231,7 +254,6 @@ Notes:
 - In-platform messaging
 - reputation
 - price/value range filters
-- pagination cost escalation
 - advanced verification gating
 - dispute resolution workflow
 
@@ -254,23 +276,9 @@ Notes:
 
 1. Node A bootstraps (Node created, API key issued, 200 credits granted once).
 2. Node A creates a Request and publishes it (projection created). (Free allowed.)
-3. Node B (active subscriber or active trial) runs a paid search and receives results (credits deducted per-page with current broadenings).
+3. Node B (active subscriber or active trial) runs a paid search and receives results (credits deducted per-page with current broadenings and pagination add-ons).
    - This is done via `POST /v1/search/requests` when Node B is looking to fulfill requests,
    - and/or `POST /v1/search/listings` when Node B is looking to acquire listings.
 4. Node B opens the hit and can view Node A’s other public Requests/Listings via node expansion (metered/rate-limited).
-5. Node B creates an Offer (subscriber + rate limit enforced); hold created immediately (partial holds allowed).
-6. Node A counters; Node B accepts; Node A accepts (state transitions correct → mutual acceptance); hold becomes committed.
-7. Contact reveal is attempted:
-   - If either party is not a subscriber, reveal fails with a clear error and upgrade requirement.
-   - When both are subscribers, contact info is revealed (email required, phone if present).
-8. All auditable events are logged: search, credit spend, publish/unpublish, offer/counter/accept/reject, hold lifecycle, contact reveal attempt/outcome, admin actions.
-
-### Non-functional acceptance
-
-- Projections contain no sensitive fields (no contact info, no precise geo, no addresses).
-- Audit/event logs:
-  - Search text is redacted-at-ingestion (no raw query by default).
-  - 30d hot + 1y archive + delete after 1y.
-- Credit metering and rate limiting work under load and cannot be bypassed by pagination/broadening abuse.
-- Stripe webhooks are idempotent; credits/subscription state update correctly.
-- Referral credit award triggers on first paid subscription invoice via webhook; claim is prevented after first paid event.
+5. Node B can drill into Node A’s inventory by category via the per-category drilldown endpoints (cheap, paginated, rate-limited).
+6. Visibility events are persisted for impressions and detail views; offer outcomes persist final states.

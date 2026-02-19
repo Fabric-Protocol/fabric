@@ -23,6 +23,8 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 - `POST /v1/search/requests`
 - `GET /v1/public/nodes/{node_id}/listings`
 - `GET /v1/public/nodes/{node_id}/requests`
+- `GET /v1/public/nodes/{node_id}/listings/categories/{category_id}`
+- `GET /v1/public/nodes/{node_id}/requests/categories/{category_id}`
 
 ### 1.3 Subscriber-only actions
 - `POST /v1/offers`
@@ -42,14 +44,33 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 
 ### 2.2 Base costs
 - `SEARCH_CREDIT_COST = 2`
-- Search listing/request call base: 2 credits.
+- Search listing/request call base (page 1): 2 credits.
 - Public node inventory expansion call base: 2 credits.
+- Node per-category drilldown call base: cheap fixed cost (see 2.5).
 
-### 2.3 Broadening costs
+### 2.3 Search budget ceiling (request-level)
+- Search requests include `budget.credits_requested` (hard ceiling for that call).
+- Response includes `budget.credits_charged` (must be `<= credits_requested`).
+- If the ceiling prevents full execution (paging/broadening), return HTTP 200 with:
+  - `budget.was_capped=true`
+  - `budget.cap_reason="insufficient_budget"`
+  - actionable `budget.guidance`
+
+### 2.4 Broadening costs (search)
 - Broadening add-on cost equals requested level.
-- Formula: `estimated_cost = SEARCH_CREDIT_COST + broadening.level`
+- Broadening cost is reflected in `budget.breakdown.broadening_cost`.
 
-### 2.4 Ledger behavior
+### 2.5 Pagination add-on economics (search)
+- Page 1: included in base search cost (no page add-on).
+- Pages 2–3: small add-on.
+- Pages 4–5: large add-on.
+- Pages 6+: prohibitive (intended to cap via request budget for typical budgets).
+- Prohibitive pages are additionally protected via server-side detection/rate limiting (see 3).
+
+Implementation note:
+- The server surfaces `budget.breakdown.page_index` and `budget.breakdown.page_cost`.
+
+### 2.6 Ledger behavior
 - Search/expand writes negative entries (`debit_search`, `debit_search_page`).
 - Grants write positive entries (`grant_signup`, `grant_trial`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
 - Balance is authoritative `SUM(amount)` per node.
@@ -57,8 +78,10 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 ## 3) Rate limits (default env-backed values)
 - Bootstrap: `3/hour`
 - Search: `20/min`
+- Search scrape guard (triggered by prohibitive paging or repeated broad queries): stricter than `search` (returns `429 rate_limit_exceeded`)
 - Credits quote: `60/min`
 - Inventory expand: `6/min`
+- Node per-category drilldown: minutely per node (cheap + paginated + rate-limited)
 - Offer create/counter: `30/min`
 - Offer accept/reject/cancel: `60/min`
 - Reveal contact: `10/hour`
