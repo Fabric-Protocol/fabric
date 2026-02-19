@@ -197,10 +197,7 @@ Last updated: 2026-02-19
   - no lexical override/expansion and no semantic/vector infrastructure at go-live
 - [ ] Keep go-live supply-vs-demand parity:
   - same mechanics and pricing for both sides in Phase 0.5
-- [ ] Add top-level node targeting in search request:
-  - `target { node_id?, username? }`
-  - restrict to that node while scope filters still apply
-  - price as cheap second-order query path
+- [ ] Define canonical pricing rule for target-constrained search (`target { node_id?, username? }`) in specs, then implement and test low-cost follow-up pricing.
 - [ ] Ensure primary search results include per-node non-zero category counts.
 - [ ] Implement node per-category drilldown behavior:
   - cheap pricing, paginated, rate-limited

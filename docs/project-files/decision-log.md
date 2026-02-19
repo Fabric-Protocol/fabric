@@ -2,6 +2,15 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-19 - Targeted-search pricing must be canonically specified before implementation
+Decision:
+- Define target-constrained search pricing (`target { node_id?, username? }`) in canonical specs before implementing low-cost follow-up pricing behavior in code.
+Rationale:
+- Prevents ad-hoc pricing behavior that can drift from contracts.
+- Keeps search economics machine-readable and testable across spec, code, and tests.
+Scope/impact:
+- API, economics, onboarding.
+
 ## 2026-02-19 - 402 is economic gating; 403 is entitlement gating
 Decision:
 - Use HTTP `402` only for economic gating (e.g., `credits_exhausted`) and HTTP `403` for permission/entitlement gating.
