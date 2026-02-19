@@ -1,6 +1,6 @@
 # AGENTS.md — Fabric API
 
-This repo implements the **Fabric backend/API**. Fabric is agent-native: Nodes are first-class principals, and many callers will be autonomous agents.
+This repo implements the Fabric backend/API. Fabric is agent-native: Nodes are first-class principals, and many callers will be autonomous agents.
 
 ## 0) Source-of-truth specs (read in this order)
 
@@ -9,12 +9,11 @@ All implementation MUST conform to these docs under `docs/specs/` (precedence or
 2. `10__invariants.md`
 3. `20__api-contracts.md`
 4. `22__projections-and-search.md`
-5. `25__plans-credits-gating.md
+5. `25__plans-credits-gating.md`
 6. `30__mvp-scope.md`
 7. `40__vision.md` (non-normative)
 8. `01__implementation-map.md` (implementation guidance; non-authoritative vs items 1–6)
 9. `02__agent-onboarding.md` (onboarding guidance; non-authoritative vs items 1–6)
-10. `40__vision.md` (non-normative)
 
 If anything conflicts, update the later doc(s). Do not “resolve” by inventing new behavior in code.
 
@@ -42,7 +41,9 @@ If anything conflicts, update the later doc(s). Do not “resolve” by inventin
 All non-2xx must be:
 ```json
 { "error": { "code": "STRING_CODE", "message": "human readable", "details": {} } }
+
 3.2 Auth
+
 Normal endpoints:
 
 Authorization: ApiKey <api_key>
@@ -52,12 +53,15 @@ Admin endpoints:
 X-Admin-Key: <admin_key>
 
 3.3 Soft delete
+
 Canonical objects use deleted_at tombstones. Default list endpoints exclude deleted.
 
 3.4 Projections are derived (never edited directly by callers)
+
 Only publish/unpublish and rebuild actions change projections.
 
 4) Where logic should live (layering)
+
 Agent instruction: do NOT scatter business rules in route handlers.
 
 Required layering:
@@ -70,26 +74,24 @@ db: queries/transactions only, no business rules
 
 shared http: auth, idempotency, error helpers, metering middleware
 
-5) Implementation tasks (how to work safely)
-When making changes:
+5) Run-to-completion + context hygiene (MUST)
 
-Identify the exact spec section that governs the behavior.
+Default assumption: Codex does everything it possibly can (implement, run tests, collect logs, minimal fixes, retry) and only stops for true human-only blockers.
 
-Implement the smallest change that conforms to the spec.
+Use bounded execution:
 
-Add/adjust tests for:
+attempt → if fail, capture logs → root-cause → minimal fix → retry
 
-status codes
+max 3 cycles per step, then BLOCKED with exact missing human action.
 
-error envelope
+No invalidation rule: do not output SQL/commands/instructions unless it is the immediate next step and all required inputs are present.
 
-idempotency replay behavior (same key/same payload)
+If any input is missing (files, logs, contract types), request it first (or provide one command to fetch it).
 
-metering “charge only on 200” (if endpoint is metered)
-
-Update docs/specs only if the spec itself is changing (not for implementation detail).
+Be context-frugal: avoid long speculative plans; provide 1–2 concrete next steps only.
 
 6) Required tests for any agent-visible behavior
+
 Minimum test checklist per touched endpoint:
 
 success response shape matches contract
@@ -113,6 +115,7 @@ success decrements credits and writes ledger
 failure does not decrement
 
 7) Out of scope (MVP)
+
 No escrow / payment intermediation
 
 No in-app chat
@@ -124,18 +127,27 @@ No background matching unless explicitly specified
 No “combined” search endpoint (listings and requests are separate)
 
 8) Repo workflow expectations
+
 Keep changes minimal and spec-aligned.
 
 Do not refactor unrelated files in the same change.
 
 Prefer additive changes over wide rewrites.
 
-If a decision is required (e.g., plan thresholds), do not guess; leave a TODO and document the required decision in docs/specs/decision-log.md (or the repo’s chosen decision log file).
+If a decision is required (e.g., plan thresholds), do not guess; leave a TODO and record the needed decision in docs/project-files/decision-log.md.
 
-Required Codex instruction header fields:
+Required Codex instruction header fields
+
 Model
+
 Reasoning (low/medium/high/extra high)
+
 IDE Context (what it should rely on: repo files only vs include Project Files/spec pack)
+
 Planning (on/off)
+
 Execution (local vs cloud)
+
 Permissions (default vs full access)
+
+Run-to-completion (yes; bounded checklist + retries; stop only for human-only blockers)
