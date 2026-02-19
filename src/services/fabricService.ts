@@ -386,13 +386,55 @@ export const fabricService = {
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
   async search(nodeId: string, kind: 'listings' | 'requests', hasSpendEntitlement: boolean, body: any, idemKey: string) {
     if (!hasSpendEntitlement) return { forbidden: true };
-    const cost = config.searchCreditCost + (body.broadening?.level ?? 0);
+    const targetResolution = await resolveSearchTargetNode(body.target ?? null);
+    if (targetResolution.validationError) return { validationError: targetResolution.validationError };
+    const targetNodeId = targetResolution.targetNodeId;
+
+    const baseSearchCost = config.searchCreditCost;
+    const broadeningLevel = Number(body?.broadening?.level ?? 0);
+    const broadeningCost = broadeningLevel;
+    const pageIndex = body?.cursor ? 1 : 0;
+    const pageCost = baseSearchCost + broadeningCost;
+    const creditsRequested = Number(body?.budget?.credits_requested ?? 0);
+
     const balance = await repo.creditBalance(nodeId);
-    if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
-    const rows = await repo.searchPublic(kind, body.scope, body.limit ?? 20, body.cursor ?? null, nodeId);
-    await repo.addCredit(nodeId, body.cursor ? 'debit_search_page' : 'debit_search', -cost, { scope: body.scope }, idemKey);
-    await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, body.broadening?.level ?? 0, cost);
-    return { search_id: crypto.randomUUID(), scope: body.scope, limit: body.limit ?? 20, cursor: body.cursor ?? null, broadening: body.broadening ?? { level: 0, allow: false }, applied_filters: body.filters ?? {}, items: rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } })), has_more: rows.length === (body.limit ?? 20) };
+    if (balance < pageCost) return { creditsExhausted: { credits_required: pageCost, credits_balance: balance } };
+
+    const isCapped = pageCost > creditsRequested;
+    const effectiveLimit = isCapped ? 0 : (body.limit ?? 20);
+    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, body.cursor ?? null, nodeId, targetNodeId);
+    const creditsCharged = isCapped ? 0 : pageCost;
+
+    if (creditsCharged > 0) {
+      await repo.addCredit(nodeId, body.cursor ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
+    }
+    await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, broadeningLevel, creditsCharged);
+
+    return {
+      search_id: crypto.randomUUID(),
+      scope: body.scope,
+      limit: body.limit ?? 20,
+      cursor: body.cursor ?? null,
+      broadening: body.broadening ?? { level: 0, allow: false },
+      applied_filters: body.filters ?? {},
+      budget: {
+        credits_requested: creditsRequested,
+        credits_charged: creditsCharged,
+        breakdown: {
+          base_search_cost: baseSearchCost,
+          broadening_level: broadeningLevel,
+          broadening_cost: broadeningCost,
+          page_index: pageIndex,
+          page_cost: pageCost,
+        },
+        was_capped: isCapped,
+        cap_reason: isCapped ? 'insufficient_budget' : null,
+        guidance: isCapped ? 'Increase budget.credits_requested or lower broadening.level/limit and retry.' : null,
+      },
+      items: rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } })),
+      nodes: summarizeSearchNodes(rows),
+      has_more: rows.length === (body.limit ?? 20),
+    };
   },
   async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', hasSpendEntitlement: boolean, limit: number, cursor: string | null) {
     if (!hasSpendEntitlement) return { forbidden: true };
@@ -609,6 +651,63 @@ async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
     await repo.createHold(offerId, unitId);
   }
   return { ok: true };
+}
+
+async function resolveSearchTargetNode(rawTarget: any): Promise<{ targetNodeId: string | null; validationError?: 'target_mismatch' | 'target_not_found' }> {
+  if (!rawTarget) return { targetNodeId: null };
+
+  const rawNodeId = typeof rawTarget.node_id === 'string' ? rawTarget.node_id : null;
+  const rawUsername = typeof rawTarget.username === 'string' ? rawTarget.username.trim() : null;
+  const hasNodeId = Boolean(rawNodeId);
+  const hasUsername = Boolean(rawUsername);
+
+  if (!hasNodeId && !hasUsername) return { targetNodeId: null, validationError: 'target_not_found' };
+
+  const nodeById = hasNodeId ? await repo.findActiveNodeById(rawNodeId!) : null;
+  if (hasNodeId && !nodeById) return { targetNodeId: null, validationError: 'target_not_found' };
+
+  const nodeByUsername = hasUsername ? await repo.findActiveNodeByUsername(rawUsername!) : null;
+  if (hasUsername && !nodeByUsername) return { targetNodeId: null, validationError: 'target_not_found' };
+
+  if (nodeById && nodeByUsername && nodeById.id !== nodeByUsername.id) {
+    return { targetNodeId: null, validationError: 'target_mismatch' };
+  }
+
+  return { targetNodeId: nodeById?.id ?? nodeByUsername?.id ?? null };
+}
+
+function summarizeSearchNodes(rows: any[]) {
+  const perNode = new Map<string, Map<string, number>>();
+
+  for (const row of rows) {
+    const nodeId = typeof row?.node_id === 'string'
+      ? row.node_id
+      : typeof row?.doc?.node_id === 'string'
+        ? row.doc.node_id
+        : null;
+    if (!nodeId) continue;
+
+    let categoryCounts = perNode.get(nodeId);
+    if (!categoryCounts) {
+      categoryCounts = new Map<string, number>();
+      perNode.set(nodeId, categoryCounts);
+    }
+
+    const categoryIds = Array.isArray(row?.doc?.category_ids) ? row.doc.category_ids : [];
+    for (const categoryId of categoryIds) {
+      if (categoryId === null || categoryId === undefined) continue;
+      const key = String(categoryId);
+      if (!key) continue;
+      categoryCounts.set(key, (categoryCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  return [...perNode.entries()]
+    .map(([nodeId, categoryCounts]) => ({
+      node_id: nodeId,
+      category_counts_nonzero: Object.fromEntries([...categoryCounts.entries()].filter(([, count]) => count > 0)),
+    }))
+    .sort((a, b) => a.node_id.localeCompare(b.node_id));
 }
 
 function isDisplayNameTakenError(err: any) {

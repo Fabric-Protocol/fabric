@@ -104,6 +104,34 @@ export async function getMe(nodeId: string) {
   return rows[0] ?? null;
 }
 
+export async function findActiveNodeById(nodeId: string) {
+  const rows = await query<{ id: string }>(
+    `select id
+     from nodes
+     where id=$1
+       and status='ACTIVE'
+       and suspended_at is null
+       and deleted_at is null
+     limit 1`,
+    [nodeId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function findActiveNodeByUsername(username: string) {
+  const rows = await query<{ id: string }>(
+    `select id
+     from nodes
+     where lower(display_name)=lower($1)
+       and status='ACTIVE'
+       and suspended_at is null
+       and deleted_at is null
+     limit 1`,
+    [username],
+  );
+  return rows[0] ?? null;
+}
+
 export async function getNodeRecoveryProfile(nodeId: string) {
   const rows = await query<{
     id: string;
@@ -574,65 +602,51 @@ export async function removeProjection(kind:'units'|'requests', id:string) {
   else await query('delete from public_requests where request_id=$1',[id]);
 }
 
-export async function searchPublic(kind:'listings'|'requests', scope:string, limit:number, cursor:string|null, callerNodeId:string|null = null) {
+export async function searchPublic(
+  kind: 'listings' | 'requests',
+  scope: string,
+  limit: number,
+  cursor: string | null,
+  callerNodeId: string | null = null,
+  targetNodeId: string | null = null,
+) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
+  const params: unknown[] = [limit];
+  const where: string[] = [];
+
+  let nextIdx = 2;
+  where.push(`(p.doc->>'scope_primary')=$${nextIdx}`);
+  params.push(scope);
+  nextIdx += 1;
+
   if (cursor) {
-    if (callerNodeId) {
-      return query<any>(
-        `select p.*
-         from ${table} p
-         join nodes n on n.id=p.node_id
-         where p.published_at < $2::timestamptz
-           and (p.doc->>'scope_primary')=$3
-           and p.node_id <> $4
-           and n.status='ACTIVE'
-           and n.suspended_at is null
-           and n.deleted_at is null
-         order by p.published_at desc
-         limit $1`,
-        [limit, cursor, scope, callerNodeId],
-      );
-    }
-    return query<any>(
-      `select p.*
-       from ${table} p
-       join nodes n on n.id=p.node_id
-       where p.published_at < $2::timestamptz
-         and (p.doc->>'scope_primary')=$3
-         and n.status='ACTIVE'
-         and n.suspended_at is null
-         and n.deleted_at is null
-       order by p.published_at desc
-       limit $1`,
-      [limit, cursor, scope],
-    );
+    where.push(`p.published_at < $${nextIdx}::timestamptz`);
+    params.push(cursor);
+    nextIdx += 1;
   }
   if (callerNodeId) {
-    return query<any>(
-      `select p.*
-       from ${table} p
-       join nodes n on n.id=p.node_id
-       where (p.doc->>'scope_primary')=$2
-         and p.node_id <> $3
-         and n.status='ACTIVE'
-         and n.suspended_at is null
-         and n.deleted_at is null
-       order by p.published_at desc
-       limit $1`,
-      [limit, scope, callerNodeId],
-    );
+    where.push(`p.node_id <> $${nextIdx}`);
+    params.push(callerNodeId);
+    nextIdx += 1;
   }
+  if (targetNodeId) {
+    where.push(`p.node_id = $${nextIdx}`);
+    params.push(targetNodeId);
+    nextIdx += 1;
+  }
+
+  where.push("n.status='ACTIVE'");
+  where.push('n.suspended_at is null');
+  where.push('n.deleted_at is null');
+
   return query<any>(
     `select p.*
      from ${table} p
      join nodes n on n.id=p.node_id
-     where (p.doc->>'scope_primary')=$2
-       and n.status='ACTIVE'
-       and n.suspended_at is null
-       and n.deleted_at is null
+     where ${where.join('\n       and ')}
      order by p.published_at desc
      limit $1`,
-    [limit, scope],
+    params,
   );
 }
 

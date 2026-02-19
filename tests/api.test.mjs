@@ -505,7 +505,7 @@ test('subscriber-gated endpoints stay blocked for non-subscribers even with cred
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'sg-1' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(search.statusCode, 403);
   assert.equal(search.json().error.code, 'subscriber_required');
@@ -677,7 +677,7 @@ test('active upload trial allows metered search, then expiry blocks spend until 
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-active' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(trialSearch.statusCode, 200);
 
@@ -691,7 +691,7 @@ test('active upload trial allows metered search, then expiry blocks spend until 
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-expired' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(expiredSearch.statusCode, 403);
   assert.equal(expiredSearch.json().error.code, 'subscriber_required');
@@ -705,7 +705,7 @@ test('active upload trial allows metered search, then expiry blocks spend until 
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-subscriber' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(subscribedSearch.statusCode, 200);
   await app.close();
@@ -1710,12 +1710,12 @@ test('metering only charges on HTTP 200 for search', async () => {
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 
   const bal1 = await repo.creditBalance(nodeId);
-  const bad = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's1' }, payload: { q: null, scope: 'ship_to', filters: {}, broadening: { level: 0, allow: false }, limit: 20, cursor: null } });
+  const bad = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's1' }, payload: { q: null, scope: 'ship_to', filters: {}, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null } });
   assert.equal(bad.statusCode, 422);
   const bal2 = await repo.creditBalance(nodeId);
   assert.equal(bal2, bal1);
 
-  const ok = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's2' }, payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null } });
+  const ok = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's2' }, payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null } });
   assert.equal(ok.statusCode, 200);
   const bal3 = await repo.creditBalance(nodeId);
   assert.equal(bal3 < bal2, true);
@@ -1744,10 +1744,186 @@ test('search returns credits_exhausted for subscriber with insufficient credits'
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-insufficient' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(res.statusCode, 402);
   assert.equal(res.json().error.code, 'credits_exhausted');
+  await app.close();
+});
+
+test('search requires budget.credits_requested', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-budget-required');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_subscriber_budget_required')).statusCode, 200);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-budget-required' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('search caps spend to budget and returns guidance', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-budget-cap');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_subscriber_budget_cap')).statusCode, 200);
+
+  const balanceBefore = await repo.creditBalance(nodeId);
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-budget-cap' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'budget-cap-test' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: 0 },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().budget.was_capped, true);
+  assert.equal(res.json().budget.cap_reason, 'insufficient_budget');
+  assert.equal(res.json().budget.credits_charged <= res.json().budget.credits_requested, true);
+  assert.equal(typeof res.json().budget.guidance, 'string');
+  assert.equal(res.json().budget.guidance.length > 0, true);
+  const balanceAfter = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfter, balanceBefore);
+  await app.close();
+});
+
+test('search target.username restricts results and returns budget/node summaries', async () => {
+  const app = buildApp();
+
+  const searcherBoot = await bootstrap(app, 'boot-targeting-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_targeting')).statusCode, 200);
+
+  const targetABoot = await bootstrap(app, 'boot-targeting-a');
+  const targetANodeId = targetABoot.json().node.id;
+  const targetAUsername = targetABoot.json().node.display_name;
+  const targetBBoot = await bootstrap(app, 'boot-targeting-b');
+  const targetBNodeId = targetBBoot.json().node.id;
+
+  const aUnit1 = await repo.createResource('units', targetANodeId, {
+    ...unitPayload('Target A item 1', 'targeting-shared-scope'),
+    category_ids: [101, 202],
+  });
+  const aUnit2 = await repo.createResource('units', targetANodeId, {
+    ...unitPayload('Target A item 2', 'targeting-shared-scope'),
+    category_ids: [202],
+  });
+  const bUnit = await repo.createResource('units', targetBNodeId, {
+    ...unitPayload('Target B item', 'targeting-shared-scope'),
+    category_ids: [303],
+  });
+
+  await repo.setPublished('units', aUnit1.id, true);
+  await repo.setPublished('units', aUnit2.id, true);
+  await repo.setPublished('units', bUnit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', targetANodeId, aUnit1.id));
+  await repo.upsertProjection('units', await repo.getResource('units', targetANodeId, aUnit2.id));
+  await repo.upsertProjection('units', await repo.getResource('units', targetBNodeId, bUnit.id));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-target-username' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'targeting-shared-scope' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { username: targetAUsername },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.items.length > 0, true);
+  assert.equal(body.items.every((row) => row.item?.node_id === targetANodeId), true);
+  assert.equal(typeof body.budget, 'object');
+  assert.equal(typeof body.budget.credits_requested, 'number');
+  assert.equal(typeof body.budget.credits_charged, 'number');
+  assert.equal(Array.isArray(body.nodes), true);
+  assert.equal(body.nodes.length, 1);
+  assert.equal(body.nodes[0].node_id, targetANodeId);
+  assert.equal(Object.prototype.hasOwnProperty.call(body.nodes[0], 'category_counts_nonzero'), true);
+  assert.equal(typeof body.nodes[0].category_counts_nonzero, 'object');
+  await app.close();
+});
+
+test('search rejects mismatched target.node_id and target.username', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-target-mismatch-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_target_mismatch')).statusCode, 200);
+
+  const targetABoot = await bootstrap(app, 'boot-target-mismatch-a');
+  const targetBBoot = await bootstrap(app, 'boot-target-mismatch-b');
+  const targetANodeId = targetABoot.json().node.id;
+  const targetBUsername = targetBBoot.json().node.display_name;
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-target-mismatch' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'target-mismatch' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { node_id: targetANodeId, username: targetBUsername },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  assert.equal(res.json().error.details.reason, 'target_mismatch');
+  await app.close();
+});
+
+test('search rejects unresolved target', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-target-not-found-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_target_not_found')).statusCode, 200);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-target-not-found' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'target-not-found' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { username: `missing-${TEST_RUN_SUFFIX}` },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  assert.equal(res.json().error.details.reason, 'target_not_found');
   await app.close();
 });
 
@@ -1820,7 +1996,7 @@ test('search excludes caller-owned published listings and requests by default', 
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-listings-${nodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(listingsRes.statusCode, 200);
   const ownListingSeen = listingsRes.json().items.some((row) => row.item?.node_id === nodeId);
@@ -1830,7 +2006,7 @@ test('search excludes caller-owned published listings and requests by default', 
     method: 'POST',
     url: '/v1/search/requests',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-requests-${nodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(requestsRes.statusCode, 200);
   const ownRequestSeen = requestsRes.json().items.some((row) => row.item?.node_id === nodeId);
@@ -1879,7 +2055,7 @@ test('search and public node inventory exclude suspended nodes', async () => {
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-before-${searcherNodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(before.statusCode, 200);
   const seenBefore = before.json().items.some((row) => row.item?.node_id === targetNodeId);
@@ -1891,7 +2067,7 @@ test('search and public node inventory exclude suspended nodes', async () => {
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-after-${searcherNodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(after.statusCode, 200);
   const seenAfter = after.json().items.some((row) => row.item?.node_id === targetNodeId);
@@ -2320,3 +2496,4 @@ test('recovery start enforces per-node rate limit', async () => {
 
   await app.close();
 });
+

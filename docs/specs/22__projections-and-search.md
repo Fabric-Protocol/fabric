@@ -109,6 +109,8 @@ Hard prohibitions:
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
   "filters": {},
   "broadening": { "level": 0, "allow": false },
+  "budget": { "credits_requested": 5 },
+  "target": { "node_id": null, "username": null },
   "limit": 20,
   "cursor": "string|null"
 }
@@ -181,6 +183,20 @@ Copy code
   "cursor":"string|null",
   "broadening": { "level":0, "allow":false },
   "applied_filters": { },
+  "budget": {
+    "credits_requested": 5,
+    "credits_charged": 5,
+    "breakdown": {
+      "base_search_cost": 5,
+      "broadening_level": 0,
+      "broadening_cost": 0,
+      "page_index": 0,
+      "page_cost": 5
+    },
+    "was_capped": false,
+    "cap_reason": null,
+    "guidance": null
+  },
   "items":[
     {
       "item": { /* PublicListing */ },
@@ -192,6 +208,12 @@ Copy code
           "recency_score": 0.7
         }
       }
+    }
+  ],
+  "nodes": [
+    {
+      "node_id": "uuid",
+      "category_counts_nonzero": { "12": 2, "88": 1 }
     }
   ],
   "has_more": true
@@ -206,6 +228,20 @@ Copy code
   "cursor":"string|null",
   "broadening": { "level":0, "allow":false },
   "applied_filters": { },
+  "budget": {
+    "credits_requested": 5,
+    "credits_charged": 5,
+    "breakdown": {
+      "base_search_cost": 5,
+      "broadening_level": 0,
+      "broadening_cost": 0,
+      "page_index": 0,
+      "page_cost": 5
+    },
+    "was_capped": false,
+    "cap_reason": null,
+    "guidance": null
+  },
   "items":[
     {
       "item": { /* PublicRequest */ },
@@ -217,6 +253,12 @@ Copy code
           "recency_score": 0.7
         }
       }
+    }
+  ],
+  "nodes": [
+    {
+      "node_id": "uuid",
+      "category_counts_nonzero": { "12": 2, "88": 1 }
     }
   ],
   "has_more": true
@@ -249,6 +291,13 @@ Broadening increases per-page cost (linear per-page pricing):
 cost_per_page = base_page_cost + active_broadening_adders
 
 Broadening level MUST be recorded in search logs.
+
+Broadening cost adders MUST be reflected in budget.breakdown.broadening_cost.
+
+If budget.credits_requested prevents executing requested broadening/page, return partial results within budget with:
+
+- budget.was_capped=true
+- budget.guidance describing how to increase budget or reduce broadening/limit.
 
 8) Node “inventory expansion” (metered)
 Endpoints:

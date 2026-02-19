@@ -1002,6 +1002,8 @@ Request (locked)
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
   "filters": {},
   "broadening": { "level": 0, "allow": false },
+  "budget": { "credits_requested": 5 },
+  "target": { "node_id": null, "username": null },
   "limit": 20,
   "cursor": "string|null"
 }
@@ -1057,6 +1059,17 @@ filters must contain only fields allowed for the selected scope.
 
 unknown keys → 422 with error.code="validation_error".
 
+budget.credits_requested is a hard spend ceiling for this call:
+
+- response budget.credits_charged MUST be <= budget.credits_requested.
+- if capped, response budget.was_capped=true with actionable budget.guidance.
+
+target is optional:
+
+- if provided, restrict search to that node (scope filters still apply).
+- if both node_id and username are provided and resolve to different nodes -> 422 validation_error.
+- node_id takes precedence if both refer to the same node.
+
 Response 200
 
 Returns SearchListingsResponse (see 22__projections-and-search.md).
@@ -1067,11 +1080,35 @@ Errors
 
 402 credits_exhausted
 
-422 validation_error
+422 validation_error (includes inconsistent target and insufficient budget for requested execution)
 
 POST /v1/search/requests
 
-Same contract as /v1/search/listings, but returns SearchRequestsResponse.
+Request (locked)
+{
+  "q": "string|null",
+  "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
+  "filters": {},
+  "broadening": { "level": 0, "allow": false },
+  "budget": { "credits_requested": 5 },
+  "target": { "node_id": null, "username": null },
+  "limit": 20,
+  "cursor": "string|null"
+}
+
+Validation and budgeting rules are identical to /v1/search/listings.
+
+Response 200
+
+Returns SearchRequestsResponse (see 22__projections-and-search.md).
+
+Errors
+
+403 subscriber_required
+
+402 credits_exhausted
+
+422 validation_error (includes inconsistent target and insufficient budget for requested execution)
 
 9) Node “inventory expansion” after a hit (metered)
 
@@ -1681,3 +1718,4 @@ Recompute public_listings from all published, non-deleted Units not taken down/s
 Recompute public_requests from all published, non-deleted Requests not taken down/suspended.
 
 Apply allowlist for public fields.
+

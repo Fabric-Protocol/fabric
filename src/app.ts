@@ -35,8 +35,19 @@ const resourceSchema = z.object({
 });
 
 const searchSchema = z.object({
-  q: z.string().nullable(), scope: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']), filters: z.record(z.any()), broadening: z.object({ level: z.number(), allow: z.boolean() }), limit: z.number().min(1).max(100).default(20), cursor: z.string().nullable(),
+  q: z.string().nullable(),
+  scope: z.enum(['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER']),
+  filters: z.record(z.any()),
+  broadening: z.object({ level: z.number().int().min(0), allow: z.boolean() }),
+  budget: z.object({ credits_requested: z.number().int().min(0) }),
+  target: z.object({
+    node_id: z.string().uuid().nullable().optional(),
+    username: z.string().trim().min(1).nullable().optional(),
+  }).optional(),
+  limit: z.number().int().min(1).max(100).default(20),
+  cursor: z.string().nullable(),
 });
+const searchQuoteSchema = searchSchema.omit({ budget: true, target: true });
 
 const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 <html lang="en">
@@ -576,7 +587,7 @@ SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
   -H "Authorization: ApiKey $API_KEY" \\
   -H "Idempotency-Key: $SEARCH_IDEM" \\
   -H "Content-Type: application/json" \\
-  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"limit":20,"cursor":null}')
+  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_requested":2},"limit":20,"cursor":null}')
 FOUND_UNIT_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')</code></pre>
 
     <pre><code>OFFER_IDEM=$(uuidgen)
@@ -1149,7 +1160,7 @@ export function buildApp() {
   });
   app.get('/v1/credits/quote', async (req) => fabricService.creditsQuote((req as AuthedRequest).nodeId!, null));
   app.post('/v1/credits/quote', async (req, reply) => {
-    const parsed = searchSchema.safeParse(req.body);
+    const parsed = searchQuoteSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
@@ -1311,6 +1322,7 @@ export function buildApp() {
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
+    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
@@ -1321,6 +1333,7 @@ export function buildApp() {
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
+    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
