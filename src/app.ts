@@ -1009,7 +1009,7 @@ export function buildApp() {
       }));
     }
 
-    return fabricService.bootstrap({
+    const out = await fabricService.bootstrap({
       display_name: parsed.data.display_name,
       email: parsed.data.email,
       referral_code: parsed.data.referral_code,
@@ -1018,6 +1018,12 @@ export function buildApp() {
       legal_ip: extractClientIp(req),
       legal_user_agent: extractUserAgent(req),
     });
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid bootstrap request', {
+        reason: (out as any).validationError,
+      }));
+    }
+    return out;
   });
 
   app.post('/v1/auth/keys', async (req, reply) => {
@@ -1040,7 +1046,13 @@ export function buildApp() {
       recovery_public_key: z.string().nullable().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    return fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);
+    const out = await fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid profile update', {
+        reason: (out as any).validationError,
+      }));
+    }
+    return out;
   });
 
   app.post('/v1/email/start-verify', async (req, reply) => {
@@ -1356,7 +1368,8 @@ export function buildApp() {
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
     const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, !!(req as AuthedRequest).isSubscriber, (req.params as any).offer_id);
-    if (out.forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    if (out.subscriberRequired) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
     return out;

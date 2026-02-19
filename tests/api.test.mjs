@@ -34,6 +34,7 @@ process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR = '1000';
 process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR = '1000';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
+const TEST_RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const LIVE_PRICE_IDS = {
   basic: 'price_1T1tO2K3gJAgZl81QzBXfPIf',
   pro: 'price_1T1wL1K3gJAgZl81IYKvjCsD',
@@ -50,14 +51,24 @@ const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 const emailProvider = await import('../dist/src/services/emailProvider.js');
 
-async function bootstrap(app, idk = 'boot-1', payload = { display_name: 'Node', email: null, referral_code: null }) {
+async function bootstrap(
+  app,
+  idk = 'boot-1',
+  payload = { display_name: 'Node', email: null, referral_code: null },
+  options = {},
+) {
+  const basePayload = payload && typeof payload === 'object' ? payload : {};
+  const rawDisplayName = basePayload.display_name ?? 'Node';
+  const useExactDisplayName = options.exactDisplayName === true;
+  const displayName = useExactDisplayName
+    ? rawDisplayName
+    : `${rawDisplayName}-${TEST_RUN_SUFFIX}-${idk}`;
   const requestPayload = {
-    display_name: 'Node',
-    email: null,
-    referral_code: null,
-    legal: { accepted: true, version: REQUIRED_LEGAL_VERSION },
-    ...payload,
-    legal: (payload && typeof payload === 'object' && payload.legal) ? payload.legal : { accepted: true, version: REQUIRED_LEGAL_VERSION },
+    ...basePayload,
+    display_name: displayName,
+    email: basePayload.email ?? null,
+    referral_code: basePayload.referral_code ?? null,
+    legal: basePayload.legal ?? { accepted: true, version: REQUIRED_LEGAL_VERSION },
   };
   const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': idk }, payload: requestPayload });
   return res;
@@ -278,6 +289,7 @@ test('POST /v1/bootstrap without legal assent returns legal_required', async () 
 
 test('POST /v1/bootstrap with legal assent stores legal fields', async () => {
   const app = buildApp();
+  const legalDisplayName = `Node Legal ${TEST_RUN_SUFFIX}`;
   const res = await app.inject({
     method: 'POST',
     url: '/v1/bootstrap',
@@ -287,7 +299,7 @@ test('POST /v1/bootstrap with legal assent stores legal fields', async () => {
       'x-forwarded-for': '203.0.113.10, 198.51.100.3',
     },
     payload: {
-      display_name: 'Node Legal',
+      display_name: legalDisplayName,
       email: null,
       referral_code: null,
       legal: { accepted: true, version: REQUIRED_LEGAL_VERSION },
@@ -314,6 +326,56 @@ test('idempotency replay and conflict on /v1/bootstrap', async () => {
   const c = await bootstrap(app, 'same-key', { display_name: 'B', email: null, referral_code: null });
   assert.equal(c.statusCode, 409);
   assert.equal(c.json().error.code, 'idempotency_key_reuse_conflict');
+  await app.close();
+});
+
+test('POST /v1/bootstrap rejects duplicate display_name', async () => {
+  const app = buildApp();
+  const duplicateName = `Duplicate Display ${TEST_RUN_SUFFIX}`;
+  const first = await bootstrap(app, 'boot-display-name-a', {
+    display_name: duplicateName,
+    email: null,
+    referral_code: null,
+  }, { exactDisplayName: true });
+  assert.equal(first.statusCode, 200);
+
+  const second = await bootstrap(app, 'boot-display-name-b', {
+    display_name: duplicateName,
+    email: null,
+    referral_code: null,
+  }, { exactDisplayName: true });
+  assert.equal(second.statusCode, 422);
+  assert.equal(second.json().error.code, 'validation_error');
+  assert.equal(second.json().error.details.reason, 'display_name_taken');
+  await app.close();
+});
+
+test('PATCH /v1/me rejects duplicate display_name', async () => {
+  const app = buildApp();
+  const a = await bootstrap(app, 'boot-display-patch-a', {
+    display_name: 'Patch Name A',
+    email: null,
+    referral_code: null,
+  });
+  const b = await bootstrap(app, 'boot-display-patch-b', {
+    display_name: 'Patch Name B',
+    email: null,
+    referral_code: null,
+  });
+  assert.equal(a.statusCode, 200);
+  assert.equal(b.statusCode, 200);
+  const bKey = b.json().api_key.api_key;
+
+  const duplicateDisplayName = a.json().node.display_name;
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${bKey}`, 'idempotency-key': 'patch-display-name-dup' },
+    payload: { display_name: duplicateDisplayName, email: null, recovery_public_key: null },
+  });
+  assert.equal(patch.statusCode, 422);
+  assert.equal(patch.json().error.code, 'validation_error');
+  assert.equal(patch.json().error.details.reason, 'display_name_taken');
   await app.close();
 });
 
@@ -459,6 +521,78 @@ test('subscriber-gated endpoints stay blocked for non-subscribers even with cred
 
   const balAfter = await repo.creditBalance(nodeId);
   assert.equal(balAfter, balBefore);
+  await app.close();
+});
+
+test('buyer offer create cannot lock seller inventory; seller-side accept locks; idempotency works', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-hold-seller', {
+    display_name: 'Hold Seller',
+    email: null,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-hold-buyer', {
+    display_name: 'Hold Buyer',
+    email: null,
+    referral_code: null,
+  });
+  assert.equal(sellerBoot.statusCode, 200);
+  assert.equal(buyerBoot.statusCode, 200);
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerKey = sellerBoot.json().api_key.api_key;
+  const buyerKey = buyerBoot.json().api_key.api_key;
+
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_sub_hold_seller')).statusCode, 200);
+  assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_sub_hold_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Hold invariant unit', 'hold-invariant-scope'));
+  const createPayload = { unit_ids: [unit.id], thread_id: null, note: null };
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'hold-offer-create' },
+    payload: createPayload,
+  });
+  assert.equal(create.statusCode, 200);
+  const createdOffer = create.json().offer;
+  assert.deepEqual(createdOffer.held_unit_ids, []);
+  assert.deepEqual(createdOffer.unheld_unit_ids, [unit.id]);
+
+  const activeBefore = await query("select count(*)::text as c from holds where unit_id=$1 and status='active'", [unit.id]);
+  assert.equal(Number(activeBefore[0].c), 0);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'hold-offer-create' },
+    payload: createPayload,
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.json().offer.id, createdOffer.id);
+
+  const idemConflict = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'hold-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'changed' },
+  });
+  assert.equal(idemConflict.statusCode, 409);
+  assert.equal(idemConflict.json().error.code, 'idempotency_key_reuse_conflict');
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${createdOffer.id}/accept`,
+    headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'hold-offer-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
+  assert.deepEqual(sellerAccept.json().offer.held_unit_ids, [unit.id]);
+  assert.deepEqual(sellerAccept.json().offer.unheld_unit_ids, []);
+
+  const activeAfter = await query("select count(*)::text as c from holds where unit_id=$1 and status='active'", [unit.id]);
+  assert.equal(Number(activeAfter[0].c), 1);
   await app.close();
 });
 

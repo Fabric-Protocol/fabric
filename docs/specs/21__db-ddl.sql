@@ -61,6 +61,20 @@ alter table nodes add column if not exists recovery_public_key text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 create unique index if not exists nodes_email_unique_idx on nodes(lower(email)) where email is not null and deleted_at is null;
+with duplicate_display_names as (
+  select
+    id,
+    row_number() over (partition by lower(display_name) order by created_at asc, id asc) as duplicate_rank
+  from nodes
+  where display_name is not null
+    and deleted_at is null
+)
+update nodes n
+set display_name = n.display_name || '-' || n.id::text
+from duplicate_display_names d
+where n.id = d.id
+  and d.duplicate_rank > 1;
+create unique index if not exists nodes_display_name_unique_idx on nodes(lower(display_name)) where display_name is not null and deleted_at is null;
 
 drop trigger if exists nodes_set_updated_at on nodes;
 create trigger nodes_set_updated_at

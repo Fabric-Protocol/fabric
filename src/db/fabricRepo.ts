@@ -707,9 +707,12 @@ export async function getOfferLines(offerId: string) {
 
 export async function getHoldSummary(offerId: string) {
   const holds = await query<any>('select unit_id,status,expires_at from holds where offer_id=$1', [offerId]);
+  const lines = await query<{ unit_id: string }>('select unit_id from offer_lines where offer_id=$1', [offerId]);
   const held = holds.filter((h) => h.status === 'active' || h.status === 'committed').map((h) => h.unit_id);
-  const unheld: string[] = [];
-  const first = holds[0];
+  const heldSet = new Set(held);
+  const unheld = lines.map((line) => line.unit_id).filter((unitId) => !heldSet.has(unitId));
+  const firstActiveOrCommitted = holds.find((h) => h.status === 'active' || h.status === 'committed');
+  const first = firstActiveOrCommitted ?? holds[0];
   return { held_unit_ids: held, unheld_unit_ids: unheld, hold_status: first?.status ?? 'released', hold_expires_at: first?.expires_at ?? null };
 }
 

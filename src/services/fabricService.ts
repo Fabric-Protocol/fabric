@@ -28,43 +28,48 @@ export const fabricService = {
     legal_ip: string | null;
     legal_user_agent: string | null;
   }) {
-    const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, {
-      acceptedAt: new Date().toISOString(),
-      version: payload.legal_version,
-      ip: payload.legal_ip,
-      userAgent: payload.legal_user_agent,
-    });
-    const apiKey = await repo.createApiKey(node.id, 'default');
-    await repo.ensureSubscription(node.id);
-    await repo.addCredit(node.id, 'grant_signup', config.signupGrantCredits, {});
-    if (payload.referral_code) {
-      const referralCode = payload.referral_code.trim();
-      if (referralCode) {
-        let code = await repo.findReferralCode(referralCode);
-        if (!code) {
-          await repo.ensureReferralCode(referralCode, node.id);
-          code = await repo.findReferralCode(referralCode);
-        }
-        if (code?.active && !(await repo.hasPaidStripeEvent(node.id)) && !(await repo.hasReferralClaim(node.id))) {
-          await repo.createReferralClaim(referralCode, node.id, code.issuer_node_id);
+    try {
+      const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, {
+        acceptedAt: new Date().toISOString(),
+        version: payload.legal_version,
+        ip: payload.legal_ip,
+        userAgent: payload.legal_user_agent,
+      });
+      const apiKey = await repo.createApiKey(node.id, 'default');
+      await repo.ensureSubscription(node.id);
+      await repo.addCredit(node.id, 'grant_signup', config.signupGrantCredits, {});
+      if (payload.referral_code) {
+        const referralCode = payload.referral_code.trim();
+        if (referralCode) {
+          let code = await repo.findReferralCode(referralCode);
+          if (!code) {
+            await repo.ensureReferralCode(referralCode, node.id);
+            code = await repo.findReferralCode(referralCode);
+          }
+          if (code?.active && !(await repo.hasPaidStripeEvent(node.id)) && !(await repo.hasReferralClaim(node.id))) {
+            await repo.createReferralClaim(referralCode, node.id, code.issuer_node_id);
+          }
         }
       }
+      return {
+        node: {
+          id: node.id,
+          display_name: payload.display_name,
+          email: normalizeEmail(payload.email),
+          email_verified_at: null,
+          recovery_public_key_configured: Boolean(payload.recovery_public_key),
+          status: 'ACTIVE',
+          plan: 'free',
+          is_subscriber: false,
+          created_at: node.created_at,
+        },
+        api_key: { key_id: apiKey.id, api_key: apiKey.api_key, created_at: apiKey.created_at },
+        credits: { granted: config.signupGrantCredits, reason: 'SIGNUP_GRANT' },
+      };
+    } catch (err: any) {
+      if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
+      throw err;
     }
-    return {
-      node: {
-        id: node.id,
-        display_name: payload.display_name,
-        email: normalizeEmail(payload.email),
-        email_verified_at: null,
-        recovery_public_key_configured: Boolean(payload.recovery_public_key),
-        status: 'ACTIVE',
-        plan: 'free',
-        is_subscriber: false,
-        created_at: node.created_at,
-      },
-      api_key: { key_id: apiKey.id, api_key: apiKey.api_key, created_at: apiKey.created_at },
-      credits: { granted: config.signupGrantCredits, reason: 'SIGNUP_GRANT' },
-    };
   },
   async createAuthKey(nodeId: string, label: string) {
     const key = await repo.createApiKey(nodeId, label);
@@ -183,7 +188,12 @@ export const fabricService = {
     };
   },
   async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null; recovery_public_key?: string | null }) {
-    await repo.updateMe(nodeId, payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key);
+    try {
+      await repo.updateMe(nodeId, payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key);
+    } catch (err: any) {
+      if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
+      throw err;
+    }
     return this.me(nodeId);
   },
   async startEmailVerify(nodeId: string, email: string) {
@@ -423,6 +433,7 @@ export async function offerSummary(offer: any) {
   if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
   const uniqueOwners = new Set(owners.map((u) => u.node_id));
   if (uniqueOwners.size !== 1) return { conflict: 'multiple_owners' };
+  const ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
   const toNodeId = owners[0].node_id;
   const th = threadId ?? crypto.randomUUID();
   const offer = await repo.createOffer(nodeId, toNodeId, unitIds[0], th, note);
@@ -430,6 +441,11 @@ export async function offerSummary(offer: any) {
   const unheld: string[] = [];
   for (const unitId of unitIds) {
     await repo.addOfferLine(offer.id, unitId);
+    const ownerNodeId = ownerByUnitId.get(unitId);
+    if (ownerNodeId !== nodeId) {
+      unheld.push(unitId);
+      continue;
+    }
     if (await repo.activeHeld(unitId)) unheld.push(unitId);
     else {
       await repo.createHold(offer.id, unitId);
@@ -453,9 +469,14 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).acceptOffer = async (nodeId: string, isSubscriber: boolean, offerId: string) => {
-  if (!isSubscriber) return { forbidden: true };
+  if (!isSubscriber) return { subscriberRequired: true };
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
+  if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
+  if (offer.to_node_id === nodeId) {
+    const holdLock = await ensureSellerOwnedHolds(offerId, nodeId);
+    if (!holdLock.ok) return { conflict: true };
+  }
   if (offer.status !== 'pending' && offer.status !== 'accepted_by_a' && offer.status !== 'accepted_by_b') return { conflict: true };
   const byFrom = offer.from_node_id === nodeId;
   if (byFrom) {
@@ -572,6 +593,26 @@ function creditPackQuoteByCode(packCode: string | null | undefined) {
   if (!packCode) return null;
   const normalized = packCode.trim().toLowerCase();
   return creditPackQuotes().find((pack) => pack.pack_code === normalized) ?? null;
+}
+
+async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
+  const lines = await repo.getOfferLines(offerId);
+  if (lines.length === 0) return { ok: true };
+  const unitIds = lines.map((line) => line.unit_id);
+  const owners = await repo.getUnitsOwners(unitIds);
+  const ownerByUnitId = new Map(owners.map((owner) => [owner.id, owner.node_id]));
+  for (const unitId of unitIds) {
+    if (ownerByUnitId.get(unitId) !== sellerNodeId) {
+      return { ok: false };
+    }
+    if (await repo.activeHeld(unitId)) continue;
+    await repo.createHold(offerId, unitId);
+  }
+  return { ok: true };
+}
+
+function isDisplayNameTakenError(err: any) {
+  return err?.code === '23505' && err?.constraint === 'nodes_display_name_unique_idx';
 }
 
 function paidPlanQuotes() {
