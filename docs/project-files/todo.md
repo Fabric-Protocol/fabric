@@ -186,9 +186,17 @@ Last updated: 2026-02-18
 - [ ] Enforce hard spend ceiling:
   - `credits_charged` must always be `<= credits_requested`
   - return actionable insufficient-budget guidance when cap blocks full execution
+- [ ] Implement broadening economics defaults:
+  - default broadening to strict/low
+  - charge more as broadening increases
+- [ ] Implement pagination add-on economics:
+  - page 1 included in base search cost
+  - pages 2-3 small add-on, 4-5 medium, 6-10 large, 11+ prohibitive
 - [ ] Lock go-live matching behavior:
   - structured eligibility filters + keyword ranking only
   - no lexical override/expansion and no semantic/vector infrastructure at go-live
+- [ ] Keep go-live supply-vs-demand parity:
+  - same mechanics and pricing for both sides in Phase 0.5
 - [ ] Add top-level node targeting in search request:
   - `target { node_id?, username? }`
   - restrict to that node while scope filters still apply
@@ -207,6 +215,7 @@ Last updated: 2026-02-18
   - include concrete category/deal examples (including Delivery/Transport)
   - mention anti-scrape rate-limit rationale and category suggestion intake
   - mention saved searches/alerts as planned future capability (no timeline promises)
+- [ ] Review agent onboarding docs and flows for gaps (separate pass after copy updates).
 - [ ] Review full agent workflows for MVP feature/anti-abuse gaps:
   - search -> offer -> acceptance -> contact reveal -> fulfillment
 
