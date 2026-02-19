@@ -37,6 +37,8 @@ create table if not exists nodes (
   email_verified_at timestamptz null,
   recovery_public_key text null,
   phone text null,
+  messaging_handles jsonb not null default '[]'::jsonb,
+  event_webhook_url text null,
 
   status text not null default 'ACTIVE' check (status in ('ACTIVE','SUSPENDED')),
   suspended_at timestamptz null,
@@ -58,6 +60,8 @@ alter table nodes add column if not exists legal_user_agent text null;
 alter table nodes add column if not exists email text null;
 alter table nodes add column if not exists email_verified_at timestamptz null;
 alter table nodes add column if not exists recovery_public_key text null;
+alter table nodes add column if not exists messaging_handles jsonb not null default '[]'::jsonb;
+alter table nodes add column if not exists event_webhook_url text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 create unique index if not exists nodes_email_unique_idx on nodes(lower(email)) where email is not null and deleted_at is null;
@@ -504,11 +508,47 @@ create table if not exists contact_reveals (
 
   revealed_email text null,
   revealed_phone text null,
+  revealed_messaging_handles jsonb null,
 
   created_at timestamptz not null default now()
 );
 
+alter table contact_reveals add column if not exists revealed_messaging_handles jsonb null;
+
 create index if not exists contact_reveals_offer_idx on contact_reveals(offer_id);
+
+create table if not exists offer_events (
+  id uuid primary key default gen_random_uuid(),
+  offer_id uuid not null references offers(id) on delete cascade,
+  event_type text not null check (event_type in (
+    'offer_created',
+    'offer_countered',
+    'offer_accepted',
+    'offer_cancelled',
+    'offer_contact_revealed'
+  )),
+  actor_node_id uuid not null references nodes(id),
+  recipient_node_id uuid not null references nodes(id),
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists offer_events_recipient_created_idx on offer_events(recipient_node_id, created_at asc, id asc);
+create index if not exists offer_events_offer_created_idx on offer_events(offer_id, created_at asc);
+
+create table if not exists event_webhook_deliveries (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references offer_events(id) on delete cascade,
+  node_id uuid not null references nodes(id),
+  webhook_url text not null,
+  status_code int null,
+  ok boolean not null default false,
+  error text null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists event_webhook_deliveries_event_idx on event_webhook_deliveries(event_id, created_at desc);
+create index if not exists event_webhook_deliveries_node_created_idx on event_webhook_deliveries(node_id, created_at desc);
 
 -- =========================
 -- Referrals

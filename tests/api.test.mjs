@@ -493,34 +493,70 @@ test('publish endpoint rejects suspended node before projection write', async ()
   await app.close();
 });
 
-test('subscriber-gated endpoints stay blocked for non-subscribers even with credits', async () => {
+test('search remains subscriber-gated while offer progression is available without subscriber status', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-subscriber-gate');
-  const nodeId = b.json().node.id;
-  const apiKey = b.json().api_key.api_key;
-  const balBefore = await repo.creditBalance(nodeId);
-  assert.equal(balBefore > 0, true);
+  const sellerBoot = await bootstrap(app, 'boot-offer-no-sub-seller', {
+    display_name: 'Offer No Sub Seller',
+    email: `offer.no.sub.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-offer-no-sub-buyer', {
+    display_name: 'Offer No Sub Buyer',
+    email: `offer.no.sub.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
 
   const search = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'sg-1' },
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-1' },
     payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(search.statusCode, 403);
   assert.equal(search.json().error.code, 'subscriber_required');
 
-  const offer = await app.inject({
+  const sellerUnit = await repo.createResource('units', sellerNodeId, unitPayload('No-sub offer unit', 'no-sub-offer-scope'));
+  const created = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'sg-2' },
-    payload: { unit_ids: ['00000000-0000-0000-0000-000000000001'], thread_id: null, note: null },
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-create' },
+    payload: { unit_ids: [sellerUnit.id], thread_id: null, note: null },
   });
-  assert.equal(offer.statusCode, 403);
-  assert.equal(offer.json().error.code, 'subscriber_required');
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
 
-  const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter, balBefore);
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'sg-offer-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  const reveal = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-reveal' },
+    payload: {},
+  });
+  assert.equal(reveal.statusCode, 200);
+  assert.equal(reveal.json().contact.email, `offer.no.sub.seller.${TEST_RUN_SUFFIX}@example.com`);
+
+  const balAfter = await repo.creditBalance(buyerNodeId);
+  assert.equal(balAfter > 0, true);
   await app.close();
 });
 
@@ -725,6 +761,246 @@ test('offer outcomes are persisted for accepted, rejected, cancelled, and expire
   assert.equal(byId.get(cancelledOfferId)?.status, 'cancelled');
   assert.equal(byId.get(expiredOfferId)?.status, 'expired');
   assert.equal(Boolean(byId.get(expiredOfferId)?.expired_at), true);
+  await app.close();
+});
+
+test('reveal-contact returns sanitized messaging_handles and persists them in audit log', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-mh-seller', {
+    display_name: 'MH Seller',
+    email: `mh.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-mh-buyer', {
+    display_name: 'MH Buyer',
+    email: `mh.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const sellerPatch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'mh-seller-patch' },
+    payload: {
+      display_name: sellerBoot.json().node.display_name,
+      email: sellerBoot.json().node.email,
+      recovery_public_key: null,
+      messaging_handles: [
+        { kind: ' TELEGRAM ', handle: ' @mh_seller ', url: 'https://t.me/mh_seller ' },
+      ],
+    },
+  });
+  assert.equal(sellerPatch.statusCode, 200);
+  assert.equal(sellerPatch.json().node.messaging_handles[0].kind, 'telegram');
+  assert.equal(sellerPatch.json().node.messaging_handles[0].handle, '@mh_seller');
+  assert.equal(sellerPatch.json().node.messaging_handles[0].url, 'https://t.me/mh_seller');
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Messaging handle unit', 'messaging-handle-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'mh-offer-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-offer-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  const reveal = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-offer-reveal' },
+    payload: {},
+  });
+  assert.equal(reveal.statusCode, 200);
+  assert.equal(reveal.json().contact.email, `mh.seller.${TEST_RUN_SUFFIX}@example.com`);
+  assert.equal(Array.isArray(reveal.json().contact.messaging_handles), true);
+  assert.equal(reveal.json().contact.messaging_handles.length, 1);
+  assert.equal(reveal.json().contact.messaging_handles[0].kind, 'telegram');
+  assert.equal(reveal.json().contact.messaging_handles[0].handle, '@mh_seller');
+
+  const rows = await query(
+    `select revealed_messaging_handles
+     from contact_reveals
+     where offer_id=$1
+     order by created_at desc
+     limit 1`,
+    [offerId],
+  );
+  assert.equal(Array.isArray(rows[0]?.revealed_messaging_handles), true);
+  assert.equal(rows[0].revealed_messaging_handles[0].kind, 'telegram');
+  await app.close();
+});
+
+test('offer lifecycle events emit webhooks and /events supports cursor polling', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-event-seller', {
+    display_name: 'Event Seller',
+    email: `event.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-event-buyer', {
+    display_name: 'Event Buyer',
+    email: `event.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-seller-webhook' },
+    payload: {
+      display_name: sellerBoot.json().node.display_name,
+      email: sellerBoot.json().node.email,
+      recovery_public_key: null,
+      event_webhook_url: 'https://hooks.example.test/seller',
+      messaging_handles: [],
+    },
+  });
+  await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-buyer-webhook' },
+    payload: {
+      display_name: buyerBoot.json().node.display_name,
+      email: buyerBoot.json().node.email,
+      recovery_public_key: null,
+      event_webhook_url: 'https://hooks.example.test/buyer',
+      messaging_handles: [],
+    },
+  });
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer events unit', 'offer-events-scope'));
+  const webhookCalls = [];
+
+  await withMockFetch(async (url, init) => {
+    const rawBody = init && typeof init.body === 'string' ? init.body : '{}';
+    webhookCalls.push({ url: String(url), body: JSON.parse(rawBody) });
+    return jsonResponse(200, { ok: true });
+  }, async () => {
+    const createdA = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-create-a' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'create-a' },
+    });
+    assert.equal(createdA.statusCode, 200);
+    const offerAId = createdA.json().offer.id;
+
+    const counterA = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerAId}/counter`,
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-offer-counter-a' },
+      payload: { unit_ids: [unit.id], note: 'counter-a' },
+    });
+    assert.equal(counterA.statusCode, 200);
+    const acceptedCreate = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-create-accepted' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'accepted-offer' },
+    });
+    assert.equal(acceptedCreate.statusCode, 200);
+    const acceptedOfferId = acceptedCreate.json().offer.id;
+
+    const acceptByBuyer = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${acceptedOfferId}/accept`,
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-accept-buyer' },
+      payload: {},
+    });
+    assert.equal(acceptByBuyer.statusCode, 200);
+    const acceptBySeller = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${acceptedOfferId}/accept`,
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-offer-accept-seller' },
+      payload: {},
+    });
+    assert.equal(acceptBySeller.statusCode, 200);
+
+    const reveal = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${acceptedOfferId}/reveal-contact`,
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-reveal' },
+      payload: {},
+    });
+    assert.equal(reveal.statusCode, 200);
+
+    const createdB = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-create-b' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'create-b' },
+    });
+    assert.equal(createdB.statusCode, 200);
+    const offerBId = createdB.json().offer.id;
+    const cancelB = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerBId}/cancel`,
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-cancel-b' },
+      payload: {},
+    });
+    assert.equal(cancelB.statusCode, 200);
+  });
+
+  const webhookTypes = new Set(webhookCalls.map((call) => call.body?.type));
+  assert.equal(webhookTypes.has('offer_created'), true);
+  assert.equal(webhookTypes.has('offer_countered'), true);
+  assert.equal(webhookTypes.has('offer_accepted'), true);
+  assert.equal(webhookTypes.has('offer_cancelled'), true);
+  assert.equal(webhookTypes.has('offer_contact_revealed'), true);
+
+  const page1 = await app.inject({
+    method: 'GET',
+    url: '/events?limit=2',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(Array.isArray(page1.json().events), true);
+  assert.equal(page1.json().events.length, 2);
+  assert.equal(typeof page1.json().next_cursor, 'string');
+
+  const page2 = await app.inject({
+    method: 'GET',
+    url: `/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=100`,
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page2.statusCode, 200);
+  const allIds = [...page1.json().events, ...page2.json().events].map((event) => event.id);
+  assert.equal(new Set(allIds).size, allIds.length);
+
+  const invalidCursor = await app.inject({
+    method: 'GET',
+    url: '/events?since=not-a-cursor',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(invalidCursor.statusCode, 422);
+  assert.equal(invalidCursor.json().error.code, 'validation_error');
+  assert.equal(invalidCursor.json().error.details.reason, 'invalid_since_cursor');
+
+  const deliveryRows = await query('select count(*)::text as c from event_webhook_deliveries');
+  assert.equal(Number(deliveryRows[0].c) > 0, true);
   await app.close();
 });
 
@@ -2835,6 +3111,33 @@ test('admin projection rebuild endpoint requires admin auth and responds shape',
   assert.equal(ok.json().ok, true);
   assert.ok(ok.json().counts.public_listings_written >= 0);
   assert.ok(ok.json().counts.public_requests_written >= 0);
+  await app.close();
+});
+
+test('GET /internal/admin/daily-metrics requires admin auth and returns digest shape', async () => {
+  const app = buildApp();
+
+  const unauth = await app.inject({
+    method: 'GET',
+    url: '/internal/admin/daily-metrics',
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const ok = await app.inject({
+    method: 'GET',
+    url: '/internal/admin/daily-metrics',
+    headers: { 'x-admin-key': 'admin-test' },
+  });
+  assert.equal(ok.statusCode, 200);
+  const body = ok.json();
+  assert.equal(typeof body.generated_at, 'string');
+  assert.equal(body.window_hours, 24);
+  assert.equal(typeof body.abuse.suspended_nodes, 'number');
+  assert.equal(typeof body.stripe_credits_health.credit_grants, 'number');
+  assert.equal(typeof body.liquidity.offers_created, 'number');
+  assert.equal(typeof body.reliability.searches, 'number');
+  assert.equal(typeof body.webhook_health.offer_webhook_deliveries, 'number');
   await app.close();
 });
 

@@ -24,12 +24,14 @@ export const fabricService = {
     email: string | null;
     referral_code: string | null;
     recovery_public_key: string | null;
+    messaging_handles?: Array<{ kind: string; handle: string; url: string | null }>;
     legal_version: string;
     legal_ip: string | null;
     legal_user_agent: string | null;
   }) {
     try {
-      const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, {
+      const messagingHandles = normalizeMessagingHandles(payload.messaging_handles);
+      const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, messagingHandles, {
         acceptedAt: new Date().toISOString(),
         version: payload.legal_version,
         ip: payload.legal_ip,
@@ -58,6 +60,8 @@ export const fabricService = {
           email: normalizeEmail(payload.email),
           email_verified_at: null,
           recovery_public_key_configured: Boolean(payload.recovery_public_key),
+          messaging_handles: messagingHandles,
+          event_webhook_url: null,
           status: 'ACTIVE',
           plan: 'free',
           is_subscriber: false,
@@ -178,6 +182,8 @@ export const fabricService = {
         email: me.email,
         email_verified_at: me.email_verified_at,
         recovery_public_key_configured: Boolean(me.recovery_public_key),
+        messaging_handles: normalizeMessagingHandles(me.messaging_handles),
+        event_webhook_url: me.event_webhook_url ?? null,
         status: me.status,
         plan: responsePlan,
         is_subscriber: me.sub_status === 'active',
@@ -187,9 +193,22 @@ export const fabricService = {
       credits_balance: balance,
     };
   },
-  async patchMe(nodeId: string, payload: { display_name: string | null; email: string | null; recovery_public_key?: string | null }) {
+  async patchMe(nodeId: string, payload: {
+    display_name: string | null;
+    email: string | null;
+    recovery_public_key?: string | null;
+    messaging_handles?: Array<{ kind: string; handle: string; url: string | null }> | null;
+    event_webhook_url?: string | null;
+  }) {
     try {
-      await repo.updateMe(nodeId, payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key);
+      await repo.updateMe(
+        nodeId,
+        payload.display_name,
+        normalizeEmail(payload.email),
+        payload.recovery_public_key,
+        payload.messaging_handles === undefined ? undefined : normalizeMessagingHandles(payload.messaging_handles),
+        payload.event_webhook_url,
+      );
     } catch (err: any) {
       if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
       throw err;
@@ -505,6 +524,28 @@ export const fabricService = {
       has_more: hasMore,
     };
   },
+  async listEvents(nodeId: string, sinceCursor: string | null, limit: number) {
+    const decoded = decodeEventCursor(sinceCursor);
+    if (sinceCursor && !decoded) return { validationError: 'invalid_since_cursor' };
+    const rows = await repo.listOfferLifecycleEvents(nodeId, limit, decoded);
+    const events = rows.map((row) => ({
+      id: row.id,
+      type: row.event_type,
+      offer_id: row.offer_id,
+      actor_node_id: row.actor_node_id,
+      recipient_node_id: row.recipient_node_id,
+      payload: row.payload ?? {},
+      created_at: row.created_at,
+    }));
+    const last = rows[rows.length - 1];
+    return {
+      events,
+      next_cursor: rows.length === limit && last ? encodeEventCursor(last.created_at, last.id) : null,
+    };
+  },
+  async adminDailyMetrics() {
+    return repo.getDailyMetricsSnapshot(24);
+  },
 };
 
 export async function offerSummary(offer: any) {
@@ -529,8 +570,8 @@ export async function offerSummary(offer: any) {
   };
 }
 
-(fabricService as any).createOffer = async (nodeId: string, isSubscriber: boolean, unitIds: string[], threadId: string | null, note: string | null) => {
-  if (!isSubscriber) return { forbidden: true };
+(fabricService as any).createOffer = async (nodeId: string, unitIds: string[], threadId: string | null, note: string | null) => {
+  if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   const owners = await repo.getUnitsOwners(unitIds);
   if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
   const uniqueOwners = new Set(owners.map((u) => u.node_id));
@@ -557,22 +598,38 @@ export async function offerSummary(offer: any) {
   const sum = await offerSummary(offer);
   sum.held_unit_ids = held;
   sum.unheld_unit_ids = unheld;
+  await emitOfferLifecycleEvents({
+    offerId: offer.id,
+    eventType: 'offer_created',
+    actorNodeId: nodeId,
+    fromNodeId: offer.from_node_id,
+    toNodeId: offer.to_node_id,
+    payload: { status: offer.status, thread_id: offer.thread_id },
+  });
   return { offer: sum };
 };
 
-(fabricService as any).counterOffer = async (nodeId: string, isSubscriber: boolean, offerId: string, unitIds: string[], note: string | null) => {
-  if (!isSubscriber) return { forbidden: true };
+(fabricService as any).counterOffer = async (nodeId: string, offerId: string, unitIds: string[], note: string | null) => {
+  if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
   await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
   await repo.releaseHolds(prior.id);
-  const next = await (fabricService as any).createOffer(nodeId, true, unitIds, prior.thread_id, note);
+  await emitOfferLifecycleEvents({
+    offerId: prior.id,
+    eventType: 'offer_countered',
+    actorNodeId: nodeId,
+    fromNodeId: prior.from_node_id,
+    toNodeId: prior.to_node_id,
+    payload: { status: 'countered', thread_id: prior.thread_id },
+  });
+  const next = await (fabricService as any).createOffer(nodeId, unitIds, prior.thread_id, note);
   return next;
 };
 
-(fabricService as any).acceptOffer = async (nodeId: string, isSubscriber: boolean, offerId: string) => {
-  if (!isSubscriber) return { subscriberRequired: true };
+(fabricService as any).acceptOffer = async (nodeId: string, offerId: string) => {
+  if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
@@ -587,17 +644,49 @@ export async function offerSummary(offer: any) {
     if (offer.accepted_by_to_at) {
       const updated = await repo.setOfferStatus(offerId, 'mutually_accepted', { accepted_by_from_at: new Date().toISOString(), mutually_accepted_at: new Date().toISOString() });
       await repo.commitHolds(offerId);
+      await emitOfferLifecycleEvents({
+        offerId: updated.id,
+        eventType: 'offer_accepted',
+        actorNodeId: nodeId,
+        fromNodeId: updated.from_node_id,
+        toNodeId: updated.to_node_id,
+        payload: { status: updated.status, thread_id: updated.thread_id },
+      });
       return { offer: await offerSummary(updated) };
     }
     const updated = await repo.setOfferStatus(offerId, 'accepted_by_a', { accepted_by_from_at: new Date().toISOString() });
+    await emitOfferLifecycleEvents({
+      offerId: updated.id,
+      eventType: 'offer_accepted',
+      actorNodeId: nodeId,
+      fromNodeId: updated.from_node_id,
+      toNodeId: updated.to_node_id,
+      payload: { status: updated.status, thread_id: updated.thread_id },
+    });
     return { offer: await offerSummary(updated) };
   }
   if (offer.accepted_by_from_at) {
     const updated = await repo.setOfferStatus(offerId, 'mutually_accepted', { accepted_by_to_at: new Date().toISOString(), mutually_accepted_at: new Date().toISOString() });
     await repo.commitHolds(offerId);
+    await emitOfferLifecycleEvents({
+      offerId: updated.id,
+      eventType: 'offer_accepted',
+      actorNodeId: nodeId,
+      fromNodeId: updated.from_node_id,
+      toNodeId: updated.to_node_id,
+      payload: { status: updated.status, thread_id: updated.thread_id },
+    });
     return { offer: await offerSummary(updated) };
   }
   const updated = await repo.setOfferStatus(offerId, 'accepted_by_b', { accepted_by_to_at: new Date().toISOString() });
+  await emitOfferLifecycleEvents({
+    offerId: updated.id,
+    eventType: 'offer_accepted',
+    actorNodeId: nodeId,
+    fromNodeId: updated.from_node_id,
+    toNodeId: updated.to_node_id,
+    payload: { status: updated.status, thread_id: updated.thread_id },
+  });
   return { offer: await offerSummary(updated) };
 };
 
@@ -612,12 +701,21 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).cancelOffer = async (nodeId: string, offerId: string) => {
+  if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (offer.from_node_id !== nodeId) return { forbidden: true };
   const updated = await repo.setOfferStatus(offerId, 'cancelled', { cancelled_at: new Date().toISOString() });
   await repo.releaseHolds(offerId);
+  await emitOfferLifecycleEvents({
+    offerId: updated.id,
+    eventType: 'offer_cancelled',
+    actorNodeId: nodeId,
+    fromNodeId: updated.from_node_id,
+    toNodeId: updated.to_node_id,
+    payload: { status: updated.status, thread_id: updated.thread_id },
+  });
   return { offer: await offerSummary(updated) };
 };
 
@@ -635,19 +733,27 @@ export async function offerSummary(offer: any) {
   return { offer: await offerSummary(offer) };
 };
 
-(fabricService as any).revealContact = async (nodeId: string, isSubscriber: boolean, offerId: string) => {
+(fabricService as any).revealContact = async (nodeId: string, offerId: string) => {
+  if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (offer.status !== 'mutually_accepted') return { notAccepted: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
-  if (!isSubscriber) return { subscriberRequired: true };
   const from = await repo.getMe(offer.from_node_id);
   const to = await repo.getMe(offer.to_node_id);
-  if (from.sub_status !== 'active' || to.sub_status !== 'active') return { subscriberRequired: true };
   const revealNode = offer.from_node_id === nodeId ? to : from;
-  await repo.addContactReveal(offerId, nodeId, revealNode.id, revealNode.email, revealNode.phone);
-  return { contact: { email: revealNode.email ?? '', phone: revealNode.phone ?? null } };
+  const messagingHandles = normalizeMessagingHandles(revealNode.messaging_handles);
+  await repo.addContactReveal(offerId, nodeId, revealNode.id, revealNode.email, revealNode.phone, messagingHandles);
+  await emitOfferLifecycleEvents({
+    offerId: offer.id,
+    eventType: 'offer_contact_revealed',
+    actorNodeId: nodeId,
+    fromNodeId: offer.from_node_id,
+    toNodeId: offer.to_node_id,
+    payload: { status: offer.status, thread_id: offer.thread_id },
+  });
+  return { contact: { email: revealNode.email ?? '', phone: revealNode.phone ?? null, messaging_handles: messagingHandles } };
 };
 
 (fabricService as any).claimReferral = async (nodeId: string, referralCode: string) => {
@@ -721,6 +827,7 @@ async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
 }
 
 const SEARCH_CURSOR_PREFIX = 'pg1:';
+const OFFER_EVENT_CURSOR_PREFIX = 'ev1:';
 
 function decodeSearchCursor(cursor: string | null | undefined): { after: string | null; pageIndex: number } {
   if (typeof cursor !== 'string' || !cursor) return { after: null, pageIndex: 1 };
@@ -1560,3 +1667,107 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
 
   return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
 };
+
+function normalizeMessagingHandles(raw: unknown): Array<{ kind: string; handle: string; url: string | null }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ kind: string; handle: string; url: string | null }> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const kindRaw = String((entry as any).kind ?? '').trim().toLowerCase();
+    const handleRaw = String((entry as any).handle ?? '').trim();
+    const urlValue = (entry as any).url;
+    const urlRaw = typeof urlValue === 'string' ? urlValue.trim() : '';
+    if (!kindRaw || !handleRaw) continue;
+    out.push({
+      kind: kindRaw,
+      handle: handleRaw,
+      url: urlRaw ? urlRaw : null,
+    });
+  }
+  return out;
+}
+
+async function hasCurrentLegalAssent(nodeId: string) {
+  const me = await repo.getMe(nodeId);
+  if (!me) return false;
+  return Boolean(me.legal_accepted_at) && String(me.legal_version ?? '') === config.requiredLegalVersion;
+}
+
+function encodeEventCursor(createdAt: unknown, id: unknown): string | null {
+  const createdAtIso = createdAt instanceof Date
+    ? createdAt.toISOString()
+    : typeof createdAt === 'string'
+      ? createdAt
+      : null;
+  const idValue = typeof id === 'string' ? id : null;
+  if (!createdAtIso || !idValue) return null;
+  const payload = JSON.stringify({ t: createdAtIso, id: idValue });
+  return `${OFFER_EVENT_CURSOR_PREFIX}${Buffer.from(payload, 'utf8').toString('base64url')}`;
+}
+
+function decodeEventCursor(cursor: string | null | undefined): { created_at: string; id: string } | null {
+  if (typeof cursor !== 'string' || cursor.length === 0) return null;
+  if (!cursor.startsWith(OFFER_EVENT_CURSOR_PREFIX)) return null;
+  const encoded = cursor.slice(OFFER_EVENT_CURSOR_PREFIX.length);
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    const createdAt = typeof parsed?.t === 'string' ? parsed.t : null;
+    const id = typeof parsed?.id === 'string' ? parsed.id : null;
+    if (!createdAt || !id || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return null;
+    return { created_at: createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
+async function emitOfferLifecycleEvents(input: {
+  offerId: string;
+  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_cancelled' | 'offer_contact_revealed';
+  actorNodeId: string;
+  fromNodeId: string;
+  toNodeId: string;
+  payload?: Record<string, unknown>;
+}) {
+  const events = await repo.addOfferLifecycleEvents(
+    input.offerId,
+    input.eventType,
+    input.actorNodeId,
+    [input.fromNodeId, input.toNodeId],
+    input.payload ?? {},
+  );
+
+  await Promise.all(events.map((event) => deliverOfferLifecycleWebhook(event)));
+}
+
+async function deliverOfferLifecycleWebhook(eventRow: any) {
+  const nodeId = String(eventRow.recipient_node_id ?? '');
+  if (!nodeId) return;
+  const webhookUrl = await repo.getNodeEventWebhookUrl(nodeId);
+  if (!webhookUrl) return;
+
+  let ok = false;
+  let statusCode: number | null = null;
+  let error: string | null = null;
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: eventRow.id,
+        type: eventRow.event_type,
+        offer_id: eventRow.offer_id,
+        actor_node_id: eventRow.actor_node_id,
+        recipient_node_id: eventRow.recipient_node_id,
+        payload: eventRow.payload ?? {},
+        created_at: eventRow.created_at,
+      }),
+    });
+    statusCode = response.status;
+    ok = response.ok;
+    if (!response.ok) error = `http_${response.status}`;
+  } catch (err: any) {
+    error = err?.message ?? 'webhook_delivery_failed';
+  }
+
+  await repo.addEventWebhookDelivery(eventRow.id, nodeId, webhookUrl, statusCode, ok, error);
+}

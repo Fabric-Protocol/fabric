@@ -50,13 +50,14 @@ export async function createNode(
   displayName: string,
   email: string | null,
   recoveryPublicKey: string | null,
+  messagingHandles: Array<{ kind: string; handle: string; url: string | null }>,
   legal: { acceptedAt: string; version: string; ip: string | null; userAgent: string | null },
 ) {
   const rows = await query<{ id: string; created_at: string; legal_accepted_at: string; legal_version: string; email_verified_at: string | null }>(
-    `insert into nodes(display_name,email,recovery_public_key,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
-     values($1,$2,$3,'ACTIVE',$4,$5,$6,$7)
+    `insert into nodes(display_name,email,recovery_public_key,messaging_handles,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
+     values($1,$2,$3,$4::jsonb,'ACTIVE',$5,$6,$7,$8)
      returning id,created_at,legal_accepted_at,legal_version`,
-    [displayName, email, recoveryPublicKey, legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
+    [displayName, email, recoveryPublicKey, JSON.stringify(messagingHandles ?? []), legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
   );
   return rows[0];
 }
@@ -95,7 +96,7 @@ export async function addCreditIdempotent(nodeId: string, type: string, amount: 
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
-      n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,n.email_verified_at,n.recovery_public_key,
+      n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,n.email_verified_at,n.recovery_public_key,n.messaging_handles,n.event_webhook_url,
       coalesce(s.plan_code,'free') as plan_code, coalesce(s.status,'none') as sub_status,
       s.current_period_start,s.current_period_end
      from nodes n left join subscriptions s on s.node_id=n.id where n.id=$1 and n.deleted_at is null`,
@@ -171,8 +172,10 @@ export async function updateMe(
   displayName: string | null | undefined,
   email: string | null | undefined,
   recoveryPublicKey: string | null | undefined = undefined,
+  messagingHandles: Array<{ kind: string; handle: string; url: string | null }> | null | undefined = undefined,
+  eventWebhookUrl: string | null | undefined = undefined,
 ) {
-  const rows = await query<any>(
+  const rows = await query<{ id: string }>(
     `update nodes
      set display_name = coalesce($2, display_name),
          email = coalesce($3, email),
@@ -184,7 +187,16 @@ export async function updateMe(
      where id=$1 returning id`,
     [nodeId, displayName, email, recoveryPublicKey],
   );
-  return rows[0] ?? null;
+  const updated = rows[0] ?? null;
+  if (!updated) return null;
+
+  if (messagingHandles !== undefined) {
+    await query('update nodes set messaging_handles=$2::jsonb where id=$1', [nodeId, JSON.stringify(messagingHandles ?? [])]);
+  }
+  if (eventWebhookUrl !== undefined) {
+    await query('update nodes set event_webhook_url=$2 where id=$1', [nodeId, eventWebhookUrl]);
+  }
+  return updated;
 }
 
 export async function setNodeEmailForVerification(nodeId: string, email: string) {
@@ -869,8 +881,106 @@ export async function listOffers(nodeId: string, role: 'made'|'received', limit:
   return query<any>(`select * from offers where ${col}=$1 and deleted_at is null order by created_at desc limit $2`, [nodeId, limit]);
 }
 
-export async function addContactReveal(offerId: string, requestingNodeId: string, revealedNodeId: string, email: string | null, phone: string | null) {
-  await query('insert into contact_reveals(offer_id,requesting_node_id,revealed_node_id,revealed_email,revealed_phone) values($1,$2,$3,$4,$5)', [offerId, requestingNodeId, revealedNodeId, email, phone]);
+export async function addContactReveal(
+  offerId: string,
+  requestingNodeId: string,
+  revealedNodeId: string,
+  email: string | null,
+  phone: string | null,
+  messagingHandles: Array<{ kind: string; handle: string; url: string | null }>,
+) {
+  await query(
+    'insert into contact_reveals(offer_id,requesting_node_id,revealed_node_id,revealed_email,revealed_phone,revealed_messaging_handles) values($1,$2,$3,$4,$5,$6::jsonb)',
+    [offerId, requestingNodeId, revealedNodeId, email, phone, JSON.stringify(messagingHandles ?? [])],
+  );
+}
+
+export type OfferEventCursor = { created_at: string; id: string };
+
+export async function addOfferLifecycleEvents(
+  offerId: string,
+  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_cancelled' | 'offer_contact_revealed',
+  actorNodeId: string,
+  recipientNodeIds: string[],
+  payload: Record<string, unknown> = {},
+) {
+  const recipients = [...new Set(recipientNodeIds.filter((id) => typeof id === 'string' && id.length > 0))];
+  if (recipients.length === 0) return [] as any[];
+  return query<any>(
+    `insert into offer_events(offer_id,event_type,actor_node_id,recipient_node_id,payload)
+     select
+       $1::uuid,
+       $2::text,
+       $3::uuid,
+       recipients.node_id::uuid,
+       $4::jsonb
+     from unnest($5::uuid[]) as recipients(node_id)
+     returning id,offer_id,event_type,actor_node_id,recipient_node_id,payload,created_at`,
+    [offerId, eventType, actorNodeId, JSON.stringify(payload ?? {}), recipients],
+  );
+}
+
+export async function listOfferLifecycleEvents(nodeId: string, limit: number, cursor: OfferEventCursor | null) {
+  if (cursor) {
+    return query<any>(
+      `select
+         id,
+         offer_id,
+         event_type,
+         actor_node_id,
+         recipient_node_id,
+         payload,
+         to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
+       from offer_events
+       where recipient_node_id=$1
+         and (created_at, id) > ($2::timestamptz, $3::uuid)
+       order by created_at asc, id asc
+       limit $4`,
+      [nodeId, cursor.created_at, cursor.id, limit],
+    );
+  }
+  return query<any>(
+    `select
+       id,
+       offer_id,
+       event_type,
+       actor_node_id,
+       recipient_node_id,
+       payload,
+       to_char(created_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as created_at
+     from offer_events
+     where recipient_node_id=$1
+     order by created_at asc, id asc
+     limit $2`,
+    [nodeId, limit],
+  );
+}
+
+export async function getNodeEventWebhookUrl(nodeId: string) {
+  const rows = await query<{ event_webhook_url: string | null }>(
+    `select event_webhook_url
+     from nodes
+     where id=$1
+       and deleted_at is null
+     limit 1`,
+    [nodeId],
+  );
+  return rows[0]?.event_webhook_url ?? null;
+}
+
+export async function addEventWebhookDelivery(
+  eventId: string,
+  nodeId: string,
+  webhookUrl: string,
+  statusCode: number | null,
+  ok: boolean,
+  error: string | null,
+) {
+  await query(
+    `insert into event_webhook_deliveries(event_id,node_id,webhook_url,status_code,ok,error)
+     values($1,$2,$3,$4,$5,$6)`,
+    [eventId, nodeId, webhookUrl, statusCode, ok, error],
+  );
 }
 
 export async function findReferralCode(code: string) {
@@ -1027,4 +1137,126 @@ export async function awardReferralFirstPaid(
 
 export async function markReferralAwarded(claimId: string) {
   await query("update referral_claims set status='awarded', awarded_at=now() where id=$1", [claimId]);
+}
+
+export async function getDailyMetricsSnapshot(windowHours: number = 24) {
+  const windowStart = new Date(Date.now() - (windowHours * 60 * 60 * 1000)).toISOString();
+
+  const suspendedRows = await query<{ c: string }>(
+    `select count(*)::text as c
+     from nodes
+     where deleted_at is null
+       and (status='SUSPENDED' or suspended_at is not null)`,
+  );
+  const takedownRows = await query<{ c: string }>(
+    `select count(*)::text as c
+     from takedowns
+     where reversed_at is null`,
+  );
+  const attemptsRows = await query<{ c: string }>(
+    `select count(*)::text as c
+     from recovery_challenges
+     where created_at >= $1::timestamptz
+       and attempts >= max_attempts`,
+    [windowStart],
+  );
+
+  const stripeRows = await query<{ received: string; processing_errors: string }>(
+    `select
+       count(*)::text as received,
+       count(*) filter (where processing_error is not null)::text as processing_errors
+     from stripe_events
+     where received_at >= $1::timestamptz`,
+    [windowStart],
+  );
+  const creditRows = await query<{ grants: string; debits: string; net: string }>(
+    `select
+       coalesce(sum(case when amount > 0 then amount else 0 end), 0)::text as grants,
+       coalesce(sum(case when amount < 0 then -amount else 0 end), 0)::text as debits,
+       coalesce(sum(amount), 0)::text as net
+     from credit_ledger
+     where created_at >= $1::timestamptz`,
+    [windowStart],
+  );
+
+  const publicRows = await query<{ listings: string; requests: string }>(
+    `select
+       (select count(*)::text from public_listings) as listings,
+       (select count(*)::text from public_requests) as requests`,
+  );
+  const offerRows = await query<{ created: string; mutually_accepted: string }>(
+    `select
+       count(*) filter (where created_at >= $1::timestamptz)::text as created,
+       count(*) filter (where mutually_accepted_at is not null and mutually_accepted_at >= $1::timestamptz)::text as mutually_accepted
+     from offers
+     where deleted_at is null`,
+    [windowStart],
+  );
+  const reliabilityRows = await query<{ searches: string; active_nodes: string; active_api_keys: string }>(
+    `select
+       (select count(*)::text from search_logs where created_at >= $1::timestamptz) as searches,
+       (select count(*)::text from nodes where deleted_at is null and status='ACTIVE' and suspended_at is null) as active_nodes,
+       (select count(*)::text from api_keys where revoked_at is null) as active_api_keys`,
+    [windowStart],
+  );
+  const webhookRows = await query<{ deliveries: string; failures: string }>(
+    `select
+       count(*)::text as deliveries,
+       count(*) filter (where ok=false)::text as failures
+     from event_webhook_deliveries
+     where created_at >= $1::timestamptz`,
+    [windowStart],
+  );
+
+  const suspended = Number(suspendedRows[0]?.c ?? 0);
+  const activeTakedowns = Number(takedownRows[0]?.c ?? 0);
+  const attemptsExceeded = Number(attemptsRows[0]?.c ?? 0);
+  const stripeReceived = Number(stripeRows[0]?.received ?? 0);
+  const stripeErrors = Number(stripeRows[0]?.processing_errors ?? 0);
+  const creditGrants = Number(creditRows[0]?.grants ?? 0);
+  const creditDebits = Number(creditRows[0]?.debits ?? 0);
+  const creditNet = Number(creditRows[0]?.net ?? 0);
+  const publicListings = Number(publicRows[0]?.listings ?? 0);
+  const publicRequests = Number(publicRows[0]?.requests ?? 0);
+  const offersCreated = Number(offerRows[0]?.created ?? 0);
+  const offersMutuallyAccepted = Number(offerRows[0]?.mutually_accepted ?? 0);
+  const searches = Number(reliabilityRows[0]?.searches ?? 0);
+  const activeNodes = Number(reliabilityRows[0]?.active_nodes ?? 0);
+  const activeApiKeys = Number(reliabilityRows[0]?.active_api_keys ?? 0);
+  const webhookDeliveries = Number(webhookRows[0]?.deliveries ?? 0);
+  const webhookFailures = Number(webhookRows[0]?.failures ?? 0);
+
+  return {
+    generated_at: new Date().toISOString(),
+    window_hours: windowHours,
+    abuse: {
+      suspended_nodes: suspended,
+      active_takedowns: activeTakedowns,
+      recovery_attempts_exceeded: attemptsExceeded,
+    },
+    stripe_credits_health: {
+      stripe_events_received: stripeReceived,
+      stripe_processing_errors: stripeErrors,
+      credit_grants: creditGrants,
+      credit_debits: creditDebits,
+      credit_net: creditNet,
+    },
+    liquidity: {
+      public_listings: publicListings,
+      public_requests: publicRequests,
+      offers_created: offersCreated,
+      offers_mutually_accepted: offersMutuallyAccepted,
+    },
+    reliability: {
+      searches,
+      active_nodes: activeNodes,
+      active_api_keys: activeApiKeys,
+    },
+    webhook_health: {
+      stripe_events_received: stripeReceived,
+      stripe_processing_errors: stripeErrors,
+      offer_webhook_deliveries: webhookDeliveries,
+      offer_webhook_failures: webhookFailures,
+    },
+  };
 }

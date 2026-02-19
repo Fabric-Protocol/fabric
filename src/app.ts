@@ -35,6 +35,11 @@ const resourceSchema = z.object({
   scope_notes: z.string().nullable().optional(), location_text_public: z.string().nullable().optional(), origin_region: z.any().optional(), dest_region: z.any().optional(), service_region: z.any().optional(),
   delivery_format: z.string().nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
 });
+const messagingHandleSchema = z.object({
+  kind: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9._-]+$/),
+  handle: z.string().trim().min(1).max(128),
+  url: z.string().trim().url().max(2048).nullable().optional(),
+});
 
 const searchSchema = z.object({
   q: z.string().nullable(),
@@ -1008,7 +1013,7 @@ export function buildApp() {
       return;
     }
 
-    if (path.startsWith('/v1/admin/')) {
+    if (path.startsWith('/v1/admin/') || path.startsWith('/internal/admin/')) {
       if (req.headers['x-admin-key'] !== config.adminKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
       return;
     }
@@ -1100,6 +1105,7 @@ export function buildApp() {
       email: z.string().nullable(),
       referral_code: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
+      messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
       legal: z.unknown().optional(),
     });
     const parsed = schema.safeParse(req.body);
@@ -1134,6 +1140,7 @@ export function buildApp() {
       email: parsed.data.email,
       referral_code: parsed.data.referral_code,
       recovery_public_key: parsed.data.recovery_public_key ?? null,
+      messaging_handles: parsed.data.messaging_handles ?? [],
       legal_version: legalVersion,
       legal_ip: extractClientIp(req),
       legal_user_agent: extractUserAgent(req),
@@ -1164,6 +1171,8 @@ export function buildApp() {
       display_name: z.string().nullable(),
       email: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
+      messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
+      event_webhook_url: z.string().trim().url().max(2048).nullable().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const out = await fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);
@@ -1539,22 +1548,22 @@ export function buildApp() {
   app.post('/v1/offers', async (req, reply) => {
     const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable(), note: z.string().nullable() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, !!(req as AuthedRequest).isSubscriber, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note);
-    if (out.forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note);
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/counter', async (req, reply) => {
     const parsed = z.object({ unit_ids: z.array(z.string()).min(1), note: z.string().nullable() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, !!(req as AuthedRequest).isSubscriber, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note);
-    if (out.forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note);
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     return out;
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
-    const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, !!(req as AuthedRequest).isSubscriber, (req.params as any).offer_id);
-    if (out.subscriberRequired) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
@@ -1568,16 +1577,29 @@ export function buildApp() {
   });
   app.post('/v1/offers/:offer_id/cancel', async (req, reply) => {
     const out = await (fabricService as any).cancelOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     return out;
   });
   app.post('/v1/offers/:offer_id/reveal-contact', async (req, reply) => {
-    const out = await (fabricService as any).revealContact((req as AuthedRequest).nodeId!, !!(req as AuthedRequest).isSubscriber, (req.params as any).offer_id);
+    const out = await (fabricService as any).revealContact((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.notAccepted) return reply.status(409).send(errorEnvelope('offer_not_mutually_accepted', 'Offer not mutually accepted'));
-    if (out.subscriberRequired) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
+    return out;
+  });
+  app.get('/events', async (req, reply) => {
+    const q = req.query as any;
+    const limit = Number(q.limit ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
+    }
+    const out = await fabricService.listEvents((req as AuthedRequest).nodeId!, q.since ?? null, limit);
+    if ((out as any).validationError) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid events cursor', { reason: (out as any).validationError }));
+    }
     return out;
   });
 
@@ -1710,6 +1732,7 @@ export function buildApp() {
       active_base_url: activeBaseHost(req),
     };
   });
+  app.get('/internal/admin/daily-metrics', async () => fabricService.adminDailyMetrics());
   app.post('/v1/admin/credits/adjust', async (req, reply) => {
     const parsed = z.object({ node_id: z.string(), delta: z.number(), reason: z.string() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
