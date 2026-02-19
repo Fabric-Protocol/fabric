@@ -293,6 +293,7 @@ create table if not exists units (
   condition text null check (condition in ('new','like_new','good','fair','poor','unknown')),
 
   quantity numeric null,
+  estimated_value numeric null,
   measure text null,
   custom_measure text null,
 
@@ -322,6 +323,7 @@ create table if not exists units (
 create index if not exists units_node_idx on units(node_id) where deleted_at is null;
 create index if not exists units_published_idx on units(published_at desc) where deleted_at is null;
 create index if not exists units_scope_idx on units(scope_primary) where deleted_at is null;
+alter table units add column if not exists estimated_value numeric null;
 
 drop trigger if exists units_set_updated_at on units;
 create trigger units_set_updated_at
@@ -567,6 +569,25 @@ create table if not exists search_logs (
 );
 
 create index if not exists search_logs_node_created_idx on search_logs(node_id, created_at desc);
+
+-- =========================
+-- Visibility events
+-- =========================
+create table if not exists visibility_events (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null check (event_type in ('search_impression','detail_view')),
+  viewer_node_id uuid not null references nodes(id),
+  subject_kind text not null check (subject_kind in ('listing','request')),
+  item_id uuid not null,
+  search_id uuid null,
+  position int null,
+  scope text null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists visibility_events_viewer_created_idx on visibility_events(viewer_node_id, created_at desc);
+create index if not exists visibility_events_type_created_idx on visibility_events(event_type, created_at desc);
+create index if not exists visibility_events_item_type_created_idx on visibility_events(item_id, event_type, created_at desc);
 
 -- =========================
 -- Admin takedowns (reversible)

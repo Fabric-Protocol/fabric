@@ -390,31 +390,58 @@ export const fabricService = {
     if (targetResolution.validationError) return { validationError: targetResolution.validationError };
     const targetNodeId = targetResolution.targetNodeId;
 
+    const parsedCursor = decodeSearchCursor(body?.cursor ?? null);
     const baseSearchCost = config.searchCreditCost;
     const broadeningLevel = Number(body?.broadening?.level ?? 0);
     const broadeningCost = broadeningLevel;
-    const pageIndex = body?.cursor ? 1 : 0;
-    const pageCost = baseSearchCost + broadeningCost;
+    const pageIndex = parsedCursor.pageIndex;
+    const pageCost = pageAddOnCost(pageIndex);
+    const totalCost = baseSearchCost + broadeningCost + pageCost;
     const creditsRequested = Number(body?.budget?.credits_requested ?? 0);
+    const limit = body.limit ?? 20;
 
     const balance = await repo.creditBalance(nodeId);
-    if (balance < pageCost) return { creditsExhausted: { credits_required: pageCost, credits_balance: balance } };
+    if (balance < totalCost) return { creditsExhausted: { credits_required: totalCost, credits_balance: balance } };
 
-    const isCapped = pageCost > creditsRequested;
-    const effectiveLimit = isCapped ? 0 : (body.limit ?? 20);
-    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, body.cursor ?? null, nodeId, targetNodeId);
-    const creditsCharged = isCapped ? 0 : pageCost;
+    const isCapped = totalCost > creditsRequested;
+    const effectiveLimit = isCapped ? 0 : limit;
+    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, parsedCursor.after, nodeId, targetNodeId);
+    const creditsCharged = isCapped ? 0 : totalCost;
 
     if (creditsCharged > 0) {
-      await repo.addCredit(nodeId, body.cursor ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
+      await repo.addCredit(nodeId, pageIndex > 1 ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
     }
     await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, broadeningLevel, creditsCharged);
 
+    const hasMore = effectiveLimit > 0 && rows.length === effectiveLimit;
+    const nextCursor = hasMore ? encodeSearchCursor(rows[rows.length - 1]?.published_at, pageIndex + 1) : null;
+    const cappedGuidance = pageIndex >= config.searchPageProhibitiveFrom
+      ? `Increase budget.credits_requested, reduce paging depth, or restart with narrower filters; pages ${config.searchPageProhibitiveFrom}+ are restricted.`
+      : 'Increase budget.credits_requested or lower broadening.level/limit and retry.';
+    const items = rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } }));
+    const searchId = crypto.randomUUID();
+    if (items.length > 0) {
+      const subjectKind: 'listing' | 'request' = kind === 'listings' ? 'listing' : 'request';
+      const impressions = rows.flatMap((row, idx) => {
+        const itemId = typeof row?.doc?.id === 'string' ? row.doc.id : null;
+        if (!itemId) return [];
+        return [{
+          search_id: searchId,
+          viewer_node_id: nodeId,
+          subject_kind: subjectKind,
+          item_id: itemId,
+          position: idx + 1,
+          scope: String(body.scope),
+        }];
+      });
+      if (impressions.length > 0) await repo.addSearchImpressions(impressions);
+    }
+
     return {
-      search_id: crypto.randomUUID(),
+      search_id: searchId,
       scope: body.scope,
-      limit: body.limit ?? 20,
-      cursor: body.cursor ?? null,
+      limit,
+      cursor: nextCursor,
       broadening: body.broadening ?? { level: 0, allow: false },
       applied_filters: body.filters ?? {},
       budget: {
@@ -427,13 +454,18 @@ export const fabricService = {
           page_index: pageIndex,
           page_cost: pageCost,
         },
+        coverage: {
+          page_index_executed: pageIndex,
+          broadening_level_executed: broadeningLevel,
+          items_returned: items.length,
+        },
         was_capped: isCapped,
         cap_reason: isCapped ? 'insufficient_budget' : null,
-        guidance: isCapped ? 'Increase budget.credits_requested or lower broadening.level/limit and retry.' : null,
+        guidance: isCapped ? cappedGuidance : null,
       },
-      items: rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } })),
+      items,
       nodes: summarizeSearchNodes(rows),
-      has_more: rows.length === (body.limit ?? 20),
+      has_more: hasMore,
     };
   },
   async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', hasSpendEntitlement: boolean, limit: number, cursor: string | null) {
@@ -443,7 +475,35 @@ export const fabricService = {
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
     const rows = await repo.listNodePublic(targetNodeId, kind, limit, cursor);
     await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}` }, null);
-    return { node_id: targetNodeId, limit, cursor, items: rows.map((r) => r.doc), has_more: rows.length === limit };
+    const hasMore = rows.length === limit;
+    const nextCursor = hasMore ? rows[rows.length - 1]?.published_at ?? null : null;
+    return { node_id: targetNodeId, limit, cursor: nextCursor, items: rows.map((r) => r.doc), has_more: hasMore };
+  },
+  async nodePublicInventoryByCategory(
+    nodeId: string,
+    targetNodeId: string,
+    kind: 'listings' | 'requests',
+    categoryId: number,
+    hasSpendEntitlement: boolean,
+    limit: number,
+    cursor: string | null,
+  ) {
+    if (!hasSpendEntitlement) return { forbidden: true };
+    const cost = config.nodeCategoryDrilldownCost;
+    const balance = await repo.creditBalance(nodeId);
+    if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
+    const rows = await repo.listNodePublicByCategory(targetNodeId, kind, categoryId, limit, cursor);
+    await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}_category`, category_id: categoryId }, null);
+    const hasMore = rows.length === limit;
+    const nextCursor = hasMore ? rows[rows.length - 1]?.published_at ?? null : null;
+    return {
+      node_id: targetNodeId,
+      category_id: categoryId,
+      limit,
+      cursor: nextCursor,
+      items: rows.map((r) => r.doc),
+      has_more: hasMore,
+    };
   },
 };
 
@@ -502,6 +562,7 @@ export async function offerSummary(offer: any) {
 
 (fabricService as any).counterOffer = async (nodeId: string, isSubscriber: boolean, offerId: string, unitIds: string[], note: string | null) => {
   if (!isSubscriber) return { forbidden: true };
+  await repo.expireStaleOffers();
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
   await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
@@ -512,6 +573,7 @@ export async function offerSummary(offer: any) {
 
 (fabricService as any).acceptOffer = async (nodeId: string, isSubscriber: boolean, offerId: string) => {
   if (!isSubscriber) return { subscriberRequired: true };
+  await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
@@ -540,6 +602,7 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).rejectOffer = async (nodeId: string, offerId: string) => {
+  await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
@@ -549,6 +612,7 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).cancelOffer = async (nodeId: string, offerId: string) => {
+  await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (offer.from_node_id !== nodeId) return { forbidden: true };
@@ -558,11 +622,13 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).listOffers = async (nodeId: string, role: 'made' | 'received', limit: number, cursor: string | null) => {
+  await repo.expireStaleOffers();
   const offers = await repo.listOffers(nodeId, role, limit, cursor);
   return { offers: await Promise.all(offers.map((o) => offerSummary(o))) };
 };
 
 (fabricService as any).getOffer = async (nodeId: string, offerId: string) => {
+  await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return null;
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return null;
@@ -570,6 +636,7 @@ export async function offerSummary(offer: any) {
 };
 
 (fabricService as any).revealContact = async (nodeId: string, isSubscriber: boolean, offerId: string) => {
+  await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (offer.status !== 'mutually_accepted') return { notAccepted: true };
@@ -651,6 +718,45 @@ async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
     await repo.createHold(offerId, unitId);
   }
   return { ok: true };
+}
+
+const SEARCH_CURSOR_PREFIX = 'pg1:';
+
+function decodeSearchCursor(cursor: string | null | undefined): { after: string | null; pageIndex: number } {
+  if (typeof cursor !== 'string' || !cursor) return { after: null, pageIndex: 1 };
+  if (cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
+    const encoded = cursor.slice(SEARCH_CURSOR_PREFIX.length);
+    try {
+      const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+      const after = typeof parsed?.a === 'string' ? parsed.a : null;
+      const pageIndex = Number(parsed?.p);
+      if (after && Number.isInteger(pageIndex) && pageIndex >= 2) {
+        return { after, pageIndex };
+      }
+    } catch {
+      // Fall back to legacy cursor parsing below.
+    }
+  }
+  return { after: cursor, pageIndex: 2 };
+}
+
+function encodeSearchCursor(publishedAt: unknown, nextPageIndex: number): string | null {
+  if (!publishedAt) return null;
+  const asIso = publishedAt instanceof Date
+    ? publishedAt.toISOString()
+    : typeof publishedAt === 'string'
+      ? publishedAt
+      : null;
+  if (!asIso || !Number.isInteger(nextPageIndex) || nextPageIndex < 2) return null;
+  const payload = JSON.stringify({ a: asIso, p: nextPageIndex });
+  return `${SEARCH_CURSOR_PREFIX}${Buffer.from(payload, 'utf8').toString('base64url')}`;
+}
+
+function pageAddOnCost(pageIndex: number) {
+  if (pageIndex <= 1) return 0;
+  if (pageIndex >= config.searchPageProhibitiveFrom) return config.searchPageProhibitiveCost;
+  if (pageIndex <= 3) return config.searchPageAddOnSmall;
+  return config.searchPageAddOnLarge;
 }
 
 async function resolveSearchTargetNode(rawTarget: any): Promise<{ targetNodeId: string | null; validationError?: 'target_mismatch' | 'target_not_found' }> {

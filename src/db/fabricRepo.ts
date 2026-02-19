@@ -414,10 +414,10 @@ function tableFor(kind: 'units' | 'requests') { return kind; }
 
 export async function createResource(kind: 'units'|'requests', nodeId: string, payload: any) {
   if (kind === 'units') {
-    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,tags,category_ids,public_summary)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
     return rows[0];
   }
   const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,need_by,accept_substitutions,tags,category_ids,public_summary)
@@ -435,11 +435,11 @@ export async function createUnitWithUploadTrial(
   const rows = await query<any>(`
     with inserted_unit as (
       insert into units(
-        node_id,title,description,type,condition,quantity,measure,custom_measure,
+        node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,
         scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,
         dest_region,service_region,delivery_format,tags,category_ids,public_summary
       )
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
       returning
         id,
         node_id,
@@ -458,12 +458,12 @@ export async function createUnitWithUploadTrial(
       select
         $1,
         'unit_upload_count',
-        $20,
+        $21,
         upload_count.c,
         now(),
-        now() + make_interval(days => $21::int)
+        now() + make_interval(days => $22::int)
       from upload_count
-      where upload_count.c >= $20
+      where upload_count.c >= $21
       on conflict (node_id) do nothing
       returning node_id, starts_at, ends_at, upload_count_at_grant
     ),
@@ -472,10 +472,10 @@ export async function createUnitWithUploadTrial(
       select
         $1,
         'grant_trial',
-        $22,
+        $23,
         jsonb_build_object(
           'reason', 'upload_threshold_trial',
-          'threshold', $20,
+          'threshold', $21,
           'upload_count', insert_trial.upload_count_at_grant,
           'trial_ends_at', insert_trial.ends_at
         ),
@@ -491,11 +491,11 @@ export async function createUnitWithUploadTrial(
         'granted',
         jsonb_build_object(
           'source', 'unit_upload_count',
-          'threshold', $20,
+          'threshold', $21,
           'upload_count', insert_trial.upload_count_at_grant,
           'trial_starts_at', insert_trial.starts_at,
           'trial_ends_at', insert_trial.ends_at,
-          'credits_granted', $22
+          'credits_granted', $23
         )
       from insert_trial
       returning id
@@ -518,6 +518,7 @@ export async function createUnitWithUploadTrial(
     payload.type,
     payload.condition,
     payload.quantity,
+    payload.estimated_value,
     payload.measure,
     payload.custom_measure,
     payload.scope_primary,
@@ -551,9 +552,21 @@ export async function getResource(kind:'units'|'requests', nodeId:string, id:str
 }
 
 export async function patchResource(kind:'units'|'requests', nodeId:string, id:string, version:number, payload:any) {
-  const rows = await query<any>(`update ${kind} set
+  if (kind === 'units') {
+    const rows = await query<any>(`update units set
+        title=coalesce($4,title),description=coalesce($5,description),type=coalesce($6,type),condition=coalesce($7,condition),
+        quantity=coalesce($8,quantity),estimated_value=coalesce($9,estimated_value),measure=coalesce($10,measure),custom_measure=coalesce($11,custom_measure),
+        scope_primary=coalesce($12,scope_primary),scope_secondary=coalesce($13,scope_secondary),scope_notes=coalesce($14,scope_notes),
+        location_text_public=coalesce($15,location_text_public),origin_region=coalesce($16,origin_region),dest_region=coalesce($17,dest_region),
+        service_region=coalesce($18,service_region),delivery_format=coalesce($19,delivery_format),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary)
+        where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
+        returning id,row_version as version`,
+      [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
+    return rows[0] ?? null;
+  }
+  const rows = await query<any>(`update requests set
       title=coalesce($4,title),description=coalesce($5,description),type=coalesce($6,type),condition=coalesce($7,condition),
-      ${kind==='units'?'quantity':'desired_quantity'}=coalesce($8,${kind==='units'?'quantity':'desired_quantity'}),measure=coalesce($9,measure),custom_measure=coalesce($10,custom_measure),
+      desired_quantity=coalesce($8,desired_quantity),measure=coalesce($9,measure),custom_measure=coalesce($10,custom_measure),
       scope_primary=coalesce($11,scope_primary),scope_secondary=coalesce($12,scope_secondary),scope_notes=coalesce($13,scope_notes),
       location_text_public=coalesce($14,location_text_public),origin_region=coalesce($15,origin_region),dest_region=coalesce($16,dest_region),
       service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),tags=coalesce($19,tags),category_ids=coalesce($20,category_ids),public_summary=coalesce($21,public_summary)
@@ -575,9 +588,13 @@ export async function setPublished(kind:'units'|'requests', id:string, published
 
 export async function upsertProjection(kind:'units'|'requests', row:any) {
   if (kind === 'units') {
+    const estimatedValueRaw = row.estimated_value;
+    const estimatedValue = estimatedValueRaw === null || estimatedValueRaw === undefined
+      ? null
+      : Number(estimatedValueRaw);
     const doc = {
       id: row.id,node_id: row.node_id,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
-      title: row.title,description: row.description,public_summary: row.public_summary,quantity: row.quantity,measure: row.measure,
+      title: row.title,description: row.description,public_summary: row.public_summary,quantity: row.quantity,estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : null,measure: row.measure,
       custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
       location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
       delivery_format: row.delivery_format,photos: row.photos,published_at: row.published_at,updated_at: row.updated_at,
@@ -656,6 +673,39 @@ export async function logSearch(nodeId:string, kind:'listings'|'requests', scope
     [nodeId,kind,scope,q? q.replace(/[\w._%+-]+@[\w.-]+\.[A-Za-z]{2,}/g,'[redacted_email]'):null,q?crypto.createHash('sha256').update(q).digest('hex'):null,filters,broadening,credits]);
 }
 
+export async function addSearchImpressions(events: Array<{
+  search_id: string;
+  viewer_node_id: string;
+  subject_kind: 'listing' | 'request';
+  item_id: string;
+  position: number;
+  scope: string;
+}>) {
+  if (events.length === 0) return;
+  await query(
+    `insert into visibility_events(event_type,viewer_node_id,subject_kind,item_id,search_id,position,scope)
+     select
+       'search_impression',
+       ev.viewer_node_id::uuid,
+       ev.subject_kind::text,
+       ev.item_id::uuid,
+       ev.search_id::uuid,
+       ev.position::int,
+       ev.scope::text
+     from jsonb_to_recordset($1::jsonb)
+       as ev(viewer_node_id text, subject_kind text, item_id text, search_id text, position int, scope text)`,
+    [JSON.stringify(events)],
+  );
+}
+
+export async function addDetailView(viewerNodeId: string, subjectKind: 'listing' | 'request', itemId: string, scope: string | null) {
+  await query(
+    `insert into visibility_events(event_type,viewer_node_id,subject_kind,item_id,search_id,position,scope)
+     values('detail_view',$1,$2,$3,null,null,$4)`,
+    [viewerNodeId, subjectKind, itemId, scope],
+  );
+}
+
 export async function listNodePublic(nodeId:string, kind:'listings'|'requests', limit:number, cursor:string|null) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
   if (cursor) {
@@ -687,6 +737,48 @@ export async function listNodePublic(nodeId:string, kind:'listings'|'requests', 
   );
 }
 
+export async function listNodePublicByCategory(nodeId: string, kind: 'listings' | 'requests', categoryId: number, limit: number, cursor: string | null) {
+  const table = kind === 'listings' ? 'public_listings' : 'public_requests';
+  const categoryKey = String(categoryId);
+  if (cursor) {
+    return query<any>(
+      `select p.doc,p.published_at
+       from ${table} p
+       join nodes n on n.id=p.node_id
+       where p.node_id=$1
+         and exists (
+           select 1
+           from jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
+           where c.category_id = $2
+         )
+         and p.published_at < $4::timestamptz
+         and n.status='ACTIVE'
+         and n.suspended_at is null
+         and n.deleted_at is null
+       order by p.published_at desc
+       limit $3`,
+      [nodeId, categoryKey, limit, cursor],
+    );
+  }
+  return query<any>(
+    `select p.doc,p.published_at
+     from ${table} p
+     join nodes n on n.id=p.node_id
+     where p.node_id=$1
+       and exists (
+         select 1
+         from jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
+         where c.category_id = $2
+       )
+       and n.status='ACTIVE'
+       and n.suspended_at is null
+       and n.deleted_at is null
+     order by p.published_at desc
+     limit $3`,
+    [nodeId, categoryKey, limit],
+  );
+}
+
 export async function getUnitsOwners(unitIds: string[]) {
   return query<{ id: string; node_id: string }>('select id,node_id from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
 }
@@ -713,6 +805,30 @@ export async function createHold(offerId: string, unitId: string) {
 export async function getOffer(offerId: string) {
   const rows = await query<any>('select * from offers where id=$1 and deleted_at is null', [offerId]);
   return rows[0] ?? null;
+}
+
+export async function expireStaleOffers() {
+  const rows = await query<{ id: string }>(
+    `with expired as (
+       update offers
+       set status='expired',
+           expired_at=coalesce(expired_at, now())
+       where status in ('pending','accepted_by_a','accepted_by_b')
+         and expires_at <= now()
+         and deleted_at is null
+       returning id
+     ),
+     expired_holds as (
+       update holds
+       set status='expired',
+           expired_at=coalesce(expired_at, now())
+       where offer_id in (select id from expired)
+         and status='active'
+       returning id
+     )
+     select id from expired`,
+  );
+  return rows.length;
 }
 
 export async function getOfferLines(offerId: string) {

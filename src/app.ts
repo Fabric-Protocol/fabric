@@ -25,10 +25,12 @@ let startupDbEnvCheckLogged = false;
 type RateLimitSubject = 'ip' | 'node' | 'global';
 type RateLimitRule = { name: string; limit: number; windowSeconds: number; subject: RateLimitSubject };
 const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
+const searchBroadQueryState = new Map<string, number[]>();
+const SEARCH_CURSOR_PREFIX = 'pg1:';
 
 const resourceSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
-  quantity: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
+  quantity: z.number().nullable().optional(), estimated_value: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
   scope_primary: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']).nullable().optional(), scope_secondary: z.array(z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER'])).nullable().optional(),
   scope_notes: z.string().nullable().optional(), location_text_public: z.string().nullable().optional(), origin_region: z.any().optional(), dest_region: z.any().optional(), service_region: z.any().optional(),
   delivery_format: z.string().nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
@@ -728,6 +730,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && /^\/v1\/offers\/[^/]+\/reveal-contact$/.test(path)) return { name: 'reveal_contact', limit: config.rateLimitRevealContactPerHour, windowSeconds: 3600, subject: 'node' };
@@ -773,6 +776,101 @@ function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string)
 function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
   const subject = rateLimitSubjectValue(req, rule);
   return applyRateLimitSubject(reply, rule, subject);
+}
+
+function decodeSearchCursorPageIndex(cursor: string | null | undefined) {
+  if (typeof cursor !== 'string' || !cursor) return 1;
+  if (cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
+    const encoded = cursor.slice(SEARCH_CURSOR_PREFIX.length);
+    try {
+      const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+      const pageIndex = Number(parsed?.p);
+      if (Number.isInteger(pageIndex) && pageIndex >= 2) return pageIndex;
+    } catch {
+      // Fall through to legacy parsing.
+    }
+  }
+  return 2;
+}
+
+function isLikelyBroadSearchRequest(payload: any) {
+  const q = typeof payload?.q === 'string' ? payload.q.trim() : '';
+  const qBroad = q.length === 0 || q.length <= 2;
+  const filters = payload?.filters && typeof payload.filters === 'object' ? payload.filters : {};
+  const filterKeys = Object.keys(filters);
+  const minimalFilters = filterKeys.length === 0;
+  const broadeningLevel = Number(payload?.broadening?.level ?? 0);
+  const broadeningHigh = broadeningLevel >= config.searchBroadeningHighThreshold;
+  const limitHigh = Number(payload?.limit ?? 20) >= 50;
+  return qBroad && minimalFilters && (broadeningHigh || limitHigh);
+}
+
+function repeatedBroadSearchDetected(nodeId: string, isBroadSearch: boolean) {
+  if (!isBroadSearch) return false;
+  const now = Date.now();
+  const windowMs = config.searchBroadQueryWindowSeconds * 1000;
+  const recent = (searchBroadQueryState.get(nodeId) ?? []).filter((ts) => now - ts <= windowMs);
+  recent.push(now);
+  searchBroadQueryState.set(nodeId, recent);
+  return recent.length >= config.searchBroadQueryThreshold;
+}
+
+function applySearchScrapeGuard(req: FastifyRequest, reply: any, payload: any) {
+  const nodeId = (req as AuthedRequest).nodeId;
+  if (!nodeId) return true;
+
+  const pageIndex = decodeSearchCursorPageIndex(payload?.cursor ?? null);
+  const broadeningLevel = Number(payload?.broadening?.level ?? 0);
+  const limit = Number(payload?.limit ?? 20);
+  const qPresent = typeof payload?.q === 'string' && payload.q.trim().length > 0;
+  const broadQuery = isLikelyBroadSearchRequest(payload);
+  const repeatedBroad = repeatedBroadSearchDetected(nodeId, broadQuery);
+  const reason = pageIndex >= config.searchPageProhibitiveFrom
+    ? 'page_index_prohibitive'
+    : repeatedBroad
+      ? 'repeated_broad_queries'
+      : null;
+
+  if (!reason) return true;
+
+  req.log.warn(
+    {
+      event: 'search_suspected_scrape',
+      node_id: nodeId,
+      search_id: null,
+      page_index: pageIndex,
+      scope: payload?.scope ?? null,
+      q_present: qPresent,
+      broadening_level: broadeningLevel,
+      limit,
+      reason,
+    },
+    'search_suspected_scrape',
+  );
+
+  const strictRule: RateLimitRule = {
+    name: 'search_scrape_guard',
+    limit: config.rateLimitSearchScrapePerMinute,
+    windowSeconds: 60,
+    subject: 'node',
+  };
+  return applyRateLimitSubject(reply, strictRule, nodeId);
+}
+
+function detectDisabledSearchFeatures(payload: any) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return [] as string[];
+  const hits = new Set<string>();
+  const disallowedTopLevel = ['semantic', 'vector', 'embedding', 'expansion', 'lexical_override', 'synonym_expansion', 'query_override'];
+  for (const key of disallowedTopLevel) {
+    if (Object.prototype.hasOwnProperty.call(payload, key)) hits.add(key);
+  }
+  const broadening = (payload as any).broadening;
+  if (broadening && typeof broadening === 'object' && !Array.isArray(broadening)) {
+    for (const key of ['expand', 'expansion', 'synonyms', 'override']) {
+      if (Object.prototype.hasOwnProperty.call(broadening, key)) hits.add(`broadening.${key}`);
+    }
+  }
+  return [...hits];
 }
 
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
@@ -963,7 +1061,18 @@ export function buildApp() {
     if (!nonGet.has(req.method) || req.url === '/v1/webhooks/stripe') return payload;
     const idem = (req as AuthedRequest).idem;
     if (!idem) return payload;
-    const responseJson = typeof payload === 'string' ? JSON.parse(payload) : payload;
+    let responseJson: unknown;
+    if (typeof payload === 'string') {
+      try {
+        responseJson = JSON.parse(payload);
+      } catch {
+        responseJson = { raw: payload };
+      }
+    } else if (payload === undefined || payload === null) {
+      responseJson = {};
+    } else {
+      responseJson = payload;
+    }
     if (isAnonIdempotentRoute(req.url)) {
       anonIdem.set(idem.keyScope, { hash: idem.hash, status: reply.statusCode, response: responseJson });
       return payload;
@@ -1253,6 +1362,7 @@ export function buildApp() {
   app.get('/v1/units/:unit_id', async (req, reply) => {
     const unit = await fabricService.getUnit((req as AuthedRequest).nodeId!, (req.params as any).unit_id);
     if (!unit) return reply.status(404).send(errorEnvelope('not_found', 'Unit not found'));
+    await repo.addDetailView((req as AuthedRequest).nodeId!, 'listing', unit.id, unit.scope_primary ?? null);
     return unit;
   });
   app.patch('/v1/units/:unit_id', async (req, reply) => {
@@ -1282,6 +1392,7 @@ export function buildApp() {
   app.get('/v1/requests/:request_id', async (req, reply) => {
     const item = await fabricService.getRequest((req as AuthedRequest).nodeId!, (req.params as any).request_id);
     if (!item) return reply.status(404).send(errorEnvelope('not_found', 'Request not found'));
+    await repo.addDetailView((req as AuthedRequest).nodeId!, 'request', item.id, item.scope_primary ?? null);
     return item;
   });
   app.patch('/v1/requests/:request_id', async (req, reply) => {
@@ -1317,10 +1428,18 @@ export function buildApp() {
   app.post('/v1/requests/:request_id/unpublish', async (req) => fabricService.unpublish('requests', (req as AuthedRequest).nodeId!, (req.params as any).request_id));
 
   app.post('/v1/search/listings', async (req, reply) => {
+    const disabledFeatures = detectDisabledSearchFeatures(req.body);
+    if (disabledFeatures.length > 0) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', {
+        reason: 'phase05_search_lock',
+        disabled_features: disabledFeatures,
+      }));
+    }
     const parsed = searchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
+    if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
@@ -1328,10 +1447,18 @@ export function buildApp() {
     return out;
   });
   app.post('/v1/search/requests', async (req, reply) => {
+    const disabledFeatures = detectDisabledSearchFeatures(req.body);
+    if (disabledFeatures.length > 0) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', {
+        reason: 'phase05_search_lock',
+        disabled_features: disabledFeatures,
+      }));
+    }
     const parsed = searchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
+    if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
@@ -1349,6 +1476,52 @@ export function buildApp() {
   app.get('/v1/public/nodes/:node_id/requests', async (req, reply) => {
     const q = req.query as any;
     const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, Number(q.limit ?? 20), q.cursor ?? null);
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    return out;
+  });
+  app.get('/v1/public/nodes/:node_id/listings/categories/:category_id', async (req, reply) => {
+    const q = req.query as any;
+    const limit = Number(q.limit ?? 20);
+    const categoryId = Number((req.params as any).category_id);
+    if (!Number.isInteger(categoryId) || categoryId < 0) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid category filter', { reason: 'category_id_invalid' }));
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
+    }
+    const out = await fabricService.nodePublicInventoryByCategory(
+      (req as AuthedRequest).nodeId!,
+      (req.params as any).node_id,
+      'listings',
+      categoryId,
+      !!(req as AuthedRequest).hasSpendEntitlement,
+      limit,
+      q.cursor ?? null,
+    );
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    return out;
+  });
+  app.get('/v1/public/nodes/:node_id/requests/categories/:category_id', async (req, reply) => {
+    const q = req.query as any;
+    const limit = Number(q.limit ?? 20);
+    const categoryId = Number((req.params as any).category_id);
+    if (!Number.isInteger(categoryId) || categoryId < 0) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid category filter', { reason: 'category_id_invalid' }));
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
+    }
+    const out = await fabricService.nodePublicInventoryByCategory(
+      (req as AuthedRequest).nodeId!,
+      (req.params as any).node_id,
+      'requests',
+      categoryId,
+      !!(req as AuthedRequest).hasSpendEntitlement,
+      limit,
+      q.cursor ?? null,
+    );
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;

@@ -661,6 +661,7 @@ Request (MVP minimal)
   "type": "string|null",
   "condition": "new|like_new|good|fair|poor|unknown|null",
   "quantity": 5,
+  "estimated_value": 1200.5,
   "measure": "EA|KG|LB|L|GAL|M|FT|HR|DAY|LOT|CUSTOM|null",
   "custom_measure": "string|null",
   "scope_primary": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER|null",
@@ -675,6 +676,8 @@ Request (MVP minimal)
   "category_ids": [1],
   "public_summary": "string|null"
 }
+
+`estimated_value` is optional and non-binding (informational only).
 
 Response 200
 {
@@ -1073,6 +1076,7 @@ target is optional:
 Response 200
 
 Returns SearchListingsResponse (see 22__projections-and-search.md).
+The response `budget` object includes `coverage` with executed page index, executed broadening level, and returned item count.
 
 Errors
 
@@ -1101,6 +1105,7 @@ Validation and budgeting rules are identical to /v1/search/listings.
 Response 200
 
 Returns SearchRequestsResponse (see 22__projections-and-search.md).
+The response `budget` object includes `coverage` with executed page index, executed broadening level, and returned item count.
 
 Errors
 
@@ -1147,6 +1152,75 @@ Response 200 (both)
   "items": [{ }],
   "has_more": true
 }
+
+GET /v1/public/nodes/{node_id}/listings/categories/{category_id}
+Auth
+
+Required
+
+Entitled spender-only
+
+Yes (active subscription OR active trial)
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+Yes (low fixed debit per page)
+
+Purpose
+
+List a node's public listings filtered to one category id.
+
+Query params
+
+`limit`, `cursor`
+
+Validation
+
+`category_id` must be a non-negative integer.
+
+Response 200
+{
+  "node_id": "uuid",
+  "category_id": 12,
+  "limit": 20,
+  "cursor": "string|null",
+  "items": [{ }],
+  "has_more": true
+}
+
+Errors
+
+402 credits_exhausted
+
+422 validation_error
+
+429 rate_limit_exceeded
+
+GET /v1/public/nodes/{node_id}/requests/categories/{category_id}
+
+Same semantics and shape as listings drilldown.
+
+9.1) Visibility event persistence (server-side)
+
+Search impression events:
+
+- On successful search responses, the server persists one `search_impression` event per returned item.
+- Event fields: `search_id`, `viewer_node_id`, `item_id`, `position`, `scope`, `created_at`.
+
+Detail view events:
+
+- On successful detail reads (`GET /v1/units/{unit_id}`, `GET /v1/requests/{request_id}`), the server persists one `detail_view` event.
+- Event fields: `viewer_node_id`, `item_id`, `scope`, `created_at`.
+
+Offer outcomes persisted:
+
+- Accepted outcomes are persisted via `accepted_by_a` / `accepted_by_b` / `mutually_accepted`.
+- Rejected, cancelled, and expired outcomes are persisted as `rejected`, `cancelled`, and `expired`.
+- These persisted statuses are returned by offer APIs (`POST /v1/offers/*`, `GET /v1/offers`, `GET /v1/offers/{offer_id}`).
 
 10) Offers (subscriber-only create/accept/counter; free recipients can reject)
 

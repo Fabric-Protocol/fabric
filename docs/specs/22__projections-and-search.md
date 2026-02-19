@@ -54,6 +54,7 @@ Allowlisted fields:
 - `scope_primary`, `scope_secondary`
 - `title`, `description`, `public_summary`
 - `quantity` (nullable), `measure`, `custom_measure` (if `measure=CUSTOM`)
+- `estimated_value` (number|null; non-binding estimate)
 - `category_ids`, `tags`, `type`, `condition`
 - `location_text_public` (coarse only; never precise geo)
 - `origin_region`, `dest_region` (ship_to scopes; structured regions only)
@@ -193,6 +194,11 @@ Copy code
       "page_index": 0,
       "page_cost": 5
     },
+    "coverage": {
+      "page_index_executed": 1,
+      "broadening_level_executed": 0,
+      "items_returned": 20
+    },
     "was_capped": false,
     "cap_reason": null,
     "guidance": null
@@ -238,6 +244,11 @@ Copy code
       "page_index": 0,
       "page_cost": 5
     },
+    "coverage": {
+      "page_index_executed": 1,
+      "broadening_level_executed": 0,
+      "items_returned": 20
+    },
     "was_capped": false,
     "cap_reason": null,
     "guidance": null
@@ -276,6 +287,12 @@ recency_score (descending)
 
 The response MUST include rank.sort_keys for transparency/debugging.
 
+Phase 0.5 go-live lock (normative):
+
+- Allowed ranking inputs are limited to scope eligibility filters, lexical/keyword relevance (`fts_rank`), and recency.
+- Semantic/vector retrieval is disabled for search.
+- Query expansion, synonym expansion, and lexical override inputs are disabled for search.
+
 7) Broadening (paid, explicit, auditable)
 Broadening fields:
 
@@ -293,6 +310,13 @@ cost_per_page = base_page_cost + active_broadening_adders
 Broadening level MUST be recorded in search logs.
 
 Broadening cost adders MUST be reflected in budget.breakdown.broadening_cost.
+
+Pagination add-on policy:
+
+- page 1: page_cost = 0 (included in base search cost)
+- pages 2-3: page_cost = small add-on
+- pages 4-5: page_cost = large add-on
+- pages 6+: page_cost = prohibitive add-on (expected to cap for typical request budgets)
 
 If budget.credits_requested prevents executing requested broadening/page, return partial results within budget with:
 
@@ -327,6 +351,37 @@ Copy code
   "items":[ { } ],
   "has_more": true
 }
+
+8.1 Node per-category drilldown (metered, cheap)
+Endpoints:
+
+GET /v1/public/nodes/{node_id}/listings/categories/{category_id}
+
+GET /v1/public/nodes/{node_id}/requests/categories/{category_id}
+
+Rules:
+
+- Same auth/entitlement requirements as node inventory expansion.
+- Cursor-paginated.
+- Filtered to a single numeric `category_id`.
+- Debits a low fixed per-call charge (`nodeCategoryDrilldownCost`).
+- Returns 422 `validation_error` for invalid category id or invalid pagination params.
+- Returns 402 `credits_exhausted` when account credits are insufficient.
+- Returns 429 `rate_limit_exceeded` when drilldown-specific rate limit is exceeded.
+
+Response:
+
+```json
+{
+  "node_id":"uuid",
+  "category_id": 12,
+  "limit":20,
+  "cursor":"string|null",
+  "items":[ { } ],
+  "has_more": true
+}
+```
+
 9) Search logging (privacy + retention locked)
 Search logs MUST NOT store raw queries by default. Persist only:
 
