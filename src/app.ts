@@ -657,6 +657,12 @@ function routePath(url: string) {
   return qIndex >= 0 ? url.slice(0, qIndex) : url;
 }
 
+function idempotencyRoutePath(req: FastifyRequest) {
+  const routePattern = (req as any)?.routeOptions?.url;
+  if (typeof routePattern === 'string' && routePattern.trim().length > 0) return routePattern;
+  return routePath(req.url);
+}
+
 function isPublicRoute(path: string) {
   return path === '/v1/bootstrap'
     || path === '/v1/recovery/start'
@@ -1048,9 +1054,10 @@ export function buildApp() {
     const idemKey = req.headers['idempotency-key'];
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
     const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
+    const idemPath = idempotencyRoutePath(req);
 
     if (isAnonIdempotentRoute(req.url)) {
-      const keyScope = `${req.method}:${req.routeOptions.url}:${String(idemKey)}`;
+      const keyScope = `${req.method}:${idemPath}:${String(idemKey)}`;
       const existing = anonIdem.get(keyScope);
       if (existing) {
         if (existing.hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
@@ -1062,12 +1069,12 @@ export function buildApp() {
 
     const nodeId = (req as AuthedRequest).nodeId;
     if (!nodeId) return;
-    const existing = await repo.getIdempotency(nodeId, String(idemKey), req.method, req.routeOptions.url);
+    const existing = await repo.getIdempotency(nodeId, String(idemKey), req.method, idemPath);
     if (existing) {
       if (existing.request_hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
       return reply.status(existing.status_code).send(existing.response_json);
     }
-    (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${nodeId}:${req.routeOptions.url}` };
+    (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${nodeId}:${idemPath}` };
   });
 
   app.addHook('onSend', async (req, reply, payload) => {
@@ -1091,7 +1098,7 @@ export function buildApp() {
       return payload;
     }
     const nodeId = (req as AuthedRequest).nodeId;
-    if (nodeId) await repo.saveIdempotency(nodeId, idem.key, req.method, req.routeOptions.url, idem.hash, reply.statusCode, responseJson);
+    if (nodeId) await repo.saveIdempotency(nodeId, idem.key, req.method, idempotencyRoutePath(req), idem.hash, reply.statusCode, responseJson);
     return payload;
   });
 

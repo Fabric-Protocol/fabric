@@ -427,6 +427,63 @@ test('PATCH /v1/me rejects duplicate display_name', async () => {
   await app.close();
 });
 
+test('PATCH /v1/me idempotency replay returns cached success response', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-me-idem');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+  const payload = {
+    display_name: b.json().node.display_name,
+    email: b.json().node.email,
+    recovery_public_key: null,
+    messaging_handles: [],
+    event_webhook_url: null,
+  };
+
+  const first = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-idem-replay' },
+    payload,
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-idem-replay' },
+    payload,
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), first.json());
+  assert.equal(Object.hasOwn(replay.json(), 'error'), false);
+  assert.doesNotMatch(replay.body, /idempotency_keys|null value in column \"path\"/i);
+  await app.close();
+});
+
+test('unmatched non-GET route with idempotency key returns 404 without idempotency path DB error', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-idem-404');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+
+  const res = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me/',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'idem-unmatched-route' },
+    payload: {
+      display_name: b.json().node.display_name,
+      email: b.json().node.email,
+      recovery_public_key: null,
+      messaging_handles: [],
+      event_webhook_url: null,
+    },
+  });
+  assert.equal(res.statusCode, 404);
+  assert.doesNotMatch(res.body, /idempotency_keys|null value in column \"path\"/i);
+  await app.close();
+});
+
 test('PATCH /v1/me persists webhook URL and write-only webhook secret', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-webhook-config');
