@@ -204,6 +204,19 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const body = res.json();
   assert.equal(typeof body.openapi, 'string');
   assert.match(body.openapi, /^3\./);
+  assert.equal(Boolean(body.paths?.['/v1/offers']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/counter']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/accept']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/reveal-contact']?.post), true);
+  assert.equal(Boolean(body.paths?.['/events']?.get), true);
+  const offerCreateParams = body.paths?.['/v1/offers']?.post?.parameters ?? [];
+  const idemParamRef = offerCreateParams.find((p) => p && p.$ref === '#/components/parameters/IdempotencyKeyHeader');
+  assert.equal(Boolean(idemParamRef), true);
+  const eventsParams = body.paths?.['/events']?.get?.parameters ?? [];
+  const sinceParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsSinceQuery');
+  const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
+  assert.equal(Boolean(sinceParam), true);
+  assert.equal(Boolean(limitParam), true);
   await app.close();
 });
 

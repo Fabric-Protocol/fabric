@@ -221,6 +221,137 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/offers': {
+      post: {
+        summary: 'Create a new offer',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/OfferCreateRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Offer created',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/OfferResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '409': { description: 'Offer conflict' },
+          '422': { description: 'Validation or legal assent error' },
+        },
+      },
+    },
+    '/v1/offers/{offer_id}/counter': {
+      post: {
+        summary: 'Counter an existing offer',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { $ref: '#/components/parameters/OfferIdPath' },
+          { $ref: '#/components/parameters/IdempotencyKeyHeader' },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/OfferCounterRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Counter-offer created',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/OfferResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '404': { description: 'Offer not found' },
+          '422': { description: 'Validation or legal assent error' },
+        },
+      },
+    },
+    '/v1/offers/{offer_id}/accept': {
+      post: {
+        summary: 'Accept an offer',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { $ref: '#/components/parameters/OfferIdPath' },
+          { $ref: '#/components/parameters/IdempotencyKeyHeader' },
+        ],
+        responses: {
+          '200': {
+            description: 'Offer acceptance updated',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/OfferResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '403': { description: 'Forbidden' },
+          '404': { description: 'Offer not found' },
+          '409': { description: 'Invalid state transition' },
+          '422': { description: 'Legal assent required' },
+        },
+      },
+    },
+    '/v1/offers/{offer_id}/reveal-contact': {
+      post: {
+        summary: 'Reveal contact details for a mutually accepted offer',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { $ref: '#/components/parameters/OfferIdPath' },
+          { $ref: '#/components/parameters/IdempotencyKeyHeader' },
+        ],
+        responses: {
+          '200': {
+            description: 'Contact revealed',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RevealContactResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '403': { description: 'Forbidden' },
+          '404': { description: 'Offer not found' },
+          '409': { description: 'Offer not mutually accepted' },
+          '422': { description: 'Legal assent required' },
+        },
+      },
+    },
+    '/events': {
+      get: {
+        summary: 'List offer lifecycle events for the authenticated node',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { $ref: '#/components/parameters/EventsSinceQuery' },
+          { $ref: '#/components/parameters/EventsLimitQuery' },
+        ],
+        responses: {
+          '200': {
+            description: 'Event stream page',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/EventsListResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Invalid cursor or pagination params' },
+        },
+      },
+    },
   },
   components: {
     securitySchemes: {
@@ -234,6 +365,143 @@ export const openApiDocument = {
         type: 'apiKey',
         in: 'header',
         name: 'X-Admin-Key',
+      },
+    },
+    parameters: {
+      IdempotencyKeyHeader: {
+        name: 'Idempotency-Key',
+        in: 'header',
+        required: true,
+        schema: { type: 'string' },
+        description: 'Required for all non-GET endpoints (except webhooks)',
+      },
+      OfferIdPath: {
+        name: 'offer_id',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', format: 'uuid' },
+      },
+      EventsSinceQuery: {
+        name: 'since',
+        in: 'query',
+        required: false,
+        schema: { type: 'string' },
+        description: 'Opaque cursor string. Returns events strictly after this cursor.',
+      },
+      EventsLimitQuery: {
+        name: 'limit',
+        in: 'query',
+        required: false,
+        schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+      },
+    },
+    schemas: {
+      OfferCreateRequest: {
+        type: 'object',
+        properties: {
+          unit_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+          },
+          thread_id: { type: 'string', nullable: true },
+          note: { type: 'string', nullable: true },
+        },
+        required: ['unit_ids', 'thread_id', 'note'],
+      },
+      OfferCounterRequest: {
+        type: 'object',
+        properties: {
+          unit_ids: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+          },
+          note: { type: 'string', nullable: true },
+        },
+        required: ['unit_ids', 'note'],
+      },
+      Offer: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          thread_id: { type: 'string', format: 'uuid' },
+          from_node_id: { type: 'string', format: 'uuid' },
+          to_node_id: { type: 'string', format: 'uuid' },
+          status: { type: 'string' },
+          accepted_by_from_at: { type: 'string', nullable: true },
+          accepted_by_to_at: { type: 'string', nullable: true },
+          held_unit_ids: { type: 'array', items: { type: 'string' } },
+          unheld_unit_ids: { type: 'array', items: { type: 'string' } },
+          hold_status: { type: 'string', nullable: true },
+          hold_expires_at: { type: 'string', nullable: true },
+          created_at: { type: 'string' },
+          updated_at: { type: 'string' },
+          version: { type: 'integer' },
+          unit_ids: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'status', 'created_at', 'updated_at', 'version', 'unit_ids'],
+      },
+      OfferResponse: {
+        type: 'object',
+        properties: {
+          offer: { $ref: '#/components/schemas/Offer' },
+        },
+        required: ['offer'],
+      },
+      MessagingHandle: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string' },
+          handle: { type: 'string' },
+          url: { type: 'string', nullable: true },
+        },
+        required: ['kind', 'handle', 'url'],
+      },
+      RevealContactResponse: {
+        type: 'object',
+        properties: {
+          contact: {
+            type: 'object',
+            properties: {
+              email: { type: 'string' },
+              phone: { type: 'string', nullable: true },
+              messaging_handles: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/MessagingHandle' },
+              },
+            },
+            required: ['email', 'phone', 'messaging_handles'],
+          },
+        },
+        required: ['contact'],
+      },
+      OfferEvent: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          type: {
+            type: 'string',
+            enum: ['offer_created', 'offer_countered', 'offer_accepted', 'offer_cancelled', 'offer_contact_revealed'],
+          },
+          offer_id: { type: 'string', format: 'uuid' },
+          actor_node_id: { type: 'string', format: 'uuid' },
+          recipient_node_id: { type: 'string', format: 'uuid' },
+          payload: { type: 'object', additionalProperties: true },
+          created_at: { type: 'string' },
+        },
+        required: ['id', 'type', 'offer_id', 'actor_node_id', 'recipient_node_id', 'payload', 'created_at'],
+      },
+      EventsListResponse: {
+        type: 'object',
+        properties: {
+          events: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/OfferEvent' },
+          },
+          next_cursor: { type: 'string', nullable: true },
+        },
+        required: ['events', 'next_cursor'],
       },
     },
   },
