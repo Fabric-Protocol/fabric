@@ -3,6 +3,8 @@
 ## Purpose
 Apply emergency/manual suspension for a Node involved in abuse, security incidents, or policy violations.
 
+Normative behavior reference: `docs/specs/00__read-first.md` and `docs/specs/20__api-contracts.md`.
+
 ## Preconditions
 - Operator has DB access with write permissions.
 - Operator has incident ticket/reference and evidence summary.
@@ -29,7 +31,7 @@ where node_id = '<NODE_ID>' and revoked_at is null;
 - `POST /v1/admin/projections/rebuild?kind=all&mode=full`
 
 ## Verify
-- `GET /v1/me` with old keys returns `401 unauthorized`.
+- `GET /v1/me` with old keys returns `403 forbidden` (revoked key).
 - Node no longer appears in public projections/search results after rebuild.
 
 ## Unsuspend

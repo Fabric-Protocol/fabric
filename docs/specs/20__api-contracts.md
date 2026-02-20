@@ -10,6 +10,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 
 - **Auth**: unless noted, endpoints are authenticated via `Authorization: ApiKey <api_key>`.
 - **Auth key state**: revoked API keys return `403 forbidden`; missing/invalid keys return `401 unauthorized`.
+- **Auth factor boundary**: API key is the only standard runtime auth factor; email is not a runtime auth factor.
 - **Admin auth**: endpoints under `/v1/admin/*` and `/internal/admin/*` require `X-Admin-Key: <admin_key>`.
 - **Idempotency-Key**: required on all non-GET endpoints except webhooks.
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.
@@ -156,6 +157,8 @@ If referral_code is provided, it is recorded as a referral claim (subject to the
 
 `legal.accepted` MUST be `true` and `legal.version` MUST match `required_legal_version` from `GET /v1/meta`.
 
+Email is account identity/recovery contact data and is not used as a runtime auth factor.
+
 Errors
 
 422 legal_required
@@ -243,7 +246,7 @@ Errors
 
 401 unauthorized
 
-1b) Email verification + self-serve API key recovery
+1b) Email verification + API key recovery policy
 POST /v1/email/start-verify
 Auth
 
@@ -331,7 +334,7 @@ Purpose
 Start API key recovery for a known Node ID.
 
 Request
-{ "node_id": "uuid", "method": "pubkey|email" }
+{ "node_id": "uuid", "method": "pubkey" }
 
 Response 200 (pubkey)
 {
@@ -340,18 +343,13 @@ Response 200 (pubkey)
   "expires_at": "iso"
 }
 
-Response 200 (email)
-{
-  "ok": true,
-  "challenge_id": "uuid",
-  "expires_at": "iso"
-}
-
 Rules / side effects
 
 - `method='pubkey'` requires `nodes.recovery_public_key`.
-- `method='email'` requires verified email (`nodes.email_verified_at`).
+- `method='email'` is not supported in MVP and MUST return `422 validation_error` with `details.reason="email_recovery_not_supported"`.
 - TTL and attempts use recovery challenge policy.
+- Pre-Phase-2 manual exception policy (outside API endpoint flow): verified email-on-file plus Stripe receipt proof (`pi_...` or `in_...`).
+- If no Stripe history exists, manual key rotation is unavailable before Phase 2.
 
 Errors
 
@@ -360,8 +358,6 @@ Errors
 422 validation_error
 
 429 rate_limit_exceeded
-
-503 email_delivery_failed
 
 POST /v1/recovery/complete
 Auth
@@ -383,9 +379,6 @@ Complete API key recovery and mint exactly one new plaintext API key.
 Request (pubkey)
 { "challenge_id": "uuid", "signature": "base64|hex signature over fabric-recovery:<challenge_id>:<nonce>" }
 
-Request (email)
-{ "challenge_id": "uuid", "code": "string(6 digits)" }
-
 Response 200
 {
   "node_id": "uuid",
@@ -398,6 +391,7 @@ Rules / side effects
 - Successful completion revokes all prior active API keys for node, then mints one new key.
 - Recovery challenge is one-time use (`used_at`).
 - Writes audit event (`api_key_recovery_completed`).
+- Code-based email recovery payloads are rejected in MVP with `422 validation_error` and `details.reason="email_recovery_not_supported"`.
 
 Errors
 

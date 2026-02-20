@@ -11,7 +11,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 | `POST /v1/bootstrap` | None | No | No | `bootstrap` (per IP, hourly) | `422 validation_error`, `422 legal_required`, `422 legal_version_mismatch`, `409 idempotency_key_reuse_conflict`, `429 rate_limit_exceeded` |
 | `POST /v1/email/start-verify` | ApiKey | No | No | `email_verify_start` (per node, hourly) | `401 unauthorized`, `422 validation_error`, `503 email_delivery_failed`, `429 rate_limit_exceeded` |
 | `POST /v1/email/complete-verify` | ApiKey | No | No | challenge attempt bound | `401 unauthorized`, `422 validation_error`, `404 not_found`, `429 rate_limit_exceeded` |
-| `POST /v1/recovery/start` | None | No | No | `recovery_start_ip` (per IP, hourly) + `recovery_start_node` (per node, hourly) | `422 validation_error`, `404 not_found`, `429 rate_limit_exceeded`, `503 email_delivery_failed` |
+| `POST /v1/recovery/start` | None | No | No | `recovery_start_ip` (per IP, hourly) + `recovery_start_node` (per node, hourly) | `422 validation_error`, `404 not_found`, `429 rate_limit_exceeded` |
 | `POST /v1/recovery/complete` | None | Challenge validity required | No | challenge attempt bound | `422 validation_error`, `404 not_found`, `409 invalid_state_transition`, `429 rate_limit_exceeded` |
 | `POST /v1/search/listings` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `search` (per node, minutely) + `search_scrape_guard` (triggered) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
 | `POST /v1/search/requests` | ApiKey | Entitled spender (`active subscription` OR `active trial`) | Yes (200 only) | `search` (per node, minutely) + `search_scrape_guard` (triggered) | `401 unauthorized`, `403 subscriber_required`, `402 credits_exhausted`, `422 validation_error`, `429 rate_limit_exceeded` |
@@ -39,4 +39,5 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 - Metered endpoints charge credits only on successful HTTP 200 responses.
 - Search includes request-level spend ceiling via `budget.credits_requested`; when capped, response is HTTP 200 with `budget.was_capped=true` and actionable guidance.
 - The `search_scrape_guard` rule is triggered by prohibitive paging (page 6+) and/or repeated broad queries.
+- Recovery policy in MVP is pubkey-only; `method=email` requests are rejected as `422 validation_error` (`email_recovery_not_supported`).
 - Private detail reads (`GET /v1/units/:id`, `GET /v1/requests/:id`) remain non-metered but now emit `detail_view` visibility events (persisted).

@@ -46,6 +46,8 @@ Search and certain reads are entitled-spender-only (`active subscription` OR `ac
 Most endpoints require:
 `Authorization: ApiKey <api_key>`
 
+Email is not a runtime auth factor. It is used for account identity/recovery and operator contact policy.
+
 Admin endpoints (you should not call these as a normal agent) use:
 `X-Admin-Key: <admin_key>`
 
@@ -113,15 +115,14 @@ Recovery setup (while you still have a working API key):
   - `POST /v1/email/start-verify`
   - `POST /v1/email/complete-verify`
 
-Lost-key recovery options (no admin step):
+Lost-key recovery options (MVP):
 
 - Public-key recovery:
   - `POST /v1/recovery/start` with `{ node_id, method: "pubkey" }`
   - Sign `fabric-recovery:<challenge_id>:<nonce>` with your private key.
   - `POST /v1/recovery/complete` with `{ challenge_id, signature }`
-- Email recovery:
-  - `POST /v1/recovery/start` with `{ node_id, method: "email" }`
-  - `POST /v1/recovery/complete` with `{ challenge_id, code }`
+- Email-based API key recovery is Phase 2 and is not available in MVP runtime endpoints.
+- Pre-Phase-2 manual exception policy: verified email-on-file plus Stripe proof (`pi_...` PaymentIntent or `in_...` Invoice ID).
 
 Security behavior:
 
@@ -268,20 +269,21 @@ Side effects:
 
 Releases holds immediately
 
-4.8 API key recovery (public-key or verified-email)
+4.8 API key recovery (MVP: pubkey only)
 Intent: regain access when all active API keys are lost.
 
 - Start challenge:
-  - `POST /v1/recovery/start` with `node_id` and `method`.
+  - `POST /v1/recovery/start` with `node_id` and `method="pubkey"`.
 - Complete challenge:
-  - public-key method uses signature over `fabric-recovery:<challenge_id>:<nonce>`
-  - email method uses OTP code sent to verified email.
+  - public-key method uses signature over `fabric-recovery:<challenge_id>:<nonce>`.
+  - code-based email recovery is Phase 2 (not available in MVP runtime endpoints).
 
 Rules/side effects (locked):
 
 - Recovery start is rate-limited per IP and per target node.
 - Challenge is one-time use and expires quickly.
 - On success, all old keys are revoked and exactly one new key is minted.
+- Manual exception before Phase 2 requires verified email-on-file plus Stripe proof (`pi_...` or `in_...`).
 
 5) Offer + hold lifecycle (what agents must assume)
 Offer status enum (locked):
@@ -437,7 +439,7 @@ GET /v1/auth/keys
 
 DELETE /v1/auth/keys/{key_id}
 
-Email verify + recovery:
+Email verify + recovery (MVP recovery is pubkey-only):
 
 POST /v1/email/start-verify
 
