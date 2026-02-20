@@ -263,6 +263,9 @@ test('GET /docs/agents returns quickstart HTML content', async () => {
   assert.match(res.body, /If-Match/);
   assert.match(res.body, /https:\/\/fabric\.example\/openapi\.json/);
   assert.match(res.body, /\/v1\/offers/);
+  assert.match(res.body, /event_webhook_secret/);
+  assert.match(res.body, /x-fabric-signature/);
+  assert.match(res.body, /GET \/events/);
   await app.close();
 });
 
@@ -1683,6 +1686,142 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   const deliveryRows = await query('select count(*)::text as c from event_webhook_deliveries');
   assert.equal(Number(deliveryRows[0].c) > 0, true);
+  await app.close();
+});
+
+test('clearing event_webhook_secret omits webhook signing headers on subsequent deliveries', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-event-secret-clear-seller', {
+    display_name: 'Event Secret Clear Seller',
+    email: `event.secret.clear.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-event-secret-clear-buyer', {
+    display_name: 'Event Secret Clear Buyer',
+    email: `event.secret.clear.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const patchSet = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-secret-clear-set' },
+    payload: {
+      event_webhook_url: 'https://hooks.example.test/secret-clear',
+      event_webhook_secret: 'secret-before-clear',
+    },
+  });
+  assert.equal(patchSet.statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer events clear-secret unit', 'offer-events-clear-secret-scope'));
+  const webhookCalls = [];
+
+  await withMockFetch(async (url, init) => {
+    const rawBody = init && typeof init.body === 'string' ? init.body : '{}';
+    const headerEntries = init && init.headers instanceof Headers
+      ? [...init.headers.entries()]
+      : Object.entries((init && init.headers) || {});
+    const headers = Object.fromEntries(headerEntries.map(([k, v]) => [String(k).toLowerCase(), String(v)]));
+    webhookCalls.push({ url: String(url), rawBody, body: JSON.parse(rawBody), headers });
+    return jsonResponse(200, { ok: true });
+  }, async () => {
+    const createdBeforeClear = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-secret-clear-offer-before' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'before-clear' },
+    });
+    assert.equal(createdBeforeClear.statusCode, 200);
+
+    const clearSecret = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-secret-clear-null' },
+      payload: { event_webhook_secret: null },
+    });
+    assert.equal(clearSecret.statusCode, 200);
+
+    const createdAfterClear = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-secret-clear-offer-after' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'after-clear' },
+    });
+    assert.equal(createdAfterClear.statusCode, 200);
+  });
+
+  const sellerCalls = webhookCalls.filter((call) => call.url === 'https://hooks.example.test/secret-clear' && call.body?.type === 'offer_created');
+  assert.equal(sellerCalls.length >= 2, true);
+
+  const firstCall = sellerCalls[0];
+  const firstTimestamp = firstCall.headers['x-fabric-timestamp'];
+  assert.equal(typeof firstTimestamp, 'string');
+  const expectedFirst = crypto.createHmac('sha256', 'secret-before-clear')
+    .update(`${firstTimestamp}.${firstCall.rawBody}`, 'utf8')
+    .digest('hex');
+  assert.equal(firstCall.headers['x-fabric-signature'], `t=${firstTimestamp},v1=${expectedFirst}`);
+
+  const lastCall = sellerCalls[sellerCalls.length - 1];
+  assert.equal(lastCall.headers['x-fabric-timestamp'], undefined);
+  assert.equal(lastCall.headers['x-fabric-signature'], undefined);
+
+  await app.close();
+});
+
+test('/events cursor pagination with limit=1 returns strictly later events after since cursor', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-event-cursor-seller', {
+    display_name: 'Event Cursor Seller',
+    email: `event.cursor.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-event-cursor-buyer', {
+    display_name: 'Event Cursor Buyer',
+    email: `event.cursor.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer events cursor unit', 'offer-events-cursor-scope'));
+
+  const firstOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-cursor-offer-a' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'cursor-a' },
+  });
+  assert.equal(firstOffer.statusCode, 200);
+  const secondOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-cursor-offer-b' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'cursor-b' },
+  });
+  assert.equal(secondOffer.statusCode, 200);
+
+  const page1 = await app.inject({
+    method: 'GET',
+    url: '/events?limit=1',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(page1.json().events.length, 1);
+  assert.equal(typeof page1.json().next_cursor, 'string');
+  const firstEvent = page1.json().events[0];
+
+  const page2 = await app.inject({
+    method: 'GET',
+    url: `/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=10`,
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page2.statusCode, 200);
+  assert.equal(page2.json().events.length >= 1, true);
+  assert.equal(page2.json().events.some((event) => event.id === firstEvent.id), false);
+  assert.equal(page2.json().events.every((event) => Date.parse(event.created_at) >= Date.parse(firstEvent.created_at)), true);
+
   await app.close();
 });
 

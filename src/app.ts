@@ -635,6 +635,36 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
       <li>On 429, back off and retry after the advised window.</li>
     </ul>
 
+    <h2>Offer Eventing (Webhook + Polling)</h2>
+    <p>Offer lifecycle events are delivered best-effort by webhook and are always available via <code>GET /events</code> as polling fallback.</p>
+    <pre><code>WEBHOOK_IDEM=$(uuidgen)
+curl -sS -X PATCH "$BASE/v1/me" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $WEBHOOK_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{"event_webhook_url":"https://example.com/fabric-events","event_webhook_secret":"whsec_rotate_me"}'
+
+# Clear signing secret (deliveries continue unsigned if URL remains configured)
+CLEAR_SECRET_IDEM=$(uuidgen)
+curl -sS -X PATCH "$BASE/v1/me" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $CLEAR_SECRET_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{"event_webhook_secret":null}'</code></pre>
+    <ul>
+      <li>When secret is set, webhook requests include <code>x-fabric-timestamp</code> and <code>x-fabric-signature: t=&lt;ts&gt;,v1=&lt;hex_hmac_sha256&gt;</code>.</li>
+      <li>Verify signature over <code>\${t}.\${rawBody}</code> using HMAC-SHA256 and your current secret.</li>
+      <li>Setting a new secret rotates signing immediately; signatures made with the previous secret stop verifying.</li>
+      <li>Delivery is at-least-once. Deduplicate webhook and polling consumption by <code>event.id</code>.</li>
+      <li>Event payloads are metadata-only; on <code>offer_contact_revealed</code>, call <code>POST /v1/offers/{offer_id}/reveal-contact</code> for contact data.</li>
+    </ul>
+    <pre><code># Polling fallback (strictly-after cursor semantics)
+PAGE1=$(curl -sS "$BASE/events?limit=50" -H "Authorization: ApiKey $API_KEY")
+CURSOR=$(printf '%s' "$PAGE1" | jq -r '.next_cursor')
+PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey $API_KEY")
+
+# Cadence: poll every 2-5s while active; back off exponentially on empty pages/429/5xx.</code></pre>
+
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>

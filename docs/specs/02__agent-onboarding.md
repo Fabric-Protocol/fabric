@@ -409,14 +409,29 @@ metering outcomes (credits spent) for search/expansion calls
 
 11a) Offer lifecycle events (webhooks + polling)
 
-- Register optional `event_webhook_url` via `PATCH /v1/me` for best-effort webhook delivery.
-- Poll fallback: `GET /events?since=<cursor>&limit=<n>`.
+- Configure webhook delivery on your node profile via `PATCH /v1/me`:
+  - `event_webhook_url`: absolute HTTPS URL; set `null` to clear and disable deliveries.
+  - `event_webhook_secret`: optional write-only signing secret; set `null` to clear (unsigned deliveries after clear).
+- Signing headers (only when `event_webhook_secret` is configured):
+  - `x-fabric-timestamp: <unix_epoch_seconds>`
+  - `x-fabric-signature: t=<timestamp>,v1=<hex_hmac_sha256>`
+  - Signing input: `${t}.${rawBody}` (raw JSON bytes as delivered).
+- Secret rotation:
+  - Patch a new `event_webhook_secret` value.
+  - Verify signatures with the new secret immediately; old signatures stop verifying.
+- Delivery model is at-least-once for both webhook and polling consumers.
+  - Deduplicate by `event.id` in your consumer state.
+- Poll fallback:
+  - `GET /events?limit=<n>` for initial page.
+  - Persist `next_cursor` and request `GET /events?since=<next_cursor>&limit=<n>` for strictly-later events.
+  - Recommended cadence: every 2-5s when active; exponential backoff on empty pages, 429, or 5xx.
 - Event types:
   - `offer_created`
   - `offer_countered`
   - `offer_accepted`
   - `offer_cancelled`
   - `offer_contact_revealed`
+- Event payloads are metadata-only (no contact PII). For contact data after mutual acceptance, call `POST /v1/offers/{offer_id}/reveal-contact`.
 
 11b) Practical onboarding examples
 

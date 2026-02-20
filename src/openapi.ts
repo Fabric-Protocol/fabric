@@ -366,6 +366,7 @@ export const openApiDocument = {
     '/events': {
       get: {
         summary: 'List offer lifecycle events for the authenticated node',
+        description: 'Polling fallback for offer lifecycle events. Use next_cursor as the next since value. Delivery is at-least-once; dedupe by event id.',
         security: [{ ApiKeyAuth: [] }],
         parameters: [
           { $ref: '#/components/parameters/EventsSinceQuery' },
@@ -546,14 +547,14 @@ export const openApiDocument = {
             format: 'uri',
             nullable: true,
             maxLength: 2048,
-            description: 'Absolute HTTPS URL; URL userinfo and fragment are not allowed.',
+            description: 'Absolute HTTPS URL; URL userinfo and fragment are not allowed. Set null to clear and disable webhook delivery.',
           },
           event_webhook_secret: {
             type: 'string',
             nullable: true,
             writeOnly: true,
             maxLength: 256,
-            description: 'Optional signing secret. Webhook signature headers are only included when this field is set; null clears it.',
+            description: 'Optional signing secret. When set, webhook includes x-fabric-timestamp and x-fabric-signature (t=<timestamp>,v1=<hex_hmac_sha256>) over `${t}.${rawBody}`. Set null to clear.',
           },
         },
       },
