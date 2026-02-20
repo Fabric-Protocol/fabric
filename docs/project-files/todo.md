@@ -226,17 +226,34 @@ Last updated: 2026-02-20
   - add 5-8 concrete mixed-consideration examples and how terms live in offer notes
 
 ### Phase 0.5 — Eventing smoke follow-up (latest thread notes)
-- [ ] Run end-to-end eventing smoke (offers -> events -> webhook) on deployment where offers are not blocked by `subscriber_required`:
-  - create lifecycle transitions to generate events
-  - verify `/events` cursor strictly-after behavior
-  - verify webhook delivery rows are recorded
-  - verify signed webhook headers when secret present; headers omitted after clearing secret
-- [ ] Unblock smoke without paying live Stripe:
-  - complete existing TODO to remove `subscriber_required` gating (or enable a non-paid smoke path)
-  - rerun eventing smoke after the unblock
+- [x] Run end-to-end eventing smoke (offers -> events -> webhook) on deployment where offers are not blocked by `subscriber_required`:
+  - verified offer lifecycle generates events
+  - verified `/events` returns event envelopes
+  - verified webhook delivery rows recorded
+  - verified signed webhook headers when secret present; headers omitted after clearing secret
+- [x] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
+- [x] Fix OpenAPI export so it includes offer + events routes, and add an automated smoke runner:
+  - `POST /v1/offers`
+  - `POST /v1/offers/{offer_id}/counter`
+  - `POST /v1/offers/{offer_id}/accept`
+  - `POST /v1/offers/{offer_id}/reveal-contact`
+  - `GET /events`
+  - add `scripts/smoke-offers-eventing.mjs` writing artifacts under `artifacts/`
+
+### Phase 0.5 — Eventing/webhook follow-up (next thread)
+- [ ] Add self-serve webhook configuration endpoints (remove SQL/admin-only setup):
+  - authenticated set/clear webhook URL
+  - optional set/rotate webhook secret
+  - OpenAPI + tests + rate-limit/validation/SSRF protections
+- [ ] Update agent onboarding docs and `/docs/agents` for eventing/webhooks:
+  - webhook vs `/events` polling fallback
+  - metadata-only payload (no offer snapshots, no contact PII)
+  - reveal-contact remains separate
+  - signing headers behavior (present only when secret set; omitted when null)
+  - at-least-once delivery + dedupe by event id
 
 ### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
-- [ ] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
+- [x] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
 - [ ] Keep "credit packs" terminology consistent in Stripe display naming and docs.
 - [ ] Add onboarding payment guidance:
   - recommend dedicated payment method for agent usage
