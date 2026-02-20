@@ -556,7 +556,6 @@ export const openApiDocument = {
             description: 'Optional signing secret. Webhook signature headers are only included when this field is set; null clears it.',
           },
         },
-        required: ['display_name', 'email'],
       },
       MeResponse: {
         type: 'object',

@@ -215,8 +215,8 @@ export const fabricService = {
     };
   },
   async patchMe(nodeId: string, payload: {
-    display_name: string | null;
-    email: string | null;
+    display_name?: string | null;
+    email?: string | null;
     recovery_public_key?: string | null;
     messaging_handles?: Array<{ kind: string; handle: string; url: string | null }> | null;
     event_webhook_url?: string | null;
@@ -231,7 +231,7 @@ export const fabricService = {
       await repo.updateMe(
         nodeId,
         payload.display_name,
-        normalizeEmail(payload.email),
+        payload.email === undefined ? undefined : normalizeEmail(payload.email),
         payload.recovery_public_key,
         payload.messaging_handles === undefined ? undefined : normalizeMessagingHandles(payload.messaging_handles),
         normalizedWebhookUrl.value,

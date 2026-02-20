@@ -233,6 +233,9 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(mePatchSchema.properties?.event_webhook_secret?.nullable, true);
   assert.equal(mePatchSchema.properties?.event_webhook_secret?.maxLength, 256);
   assert.equal(mePatchSchema.properties?.event_webhook_url?.maxLength, 2048);
+  const mePatchRequired = Array.isArray(mePatchSchema.required) ? mePatchSchema.required : [];
+  assert.equal(mePatchRequired.includes('display_name'), false);
+  assert.equal(mePatchRequired.includes('email'), false);
   await app.close();
 });
 
@@ -458,6 +461,95 @@ test('PATCH /v1/me idempotency replay returns cached success response', async ()
   assert.deepEqual(replay.json(), first.json());
   assert.equal(Object.hasOwn(replay.json(), 'error'), false);
   assert.doesNotMatch(replay.body, /idempotency_keys|null value in column \"path\"/i);
+  await app.close();
+});
+
+test('PATCH /v1/me supports partial update with only event_webhook_secret', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-me-secret-only');
+  assert.equal(b.statusCode, 200);
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-secret-only' },
+    payload: { event_webhook_secret: 'abc' },
+  });
+  assert.equal(patch.statusCode, 200);
+  assert.equal(Object.hasOwn(patch.json().node, 'event_webhook_secret'), false);
+
+  const me = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(me.statusCode, 200);
+  assert.equal(Object.hasOwn(me.json().node, 'event_webhook_secret'), false);
+
+  const rows = await query('select event_webhook_secret from nodes where id=$1', [nodeId]);
+  assert.equal(rows[0].event_webhook_secret, 'abc');
+  await app.close();
+});
+
+test('PATCH /v1/me supports partial clear with only event_webhook_url=null', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-me-url-clear-only');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+
+  const setWebhook = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-url-set-only' },
+    payload: { event_webhook_url: 'https://203.0.113.77/hooks' },
+  });
+  assert.equal(setWebhook.statusCode, 200);
+  assert.equal(setWebhook.json().node.event_webhook_url, 'https://203.0.113.77/hooks');
+
+  const clearWebhook = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-url-clear-only' },
+    payload: { event_webhook_url: null },
+  });
+  assert.equal(clearWebhook.statusCode, 200);
+  assert.equal(clearWebhook.json().node.event_webhook_url, null);
+  await app.close();
+});
+
+test('PATCH /v1/me accepts empty object and leaves profile unchanged', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-me-empty-body');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+
+  const before = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(before.statusCode, 200);
+
+  const patched = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-empty-body' },
+    payload: {},
+  });
+  assert.equal(patched.statusCode, 200);
+  assert.equal(Object.hasOwn(patched.json().node, 'event_webhook_secret'), false);
+
+  const after = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(after.statusCode, 200);
+  assert.equal(after.json().node.display_name, before.json().node.display_name);
+  assert.equal(after.json().node.email, before.json().node.email);
+  assert.equal(after.json().node.event_webhook_url, before.json().node.event_webhook_url);
   await app.close();
 });
 

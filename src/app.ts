@@ -1183,8 +1183,8 @@ export function buildApp() {
   app.get('/v1/me', async (req) => fabricService.me((req as AuthedRequest).nodeId!));
   app.patch('/v1/me', async (req, reply) => {
     const parsed = z.object({
-      display_name: z.string().nullable(),
-      email: z.string().nullable(),
+      display_name: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
       event_webhook_url: z.string().max(2048).nullable().optional(),
