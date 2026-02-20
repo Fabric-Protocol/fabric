@@ -347,6 +347,15 @@ test('POST /v1/bootstrap rejects duplicate display_name', async () => {
   assert.equal(second.statusCode, 422);
   assert.equal(second.json().error.code, 'validation_error');
   assert.equal(second.json().error.details.reason, 'display_name_taken');
+
+  const caseVariant = await bootstrap(app, 'boot-display-name-c', {
+    display_name: duplicateName.toLowerCase(),
+    email: null,
+    referral_code: null,
+  }, { exactDisplayName: true });
+  assert.equal(caseVariant.statusCode, 422);
+  assert.equal(caseVariant.json().error.code, 'validation_error');
+  assert.equal(caseVariant.json().error.details.reason, 'display_name_taken');
   await app.close();
 });
 
@@ -376,6 +385,16 @@ test('PATCH /v1/me rejects duplicate display_name', async () => {
   assert.equal(patch.statusCode, 422);
   assert.equal(patch.json().error.code, 'validation_error');
   assert.equal(patch.json().error.details.reason, 'display_name_taken');
+
+  const caseVariantPatch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${bKey}`, 'idempotency-key': 'patch-display-name-dup-case' },
+    payload: { display_name: String(duplicateDisplayName).toUpperCase(), email: null, recovery_public_key: null },
+  });
+  assert.equal(caseVariantPatch.statusCode, 422);
+  assert.equal(caseVariantPatch.json().error.code, 'validation_error');
+  assert.equal(caseVariantPatch.json().error.details.reason, 'display_name_taken');
   await app.close();
 });
 
@@ -572,12 +591,19 @@ test('buyer offer create cannot lock seller inventory; seller-side accept locks;
     email: null,
     referral_code: null,
   });
+  const outsiderBoot = await bootstrap(app, 'boot-hold-outsider', {
+    display_name: 'Hold Outsider',
+    email: null,
+    referral_code: null,
+  });
   assert.equal(sellerBoot.statusCode, 200);
   assert.equal(buyerBoot.statusCode, 200);
+  assert.equal(outsiderBoot.statusCode, 200);
   const sellerNodeId = sellerBoot.json().node.id;
   const buyerNodeId = buyerBoot.json().node.id;
   const sellerKey = sellerBoot.json().api_key.api_key;
   const buyerKey = buyerBoot.json().api_key.api_key;
+  const outsiderKey = outsiderBoot.json().api_key.api_key;
 
   assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_sub_hold_seller')).statusCode, 200);
   assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_sub_hold_buyer')).statusCode, 200);
@@ -597,6 +623,15 @@ test('buyer offer create cannot lock seller inventory; seller-side accept locks;
 
   const activeBefore = await query("select count(*)::text as c from holds where unit_id=$1 and status='active'", [unit.id]);
   assert.equal(Number(activeBefore[0].c), 0);
+
+  const outsiderCounter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${createdOffer.id}/counter`,
+    headers: { authorization: `ApiKey ${outsiderKey}`, 'idempotency-key': 'hold-offer-counter-outsider' },
+    payload: { unit_ids: [unit.id], note: null },
+  });
+  assert.equal(outsiderCounter.statusCode, 404);
+  assert.equal(outsiderCounter.json().error.code, 'not_found');
 
   const replay = await app.inject({
     method: 'POST',

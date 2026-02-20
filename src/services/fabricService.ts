@@ -583,6 +583,7 @@ export async function offerSummary(offer: any) {
   await repo.expireStaleOffers();
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
+  if (![prior.from_node_id, prior.to_node_id].includes(nodeId)) return { notFound: true };
   await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
   await repo.releaseHolds(prior.id);
   await emitOfferLifecycleEvents({
