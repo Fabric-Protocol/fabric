@@ -154,20 +154,6 @@ Last updated: 2026-02-19
   - top-ups: `credits_100`, `credits_300`, `credits_1000`
   - verify webhook deliveries are 2xx and `/v1/me` reflects active subscriber state.
 
-### Self-serve email recovery go-live (blocked on provider secrets)
-- [ ] Choose production email delivery method:
-  - SendGrid or SMTP
-- [ ] Set Cloud Run email env/secrets for the chosen provider:
-  - SendGrid: `EMAIL_PROVIDER=sendgrid`, `EMAIL_FROM`, `SENDGRID_API_KEY`
-  - SMTP: `EMAIL_PROVIDER=smtp`, `EMAIL_FROM`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, optional `SMTP_SECURE`
-- [ ] Run live email verification + email recovery smoke after provider setup:
-  - `POST /v1/email/start-verify`
-  - `POST /v1/email/complete-verify`
-  - `POST /v1/recovery/start` (`method=email`)
-  - `POST /v1/recovery/complete` (`code`)
-  - assert old key revoked and new key succeeds on `GET /v1/me`
-- [ ] Reconfirm recovery public-key option in final go-live smoke sequence (after email path sign-off).
-
 ### Phase 0.5 — Remaining blockers from latest thread
 - [ ] Audit and enforce holds invariant:
   - only owner/seller can lock their own unit(s)
@@ -177,7 +163,7 @@ Last updated: 2026-02-19
   - add/verify DB constraint + API behavior + tests
 
 ### Phase 0.5 — Search economics + onboarding (latest thread notes)
-- [ ] Apply workflow guidance from thread notes explicitly:
+- [x] Apply workflow guidance from thread notes explicitly:
   - keep responses concise to conserve context
   - request missing source artifacts/text instead of making assumptions
 - [ ] Add top-level Search Budget Contract object to search responses:
@@ -223,7 +209,9 @@ Last updated: 2026-02-19
 - [ ] Document auth and email role explicitly:
   - `Authorization: ApiKey <api_key>` is the only normal auth factor
   - email is required at account creation as backup/recovery, not as runtime auth
-- [ ] Require signup/onboarding setup of recovery public key and document two self-serve recovery lanes (`pubkey` + `email`).
+- [ ] Add/ensure doc note for recovery policy:
+  - MVP recovery is pubkey-only
+  - pre-Phase-2 manual exception requires email-on-file + Stripe `pi_...` or `in_...` proof
 - [ ] Add optional node `messaging_handles[]` with validation/sanitization rules; treat handles as unverified user-provided contact data.
 - [ ] Update reveal-contact contract to return `messaging_handles[]` alongside required email and optional phone.
 - [ ] Add near-real-time offer lifecycle eventing:
@@ -250,12 +238,12 @@ Last updated: 2026-02-19
   - webhook health (when applicable)
 
 ### Phase 0.5 — Workflow hardening (latest thread notes)
-- [ ] Update `docs/project-files/00__read-first__workflow.md`:
+- [x] Update `docs/project-files/00__read-first__workflow.md`:
   - require DB/DDL APPLY + VERIFY SQL script handoff for manual Supabase execution
   - require end-of-thread "project files to refresh" list derived from git
 - [ ] Update `AGENTS.md` DB/DDL wording:
   - explicitly state generated SQL scripts are for manual Supabase execution, not agent execution
-- [ ] Thread-switch hygiene:
+- [x] Thread-switch hygiene:
   - include unique changed paths from `docs/spec/**` plus refresh-set files (`AGENTS.md`, `docs/project-files/00__read-first__workflow.md`, `docs/project-files/agent-commerce-fit.md`, `docs/project-files/decision-log.md`, `docs/project-files/todo.md`)
 
 ### Next Phase (ranked by likelihood)
@@ -318,6 +306,11 @@ Low likelihood:
 - [ ] SDKs (full): TS + Python, versioned, CI publish, examples
 - [ ] MCP server (official): hosted on Cloud Run; discoverable via `/v1/meta`
 - [ ] Docs portal expansion: `/docs/api`, `/docs/errors`, `/docs/security`, `/docs/credits`, `/docs/webhooks`
+- [ ] Enable email recovery lane in Phase 2:
+  - choose delivery provider (SendGrid or SMTP)
+  - set Cloud Run email env/secrets
+  - run live email verification + recovery smoke (`/v1/email/*`, `/v1/recovery/*` with `method=email`)
+  - reconfirm pubkey recovery in final smoke sequence
 - [ ] Add pre-charge search quote/preview:
   - estimated credits, expected result band, likely coverage before charging
 - [ ] Separate search `effort` from `selectivity`:

@@ -155,15 +155,16 @@ Rationale:
 Scope/impact:
 - API, onboarding, infra.
 
-## 2026-02-19 - Recovery lanes locked to self-serve pubkey + email
+## 2026-02-19 - MVP recovery lane is pubkey-only; email recovery deferred
 Decision:
-- Fabric supports two self-serve recovery lanes: recovery public-key signature and email code recovery.
-- Normal recovery flows should not require manual operator intervention.
+- Self-serve API key recovery in MVP is pubkey-only.
+- Email-based recovery is deferred to Phase 2.
+- Pre-Phase-2 manual exception requires email-on-file plus Stripe receipt proof (`pi_...` or `in_...`); without Stripe history, no manual key rotation.
 Rationale:
-- Reduces recovery friction and support burden.
-- Maintains recoverability when one factor is unavailable.
+- Avoids recurring email provider cost before traction.
+- Stripe receipt IDs are low-privacy, hard-to-spoof proof for manual verification.
 Scope/impact:
-- API, onboarding, ops.
+- API, econ, onboarding, ops.
 
 ## 2026-02-19 - Offer lifecycle updates are eventing, not in-app messaging
 Decision:
@@ -337,15 +338,13 @@ Where captured:
 Impact:
 - Next enforcement/test work must preserve seller-owned locking semantics and block buyer inventory locking paths.
 
-## 2026-02-18 - Self-serve recovery factors and key-rotation policy locked
+## 2026-02-18 - Self-serve recovery key-rotation policy locked
 Decision:
-- Self-serve API key recovery supports two factors: recovery public-key signature (`pubkey`) and verified email OTP (`email`); either method can complete recovery.
 - Successful recovery must revoke all prior active API keys for the node and mint one new plaintext API key.
 Reason: Explicitly documented in thread notes and validated in live Cloud Run smoke for the `pubkey` path.
 Where captured:
 - `docs/project-files/thread-notes.md` ("What was decided" + live verification sections)
 Impact:
-- Recovery does not require admin/manual intervention when a configured factor is available.
 - Compromised/old keys are immediately invalidated on recovery completion.
 
 ## 2026-02-18 - Trial/referral policy and wrapper deferral locked
