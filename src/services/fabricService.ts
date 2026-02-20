@@ -1640,14 +1640,30 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
 
 function normalizeMessagingHandles(raw: unknown): Array<{ kind: string; handle: string; url: string | null }> {
   if (!Array.isArray(raw)) return [];
+  const maxHandles = 10;
   const out: Array<{ kind: string; handle: string; url: string | null }> = [];
+  const seen = new Set<string>();
   for (const entry of raw) {
+    if (out.length >= maxHandles) break;
     if (!entry || typeof entry !== 'object') continue;
     const kindRaw = String((entry as any).kind ?? '').trim().toLowerCase();
     const handleRaw = String((entry as any).handle ?? '').trim();
     const urlValue = (entry as any).url;
     const urlRaw = typeof urlValue === 'string' ? urlValue.trim() : '';
     if (!kindRaw || !handleRaw) continue;
+    if (kindRaw.length > 32 || handleRaw.length > 128) continue;
+    if (!/^[A-Za-z0-9._-]+$/.test(kindRaw)) continue;
+    if (urlRaw) {
+      try {
+        const parsed = new URL(urlRaw);
+        if (!parsed.protocol || !parsed.host) continue;
+      } catch {
+        continue;
+      }
+    }
+    const dedupeKey = `${kindRaw}\u0000${handleRaw}\u0000${urlRaw}`.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
     out.push({
       kind: kindRaw,
       handle: handleRaw,

@@ -885,6 +885,90 @@ test('reveal-contact returns sanitized messaging_handles and persists them in au
   await app.close();
 });
 
+test('messaging_handles accepts valid values and rejects invalid profile updates', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'boot-mh-validate', {
+    display_name: 'MH Validate',
+    email: `mh.validate.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+    messaging_handles: [
+      { kind: ' TELEGRAM ', handle: ' @mh_validate ', url: 'https://t.me/mh_validate ' },
+    ],
+  });
+  assert.equal(boot.statusCode, 200);
+  assert.equal(boot.json().node.messaging_handles[0].kind, 'telegram');
+  assert.equal(boot.json().node.messaging_handles[0].handle, '@mh_validate');
+  assert.equal(boot.json().node.messaging_handles[0].url, 'https://t.me/mh_validate');
+
+  const apiKey = boot.json().api_key.api_key;
+  const invalidPatch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'mh-invalid-patch' },
+    payload: {
+      display_name: boot.json().node.display_name,
+      email: boot.json().node.email,
+      recovery_public_key: null,
+      messaging_handles: [{ kind: 'bad kind', handle: '@invalid', url: null }],
+    },
+  });
+  assert.equal(invalidPatch.statusCode, 422);
+  assert.equal(invalidPatch.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('reveal-contact returns empty messaging_handles array when none configured', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-mh-empty-seller', {
+    display_name: 'MH Empty Seller',
+    email: `mh.empty.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-mh-empty-buyer', {
+    display_name: 'MH Empty Buyer',
+    email: `mh.empty.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Messaging handle empty unit', 'messaging-handle-empty-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-empty-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'mh-empty-offer-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-empty-offer-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+
+  const reveal = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mh-empty-offer-reveal' },
+    payload: {},
+  });
+  assert.equal(reveal.statusCode, 200);
+  assert.deepEqual(reveal.json().contact.messaging_handles, []);
+  await app.close();
+});
+
 test('offer lifecycle events emit webhooks and /events supports cursor polling', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-event-seller', {
