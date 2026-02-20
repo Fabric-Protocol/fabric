@@ -2,6 +2,38 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-20 - Documentation precedence is locked
+Decision:
+- `docs/specs/*` is normative source-of-truth.
+- `docs/runbooks/*` are operational checklists with lower precedence.
+- `docs/project-files/*` are workflow artifacts and non-normative.
+Rationale:
+- Prevents contract/runtime behavior from drifting based on operational notes.
+- Keeps implementation and verification anchored to canonical specs.
+Scope/impact:
+- API, infra, onboarding.
+
+## 2026-02-20 - Contact identity and settlement disclaimer is mandatory
+Decision:
+- Contact and messaging identity data is user-provided and unverified.
+- Fabric does not guarantee identity, fulfillment, or transaction outcomes.
+- Payment/settlement remains off-platform.
+Rationale:
+- Keeps trust boundaries explicit during contact reveal and post-accept flows.
+- Reduces ambiguity about Fabric's role in off-platform fulfillment.
+Scope/impact:
+- API, onboarding, infra.
+
+## 2026-02-20 - Eventing smoke should avoid live-payment dependency
+Decision:
+- Do not require real-money Stripe payment to validate eventing smoke.
+- Prefer removing `subscriber_required` gating (or enabling a non-paid smoke path) before rerunning offer-eventing smoke.
+Rationale:
+- Deployed BaseUrl uses live Stripe keys; paid smoke adds avoidable cost/risk.
+- Keeps eventing verification focused on lifecycle/event behavior, not payment flows.
+Scope/impact:
+- Infra, economics, onboarding.
+
 ## 2026-02-19 - DB/DDL changes require explicit Supabase APPLY + VERIFY handoff
 Decision:
 - When schema/DDL changes are introduced, Codex must generate APPLY and VERIFY SQL scripts for manual Supabase execution and must not assume DB state is updated until human confirmation.
@@ -169,6 +201,10 @@ Scope/impact:
 ## 2026-02-19 - Offer lifecycle updates are eventing, not in-app messaging
 Decision:
 - Near-real-time offer lifecycle updates use webhooks with `/events?since=cursor` polling fallback.
+- `/events?since=cursor` uses an opaque cursor string with strictly-after semantics.
+- Webhooks are best-effort with retry/backoff bounded to ~30 minutes; polling is fallback.
+- Event payloads are metadata-only and never include PII; `offer_contact_revealed` carries no contact data.
+- Webhook signing is optional HMAC: signed only when secret is set; setting `event_webhook_secret: null` clears signing.
 - This replaces in-platform messaging for go-live offer status propagation.
 Rationale:
 - Reduces polling/wait friction with a simpler delivery model.

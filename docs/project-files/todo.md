@@ -1,6 +1,6 @@
 ﻿# Fabric - TODO (thread-active)
 
-Last updated: 2026-02-19
+Last updated: 2026-02-20
 
 ## ✅ Completed (P0) — Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
@@ -155,12 +155,13 @@ Last updated: 2026-02-19
   - verify webhook deliveries are 2xx and `/v1/me` reflects active subscriber state.
 
 ### Phase 0.5 — Remaining blockers from latest thread
-- [ ] Audit and enforce holds invariant:
+- [x] Audit and enforce holds invariant:
   - only owner/seller can lock their own unit(s)
   - buyers must not be able to lock seller inventory via offers/requests
   - add/adjust tests to prevent regression
-- [ ] Enforce `display_name` uniqueness:
+- [x] Enforce `display_name` uniqueness:
   - add/verify DB constraint + API behavior + tests
+  - verified: case-insensitive unique index and duplicate folded-name check
 
 ### Phase 0.5 — Search economics + onboarding (latest thread notes)
 - [x] Apply workflow guidance from thread notes explicitly:
@@ -203,26 +204,36 @@ Last updated: 2026-02-19
   - search -> offer -> acceptance -> contact reveal -> fulfillment
 
 ### Phase 0.5 / Phase 1 — Contact/comms + recovery docs (thread notes)
-- [ ] Lock docs precedence guidance:
+- [x] Lock docs precedence guidance:
   - treat `docs/specs/*` as normative source-of-truth
   - treat `docs/runbooks/*` as operational checklists with lower precedence
-- [ ] Document auth and email role explicitly:
+- [x] Document auth and email role explicitly:
   - `Authorization: ApiKey <api_key>` is the only normal auth factor
   - email is required at account creation as backup/recovery, not as runtime auth
-- [ ] Add/ensure doc note for recovery policy:
+- [x] Add/ensure doc note for recovery policy:
   - MVP recovery is pubkey-only
   - pre-Phase-2 manual exception requires email-on-file + Stripe `pi_...` or `in_...` proof
-- [ ] Add optional node `messaging_handles[]` with validation/sanitization rules; treat handles as unverified user-provided contact data.
-- [ ] Update reveal-contact contract to return `messaging_handles[]` alongside required email and optional phone.
-- [ ] Add near-real-time offer lifecycle eventing:
+- [x] Add optional node `messaging_handles[]` with validation/sanitization rules; treat handles as unverified user-provided contact data.
+- [x] Update reveal-contact contract to return `messaging_handles[]` alongside required email and optional phone.
+- [x] Add near-real-time offer lifecycle eventing:
   - webhooks plus `/events?since=cursor` polling fallback
   - events for `offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed`
-- [ ] Add legal/docs disclaimer:
+- [x] Add legal/docs disclaimer:
   - contact/messaging identity is user-provided
   - Fabric does not guarantee identity or fulfillment; settlement is off-platform
 - [ ] Expand onboarding docs:
   - add "multi-dimensional trading flexibility"
   - add 5-8 concrete mixed-consideration examples and how terms live in offer notes
+
+### Phase 0.5 — Eventing smoke follow-up (latest thread notes)
+- [ ] Run end-to-end eventing smoke (offers -> events -> webhook) on deployment where offers are not blocked by `subscriber_required`:
+  - create lifecycle transitions to generate events
+  - verify `/events` cursor strictly-after behavior
+  - verify webhook delivery rows are recorded
+  - verify signed webhook headers when secret present; headers omitted after clearing secret
+- [ ] Unblock smoke without paying live Stripe:
+  - complete existing TODO to remove `subscriber_required` gating (or enable a non-paid smoke path)
+  - rerun eventing smoke after the unblock
 
 ### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
 - [ ] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
