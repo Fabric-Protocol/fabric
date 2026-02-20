@@ -512,7 +512,7 @@ test('publish endpoint rejects suspended node before projection write', async ()
   await app.close();
 });
 
-test('search remains subscriber-gated while offer progression is available without subscriber status', async () => {
+test('search remains subscriber-gated while offer progression (create/counter/accept/reveal) is available without subscriber status', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-no-sub-seller', {
     display_name: 'Offer No Sub Seller',
@@ -546,7 +546,24 @@ test('search remains subscriber-gated while offer progression is available witho
     payload: { unit_ids: [sellerUnit.id], thread_id: null, note: null },
   });
   assert.equal(created.statusCode, 200);
-  const offerId = created.json().offer.id;
+  const firstOfferId = created.json().offer.id;
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${firstOfferId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'sg-offer-counter-seller' },
+    payload: { unit_ids: [sellerUnit.id], note: null },
+  });
+  assert.equal(counter.statusCode, 200);
+
+  const acceptedFlowOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-create-accepted-flow' },
+    payload: { unit_ids: [sellerUnit.id], thread_id: null, note: null },
+  });
+  assert.equal(acceptedFlowOffer.statusCode, 200);
+  const offerId = acceptedFlowOffer.json().offer.id;
 
   const sellerAccept = await app.inject({
     method: 'POST',
@@ -576,6 +593,158 @@ test('search remains subscriber-gated while offer progression is available witho
 
   const balAfter = await repo.creditBalance(buyerNodeId);
   assert.equal(balAfter > 0, true);
+  await app.close();
+});
+
+test('offer actions stay blocked for suspended nodes even without subscriber gating', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-suspended-seller');
+  const buyerBoot = await bootstrap(app, 'boot-offer-suspended-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Suspended offer unit', 'suspended-offer-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-create-active' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'susp-offer-accept-seller-active' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-accept-buyer-active' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+
+  await suspendNode(buyerNodeId);
+
+  const suspendedCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-create-blocked' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(suspendedCreate.statusCode, 403);
+  assert.equal(suspendedCreate.json().error.code, 'forbidden');
+
+  const suspendedCounter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-counter-blocked' },
+    payload: { unit_ids: [unit.id], note: null },
+  });
+  assert.equal(suspendedCounter.statusCode, 403);
+  assert.equal(suspendedCounter.json().error.code, 'forbidden');
+
+  const suspendedAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-accept-blocked' },
+    payload: {},
+  });
+  assert.equal(suspendedAccept.statusCode, 403);
+  assert.equal(suspendedAccept.json().error.code, 'forbidden');
+
+  const suspendedReveal = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'susp-offer-reveal-blocked' },
+    payload: {},
+  });
+  assert.equal(suspendedReveal.statusCode, 403);
+  assert.equal(suspendedReveal.json().error.code, 'forbidden');
+  await app.close();
+});
+
+test('offer actions require current legal assent even without subscriber gating', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-legal-seller');
+  const buyerBoot = await bootstrap(app, 'boot-offer-legal-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Legal required offer unit', 'legal-required-offer-scope'));
+
+  await query("update nodes set legal_version='2020-01-01' where id=$1", [buyerNodeId]);
+  const createLegalRequired = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'legal-offer-create-blocked' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(createLegalRequired.statusCode, 422);
+  assert.equal(createLegalRequired.json().error.code, 'legal_required');
+
+  await query('update nodes set legal_version=$2 where id=$1', [buyerNodeId, REQUIRED_LEGAL_VERSION]);
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'legal-offer-create-active' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  await query("update nodes set legal_version='2020-01-01' where id=$1", [sellerNodeId]);
+  const counterLegalRequired = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'legal-offer-counter-blocked' },
+    payload: { unit_ids: [unit.id], note: null },
+  });
+  assert.equal(counterLegalRequired.statusCode, 422);
+  assert.equal(counterLegalRequired.json().error.code, 'legal_required');
+
+  const acceptLegalRequired = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'legal-offer-accept-blocked' },
+    payload: {},
+  });
+  assert.equal(acceptLegalRequired.statusCode, 422);
+  assert.equal(acceptLegalRequired.json().error.code, 'legal_required');
+
+  await query('update nodes set legal_version=$2 where id=$1', [sellerNodeId, REQUIRED_LEGAL_VERSION]);
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'legal-offer-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'legal-offer-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  await query("update nodes set legal_version='2020-01-01' where id=$1", [buyerNodeId]);
+  const revealLegalRequired = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'legal-offer-reveal-blocked' },
+    payload: {},
+  });
+  assert.equal(revealLegalRequired.statusCode, 422);
+  assert.equal(revealLegalRequired.json().error.code, 'legal_required');
   await app.close();
 });
 
