@@ -39,6 +39,7 @@ create table if not exists nodes (
   phone text null,
   messaging_handles jsonb not null default '[]'::jsonb,
   event_webhook_url text null,
+  event_webhook_secret text null,
 
   status text not null default 'ACTIVE' check (status in ('ACTIVE','SUSPENDED')),
   suspended_at timestamptz null,
@@ -62,6 +63,7 @@ alter table nodes add column if not exists email_verified_at timestamptz null;
 alter table nodes add column if not exists recovery_public_key text null;
 alter table nodes add column if not exists messaging_handles jsonb not null default '[]'::jsonb;
 alter table nodes add column if not exists event_webhook_url text null;
+alter table nodes add column if not exists event_webhook_secret text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 create unique index if not exists nodes_email_unique_idx on nodes(lower(email)) where email is not null and deleted_at is null;
@@ -541,14 +543,22 @@ create table if not exists event_webhook_deliveries (
   event_id uuid not null references offer_events(id) on delete cascade,
   node_id uuid not null references nodes(id),
   webhook_url text not null,
+  attempt_number int not null default 1,
+  next_retry_at timestamptz null,
+  delivered_at timestamptz null,
   status_code int null,
   ok boolean not null default false,
   error text null,
   created_at timestamptz not null default now()
 );
 
+alter table event_webhook_deliveries add column if not exists attempt_number int not null default 1;
+alter table event_webhook_deliveries add column if not exists next_retry_at timestamptz null;
+alter table event_webhook_deliveries add column if not exists delivered_at timestamptz null;
+
 create index if not exists event_webhook_deliveries_event_idx on event_webhook_deliveries(event_id, created_at desc);
 create index if not exists event_webhook_deliveries_node_created_idx on event_webhook_deliveries(node_id, created_at desc);
+create index if not exists event_webhook_deliveries_next_retry_idx on event_webhook_deliveries(next_retry_at) where next_retry_at is not null and ok=false;
 
 -- =========================
 -- Referrals

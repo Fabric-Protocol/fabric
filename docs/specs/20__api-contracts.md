@@ -483,17 +483,24 @@ Request
       "url": "absolute URL|null"
     }
   ],
-  "event_webhook_url": "absolute URL|null"
+  "event_webhook_url": "absolute URL|null",
+  "event_webhook_secret": "string|null"
 }
 
 Validation notes
 
 - `messaging_handles` max length: 10.
 - Server normalizes `messaging_handles` values (trimmed; `kind` lower-cased) before persistence and reveal responses.
+- `event_webhook_secret` is optional and write-only. If provided as a string, it is trimmed, must be non-empty, and max length 256.
+- Setting `event_webhook_secret` to `null` clears the secret; subsequent webhook deliveries are unsigned until a new secret is set.
 
 Response 200
 
 Same shape as GET /v1/me.
+
+Write-only field note
+
+- `event_webhook_secret` is never returned by any API response.
 
 Errors
 
@@ -1578,12 +1585,32 @@ Response 200
   }
 }
 
+Disclaimer (normative)
+
+- Contact fields returned by reveal-contact, including `messaging_handles`, are user-provided and unverified by Fabric.
+- Fabric does not guarantee counterparty identity, fulfillment, or transaction outcomes.
+- Any payment/settlement and fulfillment occur off-platform between participants; Fabric is not a party to those transactions.
+
 12b) Offer lifecycle events (webhook + polling fallback)
 
 Node profile event webhook registration:
 
 - `PATCH /v1/me` supports optional `event_webhook_url` to register a per-node webhook sink.
+- `PATCH /v1/me` supports optional write-only `event_webhook_secret` to enable webhook signing per node.
 - Deliveries are best-effort and audited server-side.
+- Deliveries retry with backoff for approximately 30 minutes total; polling remains the fallback.
+
+Webhook payload and signing
+
+- Webhook body is metadata-only (no offer snapshot, no diffs, no contact PII).
+- `offer_contact_revealed` notifications do not include revealed contact fields; receivers call reveal-contact separately when eligible.
+- If the recipient node has `event_webhook_secret` configured, deliveries include:
+  - `X-Fabric-Timestamp`: unix epoch seconds (string)
+  - `X-Fabric-Signature`: `t=<timestamp>,v1=<hex_hmac_sha256>`
+- If `event_webhook_secret` is not configured, both signature headers are omitted.
+- Signed payload bytes are exactly: `<timestamp>.<raw_body>` (UTF-8), where `raw_body` is the exact HTTP request body bytes delivered.
+- `v1` is computed as `hex(HMAC_SHA256(event_webhook_secret, signed_payload))`.
+- Receiver replay guidance: reject signatures where `X-Fabric-Timestamp` differs from current time by more than 300 seconds.
 
 `GET /events`
 
@@ -1602,6 +1629,12 @@ Poll offer lifecycle events for the authenticated node using cursor pagination.
 Query
 
 `since` (opaque cursor|null), `limit` (1..100, default 50)
+
+Cursor semantics
+
+- `since` is server-issued and opaque to clients.
+- Polling is strictly-after semantics: `GET /events?since=X` returns only events that occurred after cursor `X`.
+- `next_cursor` is server-issued from the last returned event and can be used directly as the next `since` value.
 
 Response 200
 {

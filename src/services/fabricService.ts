@@ -199,6 +199,7 @@ export const fabricService = {
     recovery_public_key?: string | null;
     messaging_handles?: Array<{ kind: string; handle: string; url: string | null }> | null;
     event_webhook_url?: string | null;
+    event_webhook_secret?: string | null;
   }) {
     try {
       await repo.updateMe(
@@ -208,6 +209,7 @@ export const fabricService = {
         payload.recovery_public_key,
         payload.messaging_handles === undefined ? undefined : normalizeMessagingHandles(payload.messaging_handles),
         payload.event_webhook_url,
+        payload.event_webhook_secret === undefined ? undefined : normalizeWebhookSecret(payload.event_webhook_secret),
       );
     } catch (err: any) {
       if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
@@ -1027,6 +1029,24 @@ function normalizeEmail(value: string | null | undefined) {
   return normalized || null;
 }
 
+function normalizeWebhookSecret(value: string | null | undefined) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function signEventWebhookBody(secret: string, timestamp: string, rawBody: string) {
+  return crypto.createHmac('sha256', secret).update(`${timestamp}.${rawBody}`, 'utf8').digest('hex');
+}
+
+function nextWebhookRetryDelayMs(attemptNumber: number) {
+  const safeAttempt = Number.isFinite(attemptNumber) && attemptNumber > 0 ? attemptNumber : 1;
+  const safeBase = Math.max(1, config.eventWebhookRetryBaseMs);
+  const safeMax = Math.max(safeBase, config.eventWebhookRetryMaxMs);
+  const exponential = safeBase * (2 ** Math.max(0, safeAttempt - 1));
+  return Math.min(safeMax, exponential);
+}
+
 function recoveryCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -1719,7 +1739,7 @@ async function emitOfferLifecycleEvents(input: {
     input.eventType,
     input.actorNodeId,
     [input.fromNodeId, input.toNodeId],
-    input.payload ?? {},
+    {},
   );
 
   await Promise.all(events.map((event) => deliverOfferLifecycleWebhook(event)));
@@ -1728,32 +1748,78 @@ async function emitOfferLifecycleEvents(input: {
 async function deliverOfferLifecycleWebhook(eventRow: any) {
   const nodeId = String(eventRow.recipient_node_id ?? '');
   if (!nodeId) return;
-  const webhookUrl = await repo.getNodeEventWebhookUrl(nodeId);
+  const webhookConfig = await repo.getNodeEventWebhookConfig(nodeId);
+  const webhookUrl = webhookConfig.event_webhook_url?.trim() ?? '';
   if (!webhookUrl) return;
+  const webhookSecret = normalizeWebhookSecret(webhookConfig.event_webhook_secret);
+  const firstAttemptAtMs = Date.now();
+  const retryDeadlineMs = firstAttemptAtMs + (Math.max(0, config.eventWebhookRetryWindowMinutes) * 60 * 1000);
 
-  let ok = false;
-  let statusCode: number | null = null;
-  let error: string | null = null;
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        id: eventRow.id,
-        type: eventRow.event_type,
-        offer_id: eventRow.offer_id,
-        actor_node_id: eventRow.actor_node_id,
-        recipient_node_id: eventRow.recipient_node_id,
-        payload: eventRow.payload ?? {},
-        created_at: eventRow.created_at,
-      }),
+  const deliverAttempt = async (attemptNumber: number): Promise<void> => {
+    let ok = false;
+    let statusCode: number | null = null;
+    let error: string | null = null;
+    let nextRetryAt: string | null = null;
+    let deliveredAt: string | null = null;
+    const rawBody = JSON.stringify({
+      id: eventRow.id,
+      type: eventRow.event_type,
+      offer_id: eventRow.offer_id,
+      actor_node_id: eventRow.actor_node_id,
+      recipient_node_id: eventRow.recipient_node_id,
+      payload: {},
+      created_at: eventRow.created_at,
     });
-    statusCode = response.status;
-    ok = response.ok;
-    if (!response.ok) error = `http_${response.status}`;
-  } catch (err: any) {
-    error = err?.message ?? 'webhook_delivery_failed';
-  }
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (webhookSecret) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = signEventWebhookBody(webhookSecret, timestamp, rawBody);
+      headers['x-fabric-timestamp'] = timestamp;
+      headers['x-fabric-signature'] = `t=${timestamp},v1=${signature}`;
+    }
 
-  await repo.addEventWebhookDelivery(eventRow.id, nodeId, webhookUrl, statusCode, ok, error);
+    try {
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers,
+        body: rawBody,
+      });
+      statusCode = response.status;
+      ok = response.ok;
+      if (!response.ok) error = `http_${response.status}`;
+    } catch (err: any) {
+      error = err?.message ?? 'webhook_delivery_failed';
+    }
+
+    if (ok) {
+      deliveredAt = new Date().toISOString();
+    } else {
+      const retryDelayMs = nextWebhookRetryDelayMs(attemptNumber);
+      const retryAtMs = Date.now() + retryDelayMs;
+      if (retryAtMs <= retryDeadlineMs) {
+        nextRetryAt = new Date(retryAtMs).toISOString();
+      }
+    }
+
+    await repo.addEventWebhookDelivery(
+      eventRow.id,
+      nodeId,
+      webhookUrl,
+      attemptNumber,
+      nextRetryAt,
+      deliveredAt,
+      statusCode,
+      ok,
+      error,
+    );
+
+    if (!nextRetryAt) return;
+    const waitMs = Math.max(0, new Date(nextRetryAt).getTime() - Date.now());
+    const timer = setTimeout(() => {
+      void deliverAttempt(attemptNumber + 1);
+    }, waitMs);
+    timer.unref?.();
+  };
+
+  await deliverAttempt(1);
 }

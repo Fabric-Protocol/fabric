@@ -248,6 +248,8 @@ If caller lacks legal assent/version: 422 legal_required
 Success:
 
 Response includes contact email, optional phone, and optional unverified messaging_handles[].
+Treat all revealed contact/messaging identity as user-provided and unverified; run counterparty verification/due diligence before any off-platform exchange.
+See normative disclaimer: `docs/specs/20__api-contracts.md` section `POST /v1/offers/{offer_id}/reveal-contact`.
 
 4.6 Rejecting an offer (free recipients allowed)
 Intent: allow recipients to reject inbound offers even without subscription.

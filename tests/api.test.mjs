@@ -994,6 +994,7 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
       email: sellerBoot.json().node.email,
       recovery_public_key: null,
       event_webhook_url: 'https://hooks.example.test/seller',
+      event_webhook_secret: 'seller-event-secret',
       messaging_handles: [],
     },
   });
@@ -1006,6 +1007,7 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
       email: buyerBoot.json().node.email,
       recovery_public_key: null,
       event_webhook_url: 'https://hooks.example.test/buyer',
+      event_webhook_secret: null,
       messaging_handles: [],
     },
   });
@@ -1015,7 +1017,11 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   await withMockFetch(async (url, init) => {
     const rawBody = init && typeof init.body === 'string' ? init.body : '{}';
-    webhookCalls.push({ url: String(url), body: JSON.parse(rawBody) });
+    const headerEntries = init && init.headers instanceof Headers
+      ? [...init.headers.entries()]
+      : Object.entries((init && init.headers) || {});
+    const headers = Object.fromEntries(headerEntries.map(([k, v]) => [String(k).toLowerCase(), String(v)]));
+    webhookCalls.push({ url: String(url), rawBody, body: JSON.parse(rawBody), headers });
     return jsonResponse(200, { ok: true });
   }, async () => {
     const createdA = await app.inject({
@@ -1089,6 +1095,31 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
   assert.equal(webhookTypes.has('offer_accepted'), true);
   assert.equal(webhookTypes.has('offer_cancelled'), true);
   assert.equal(webhookTypes.has('offer_contact_revealed'), true);
+  for (const call of webhookCalls) {
+    assert.deepEqual(call.body?.payload ?? {}, {});
+    assert.equal(Object.hasOwn(call.body ?? {}, 'contact'), false);
+    assert.equal(Object.hasOwn(call.body?.payload ?? {}, 'email'), false);
+    assert.equal(Object.hasOwn(call.body?.payload ?? {}, 'phone'), false);
+    assert.equal(Object.hasOwn(call.body?.payload ?? {}, 'messaging_handles'), false);
+  }
+
+  const sellerWebhookCalls = webhookCalls.filter((call) => call.url === 'https://hooks.example.test/seller');
+  const buyerWebhookCalls = webhookCalls.filter((call) => call.url === 'https://hooks.example.test/buyer');
+  assert.equal(sellerWebhookCalls.length > 0, true);
+  assert.equal(buyerWebhookCalls.length > 0, true);
+
+  for (const call of sellerWebhookCalls) {
+    const timestamp = call.headers['x-fabric-timestamp'];
+    assert.equal(typeof timestamp, 'string');
+    const expected = crypto.createHmac('sha256', 'seller-event-secret')
+      .update(`${timestamp}.${call.rawBody}`, 'utf8')
+      .digest('hex');
+    assert.equal(call.headers['x-fabric-signature'], `t=${timestamp},v1=${expected}`);
+  }
+  for (const call of buyerWebhookCalls) {
+    assert.equal(call.headers['x-fabric-timestamp'], undefined);
+    assert.equal(call.headers['x-fabric-signature'], undefined);
+  }
 
   const page1 = await app.inject({
     method: 'GET',
@@ -1106,8 +1137,15 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(page2.statusCode, 200);
-  const allIds = [...page1.json().events, ...page2.json().events].map((event) => event.id);
+  const combinedEvents = [...page1.json().events, ...page2.json().events];
+  const allIds = combinedEvents.map((event) => event.id);
   assert.equal(new Set(allIds).size, allIds.length);
+  for (const event of combinedEvents) {
+    assert.deepEqual(event.payload ?? {}, {});
+    assert.equal(Object.hasOwn(event.payload ?? {}, 'email'), false);
+    assert.equal(Object.hasOwn(event.payload ?? {}, 'phone'), false);
+    assert.equal(Object.hasOwn(event.payload ?? {}, 'messaging_handles'), false);
+  }
 
   const invalidCursor = await app.inject({
     method: 'GET',
@@ -1120,6 +1158,88 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   const deliveryRows = await query('select count(*)::text as c from event_webhook_deliveries');
   assert.equal(Number(deliveryRows[0].c) > 0, true);
+  await app.close();
+});
+
+test('event webhook retries are bounded and polling remains available when delivery fails', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-event-retry-seller', {
+    display_name: 'Event Retry Seller',
+    email: `event.retry.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-event-retry-buyer', {
+    display_name: 'Event Retry Buyer',
+    email: `event.retry.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const patchSeller = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-retry-seller-webhook' },
+    payload: {
+      display_name: sellerBoot.json().node.display_name,
+      email: sellerBoot.json().node.email,
+      recovery_public_key: null,
+      event_webhook_url: 'https://hooks.example.test/retry-fail',
+      event_webhook_secret: 'retry-secret',
+      messaging_handles: [],
+    },
+  });
+  assert.equal(patchSeller.statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer events retry unit', 'offer-events-retry-scope'));
+  let failingAttemptCount = 0;
+
+  await withConfigOverrides({
+    eventWebhookRetryWindowMinutes: 0.0015,
+    eventWebhookRetryBaseMs: 10,
+    eventWebhookRetryMaxMs: 20,
+  }, async () => {
+    await withMockFetch(async (url) => {
+      if (String(url) === 'https://hooks.example.test/retry-fail') {
+        failingAttemptCount += 1;
+        return jsonResponse(500, { ok: false });
+      }
+      return jsonResponse(200, { ok: true });
+    }, async () => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/v1/offers',
+        headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-retry-offer-create' },
+        payload: { unit_ids: [unit.id], thread_id: null, note: 'retry-case' },
+      });
+      assert.equal(created.statusCode, 200);
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+  });
+
+  assert.equal(failingAttemptCount > 1, true);
+  const retryRows = await query(
+    `select attempt_number, ok, next_retry_at, delivered_at
+     from event_webhook_deliveries
+     where webhook_url=$1
+     order by created_at asc`,
+    ['https://hooks.example.test/retry-fail'],
+  );
+  assert.equal(retryRows.length > 1, true);
+  assert.equal(retryRows.some((row) => Number(row.attempt_number) > 1), true);
+  assert.equal(retryRows[retryRows.length - 1].next_retry_at, null);
+  assert.equal(retryRows[retryRows.length - 1].delivered_at, null);
+
+  const eventsPoll = await app.inject({
+    method: 'GET',
+    url: '/events?limit=10',
+    headers: { authorization: `ApiKey ${sellerApiKey}` },
+  });
+  assert.equal(eventsPoll.statusCode, 200);
+  assert.equal(Array.isArray(eventsPoll.json().events), true);
+  assert.equal(eventsPoll.json().events.length > 0, true);
   await app.close();
 });
 

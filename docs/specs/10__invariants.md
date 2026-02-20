@@ -55,6 +55,7 @@ This document is **normative**: requirements here are **MUST / MUST NOT** unless
 - Contact information **MUST** be revealed only after mutual acceptance.
 - Contact reveal **MUST** enforce caller authorization and current legal assent.
 - Safety disclaimers **MUST** be included at publish, offer, and reveal.
+- Reveal-contact disclaimers **MUST** state that contact/messaging identity is user-provided and unverified, and that settlement/fulfillment is off-platform.
 
 ---
 

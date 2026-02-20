@@ -174,6 +174,7 @@ export async function updateMe(
   recoveryPublicKey: string | null | undefined = undefined,
   messagingHandles: Array<{ kind: string; handle: string; url: string | null }> | null | undefined = undefined,
   eventWebhookUrl: string | null | undefined = undefined,
+  eventWebhookSecret: string | null | undefined = undefined,
 ) {
   const rows = await query<{ id: string }>(
     `update nodes
@@ -195,6 +196,9 @@ export async function updateMe(
   }
   if (eventWebhookUrl !== undefined) {
     await query('update nodes set event_webhook_url=$2 where id=$1', [nodeId, eventWebhookUrl]);
+  }
+  if (eventWebhookSecret !== undefined) {
+    await query('update nodes set event_webhook_secret=$2 where id=$1', [nodeId, eventWebhookSecret]);
   }
   return updated;
 }
@@ -956,30 +960,36 @@ export async function listOfferLifecycleEvents(nodeId: string, limit: number, cu
   );
 }
 
-export async function getNodeEventWebhookUrl(nodeId: string) {
-  const rows = await query<{ event_webhook_url: string | null }>(
-    `select event_webhook_url
+export async function getNodeEventWebhookConfig(nodeId: string) {
+  const rows = await query<{ event_webhook_url: string | null; event_webhook_secret: string | null }>(
+    `select event_webhook_url, event_webhook_secret
      from nodes
      where id=$1
        and deleted_at is null
      limit 1`,
     [nodeId],
   );
-  return rows[0]?.event_webhook_url ?? null;
+  return {
+    event_webhook_url: rows[0]?.event_webhook_url ?? null,
+    event_webhook_secret: rows[0]?.event_webhook_secret ?? null,
+  };
 }
 
 export async function addEventWebhookDelivery(
   eventId: string,
   nodeId: string,
   webhookUrl: string,
+  attemptNumber: number,
+  nextRetryAt: string | null,
+  deliveredAt: string | null,
   statusCode: number | null,
   ok: boolean,
   error: string | null,
 ) {
   await query(
-    `insert into event_webhook_deliveries(event_id,node_id,webhook_url,status_code,ok,error)
-     values($1,$2,$3,$4,$5,$6)`,
-    [eventId, nodeId, webhookUrl, statusCode, ok, error],
+    `insert into event_webhook_deliveries(event_id,node_id,webhook_url,attempt_number,next_retry_at,delivered_at,status_code,ok,error)
+     values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [eventId, nodeId, webhookUrl, attemptNumber, nextRetryAt, deliveredAt, statusCode, ok, error],
   );
 }
 

@@ -109,7 +109,7 @@ const legalPages = {
     <p>You retain rights to your content. You grant the Operator a limited license to host, process, and transmit your content solely to provide and secure the Service, enforce policies, and comply with law. You represent you have all rights necessary to submit content and that your content and use comply with law and the Acceptable Use Policy.</p>
 
     <h2>9. Marketplace content; no verification ("buyer beware")</h2>
-    <p>Fabric hosts and transmits information provided by Nodes (including listings, requests, descriptions, and other content). The Operator does not verify, endorse, guarantee, or warrant the accuracy, completeness, legality, quality, safety, or availability of any Node-provided content or any off-platform transaction. Any reliance on Node-provided content is at your own risk. You are solely responsible for evaluating other Nodes and conducting appropriate due diligence ("buyer beware").</p>
+    <p>Fabric hosts and transmits information provided by Nodes (including listings, requests, descriptions, contact handles, and other content). The Operator does not verify, endorse, guarantee, or warrant the accuracy, completeness, legality, quality, safety, or availability of any Node-provided content or any off-platform transaction. Contact and messaging identity information is user-provided and unverified. Any reliance on Node-provided content is at your own risk. You are solely responsible for evaluating other Nodes and conducting appropriate due diligence ("buyer beware").</p>
 
     <h2>10. Privacy</h2>
     <p>The Privacy Policy describes how the Operator collects, uses, and shares data.</p>
@@ -446,7 +446,7 @@ const legalPages = {
     <p>Fabric Protocol provides coordination infrastructure. The Operator does not verify Node-provided content and is not an escrow or payment intermediary for off-platform transactions. You are solely responsible for evaluating counterparties, complying with law, and managing any off-platform exchange, delivery, or performance of goods/services.</p>
 
     <h2>8. Contact reveal and public contact information</h2>
-    <p>Direct contact information must not be posted in public fields (including Node profiles, listings, or descriptions). If contact reveal is supported, contact details may be shared only through the Service's workflow (for example, after acceptance and only between eligible Nodes). Attempts to circumvent contact gating may be treated as abuse.</p>
+    <p>Direct contact information must not be posted in public fields (including Node profiles, listings, or descriptions). If contact reveal is supported, contact details may be shared only through the Service's workflow (for example, after acceptance and only between eligible Nodes). Contact/messaging identity is user-provided and unverified, and any settlement or fulfillment remains off-platform between participants. Attempts to circumvent contact gating may be treated as abuse.</p>
 
     <h2>9. Resource-locking abuse and offer spam</h2>
     <p>You may not use automation to lock or attempt to lock resources without legitimate intent (for example, repeated offers intended to block availability). Abusive offer patterns, spam, or manipulation of workflow state may result in throttling, suspension, or termination.</p>
@@ -1180,6 +1180,7 @@ export function buildApp() {
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
       event_webhook_url: z.string().trim().url().max(2048).nullable().optional(),
+      event_webhook_secret: z.string().trim().min(1).max(256).nullable().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const out = await fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);
