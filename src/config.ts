@@ -77,6 +77,7 @@ export const config = {
   rateLimitOfferWritePerMinute: Number(process.env.RATE_LIMIT_OFFER_WRITE_PER_MINUTE ?? 30),
   rateLimitOfferDecisionPerMinute: Number(process.env.RATE_LIMIT_OFFER_DECISION_PER_MINUTE ?? 60),
   rateLimitRevealContactPerHour: Number(process.env.RATE_LIMIT_REVEAL_CONTACT_PER_HOUR ?? 10),
+  rateLimitMePatchPerMinute: Number(process.env.RATE_LIMIT_ME_PATCH_PER_MINUTE ?? 20),
   eventWebhookRetryWindowMinutes: Number(process.env.EVENT_WEBHOOK_RETRY_WINDOW_MINUTES ?? 30),
   eventWebhookRetryBaseMs: Number(process.env.EVENT_WEBHOOK_RETRY_BASE_MS ?? 1000),
   eventWebhookRetryMaxMs: Number(process.env.EVENT_WEBHOOK_RETRY_MAX_MS ?? 300000),

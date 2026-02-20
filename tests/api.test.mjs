@@ -50,6 +50,7 @@ const repo = await import('../dist/src/db/fabricRepo.js');
 const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 const emailProvider = await import('../dist/src/services/emailProvider.js');
+const fabricService = await import('../dist/src/services/fabricService.js');
 
 async function bootstrap(
   app,
@@ -155,6 +156,15 @@ async function withConfigOverrides(overrides, fn) {
   }
 }
 
+async function withMockWebhookDnsLookup(mockLookup, fn) {
+  fabricService.__setWebhookDnsLookupForTests(mockLookup);
+  try {
+    return await fn();
+  } finally {
+    fabricService.__setWebhookDnsLookupForTests(null);
+  }
+}
+
 test('canonical error envelope for unauthorized', async () => {
   const app = buildApp();
   const res = await app.inject({ method: 'GET', url: '/v1/me' });
@@ -208,6 +218,7 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/counter']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/accept']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/reveal-contact']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/me']?.patch), true);
   assert.equal(Boolean(body.paths?.['/events']?.get), true);
   const offerCreateParams = body.paths?.['/v1/offers']?.post?.parameters ?? [];
   const idemParamRef = offerCreateParams.find((p) => p && p.$ref === '#/components/parameters/IdempotencyKeyHeader');
@@ -217,6 +228,11 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
   assert.equal(Boolean(sinceParam), true);
   assert.equal(Boolean(limitParam), true);
+  const mePatchSchema = body.components?.schemas?.MePatchRequest ?? {};
+  assert.equal(mePatchSchema.properties?.event_webhook_secret?.writeOnly, true);
+  assert.equal(mePatchSchema.properties?.event_webhook_secret?.nullable, true);
+  assert.equal(mePatchSchema.properties?.event_webhook_secret?.maxLength, 256);
+  assert.equal(mePatchSchema.properties?.event_webhook_url?.maxLength, 2048);
   await app.close();
 });
 
@@ -409,6 +425,184 @@ test('PATCH /v1/me rejects duplicate display_name', async () => {
   assert.equal(caseVariantPatch.json().error.code, 'validation_error');
   assert.equal(caseVariantPatch.json().error.details.reason, 'display_name_taken');
   await app.close();
+});
+
+test('PATCH /v1/me persists webhook URL and write-only webhook secret', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-webhook-config');
+  assert.equal(b.statusCode, 200);
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const displayName = b.json().node.display_name;
+  const email = b.json().node.email;
+
+  const setWebhook = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-webhook-set' },
+    payload: {
+      display_name: displayName,
+      email,
+      recovery_public_key: null,
+      messaging_handles: [],
+      event_webhook_url: 'https://203.0.113.25/hooks',
+      event_webhook_secret: '  webhook-secret  ',
+    },
+  });
+  assert.equal(setWebhook.statusCode, 200);
+  assert.equal(setWebhook.json().node.event_webhook_url, 'https://203.0.113.25/hooks');
+  assert.equal(Object.hasOwn(setWebhook.json().node, 'event_webhook_secret'), false);
+
+  const meAfterSet = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(meAfterSet.statusCode, 200);
+  assert.equal(meAfterSet.json().node.event_webhook_url, 'https://203.0.113.25/hooks');
+  assert.equal(Object.hasOwn(meAfterSet.json().node, 'event_webhook_secret'), false);
+
+  const secretSetRows = await query('select event_webhook_secret from nodes where id=$1', [nodeId]);
+  assert.equal(secretSetRows[0].event_webhook_secret, 'webhook-secret');
+
+  const clearWebhook = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-webhook-clear' },
+    payload: {
+      display_name: displayName,
+      email,
+      recovery_public_key: null,
+      messaging_handles: [],
+      event_webhook_url: null,
+      event_webhook_secret: null,
+    },
+  });
+  assert.equal(clearWebhook.statusCode, 200);
+  assert.equal(clearWebhook.json().node.event_webhook_url, null);
+  assert.equal(Object.hasOwn(clearWebhook.json().node, 'event_webhook_secret'), false);
+
+  const secretClearRows = await query('select event_webhook_secret from nodes where id=$1', [nodeId]);
+  assert.equal(secretClearRows[0].event_webhook_secret, null);
+  await app.close();
+});
+
+test('PATCH /v1/me rejects invalid and SSRF-blocked webhook URLs', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-webhook-invalid');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+  const displayName = b.json().node.display_name;
+  const email = b.json().node.email;
+  const invalidCases = [
+    { url: 'http://example.com/hook', reason: 'event_webhook_url_https_required' },
+    { url: 'https://localhost/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://127.0.0.1/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://0.0.0.0/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://169.254.169.254/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://192.168.0.1/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://[::1]/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://[fe80::1]/hook', reason: 'event_webhook_url_ssrf_blocked' },
+    { url: 'https://[fc00::1]/hook', reason: 'event_webhook_url_ssrf_blocked' },
+  ];
+
+  for (let i = 0; i < invalidCases.length; i += 1) {
+    const invalid = invalidCases[i];
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `patch-webhook-invalid-${i}` },
+      payload: {
+        display_name: displayName,
+        email,
+        recovery_public_key: null,
+        messaging_handles: [],
+        event_webhook_url: invalid.url,
+      },
+    });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.json().error.code, 'validation_error');
+    assert.equal(res.json().error.details.reason, invalid.reason);
+  }
+  await app.close();
+});
+
+test('PATCH /v1/me rejects webhook URL when DNS resolves to blocked address', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-webhook-dns');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+  const displayName = b.json().node.display_name;
+  const email = b.json().node.email;
+
+  await withMockWebhookDnsLookup(async (hostname) => {
+    if (hostname === 'rebind.example.test') {
+      return [
+        { address: '203.0.113.9', family: 4 },
+        { address: '127.0.0.1', family: 4 },
+      ];
+    }
+    return [{ address: '203.0.113.9', family: 4 }];
+  }, async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-webhook-dns-rebind' },
+      payload: {
+        display_name: displayName,
+        email,
+        recovery_public_key: null,
+        messaging_handles: [],
+        event_webhook_url: 'https://rebind.example.test/hooks',
+      },
+    });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.json().error.code, 'validation_error');
+    assert.equal(res.json().error.details.reason, 'event_webhook_url_ssrf_blocked');
+  });
+  await app.close();
+});
+
+test('PATCH /v1/me rate limit returns canonical envelope', async () => {
+  await withConfigOverrides({ rateLimitMePatchPerMinute: 1 }, async () => {
+    const app = buildApp();
+    const b = await bootstrap(app, 'boot-rate-limit-me');
+    assert.equal(b.statusCode, 200);
+    const apiKey = b.json().api_key.api_key;
+    const displayName = b.json().node.display_name;
+    const email = b.json().node.email;
+
+    const first = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-rl-first' },
+      payload: {
+        display_name: displayName,
+        email,
+        recovery_public_key: null,
+        messaging_handles: [],
+        event_webhook_url: null,
+      },
+    });
+    assert.equal(first.statusCode, 200);
+
+    const second = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-me-rl-second' },
+      payload: {
+        display_name: displayName,
+        email,
+        recovery_public_key: null,
+        messaging_handles: [],
+        event_webhook_url: null,
+      },
+    });
+    assert.equal(second.statusCode, 429);
+    assert.equal(second.json().error.code, 'rate_limit_exceeded');
+    assert.equal(second.json().error.details.rule, 'profile_patch');
+    await app.close();
+  });
 });
 
 test('bootstrap records referral claim when referral_code is provided', async () => {

@@ -746,6 +746,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && /^\/v1\/offers\/[^/]+\/reveal-contact$/.test(path)) return { name: 'reveal_contact', limit: config.rateLimitRevealContactPerHour, windowSeconds: 3600, subject: 'node' };
+  if (method === 'PATCH' && path === '/v1/me') return { name: 'profile_patch', limit: config.rateLimitMePatchPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/auth/keys') return { name: 'auth_key_issue', limit: config.rateLimitApiKeyIssuePerDay, windowSeconds: 86400, subject: 'node' };
   return null;
 }
@@ -1179,8 +1180,8 @@ export function buildApp() {
       email: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
-      event_webhook_url: z.string().trim().url().max(2048).nullable().optional(),
-      event_webhook_secret: z.string().trim().min(1).max(256).nullable().optional(),
+      event_webhook_url: z.string().max(2048).nullable().optional(),
+      event_webhook_secret: z.string().nullable().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const out = await fabricService.patchMe((req as AuthedRequest).nodeId!, parsed.data);

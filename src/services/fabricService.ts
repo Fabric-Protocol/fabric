@@ -1,7 +1,28 @@
 import crypto from 'node:crypto';
+import { lookup as dnsLookup } from 'node:dns/promises';
+import net from 'node:net';
 import { config } from '../config.js';
 import * as repo from '../db/fabricRepo.js';
 import { sendEmail } from './emailProvider.js';
+
+type DnsLookupAll = (hostname: string, options: { all: true; verbatim?: boolean }) => Promise<Array<{ address: string; family: number }>>;
+
+let webhookDnsLookup: DnsLookupAll = dnsLookup as DnsLookupAll;
+const webhookIpBlockList = new net.BlockList();
+
+webhookIpBlockList.addAddress('0.0.0.0', 'ipv4');
+webhookIpBlockList.addSubnet('10.0.0.0', 8, 'ipv4');
+webhookIpBlockList.addSubnet('127.0.0.0', 8, 'ipv4');
+webhookIpBlockList.addSubnet('169.254.0.0', 16, 'ipv4');
+webhookIpBlockList.addSubnet('172.16.0.0', 12, 'ipv4');
+webhookIpBlockList.addSubnet('192.168.0.0', 16, 'ipv4');
+webhookIpBlockList.addAddress('::1', 'ipv6');
+webhookIpBlockList.addSubnet('fe80::', 10, 'ipv6');
+webhookIpBlockList.addSubnet('fc00::', 7, 'ipv6');
+
+export function __setWebhookDnsLookupForTests(lookupFn: DnsLookupAll | null | undefined) {
+  webhookDnsLookup = lookupFn ?? (dnsLookup as DnsLookupAll);
+}
 
 function requirePublishFields(row: any) {
   if (!row.title) return 'title_required';
@@ -201,6 +222,11 @@ export const fabricService = {
     event_webhook_url?: string | null;
     event_webhook_secret?: string | null;
   }) {
+    const normalizedWebhookUrl = await normalizeWebhookUrl(payload.event_webhook_url);
+    if (normalizedWebhookUrl.validationError) return { validationError: normalizedWebhookUrl.validationError };
+    const normalizedWebhookSecret = normalizeWebhookSecretInput(payload.event_webhook_secret);
+    if (normalizedWebhookSecret.validationError) return { validationError: normalizedWebhookSecret.validationError };
+
     try {
       await repo.updateMe(
         nodeId,
@@ -208,8 +234,8 @@ export const fabricService = {
         normalizeEmail(payload.email),
         payload.recovery_public_key,
         payload.messaging_handles === undefined ? undefined : normalizeMessagingHandles(payload.messaging_handles),
-        payload.event_webhook_url,
-        payload.event_webhook_secret === undefined ? undefined : normalizeWebhookSecret(payload.event_webhook_secret),
+        normalizedWebhookUrl.value,
+        normalizedWebhookSecret.value,
       );
     } catch (err: any) {
       if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
@@ -1027,6 +1053,65 @@ function normalizeEmail(value: string | null | undefined) {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toLowerCase();
   return normalized || null;
+}
+
+function isBlockedWebhookIp(address: string) {
+  const family = net.isIP(address);
+  if (family === 4) return webhookIpBlockList.check(address, 'ipv4');
+  if (family === 6) return webhookIpBlockList.check(address, 'ipv6');
+  return false;
+}
+
+async function normalizeWebhookUrl(value: string | null | undefined): Promise<{ value: string | null | undefined; validationError?: string }> {
+  if (value === undefined) return { value: undefined };
+  if (value === null) return { value: null };
+  if (typeof value !== 'string') return { value: undefined, validationError: 'event_webhook_url_invalid' };
+
+  const normalized = value.trim();
+  if (!normalized) return { value: undefined, validationError: 'event_webhook_url_invalid' };
+  if (normalized.length > 2048) return { value: undefined, validationError: 'event_webhook_url_too_long' };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    return { value: undefined, validationError: 'event_webhook_url_invalid' };
+  }
+
+  if (parsed.protocol !== 'https:') return { value: undefined, validationError: 'event_webhook_url_https_required' };
+  if (parsed.username || parsed.password) return { value: undefined, validationError: 'event_webhook_url_auth_not_allowed' };
+  if (parsed.hash) return { value: undefined, validationError: 'event_webhook_url_fragment_not_allowed' };
+
+  const hostname = parsed.hostname.trim().toLowerCase();
+  if (!hostname) return { value: undefined, validationError: 'event_webhook_url_invalid' };
+  if (hostname === 'localhost') return { value: undefined, validationError: 'event_webhook_url_ssrf_blocked' };
+
+  if (net.isIP(hostname) > 0) {
+    if (isBlockedWebhookIp(hostname)) return { value: undefined, validationError: 'event_webhook_url_ssrf_blocked' };
+    return { value: normalized };
+  }
+
+  try {
+    const resolved = await webhookDnsLookup(hostname, { all: true, verbatim: true });
+    if (resolved.some((entry) => isBlockedWebhookIp(entry.address))) {
+      return { value: undefined, validationError: 'event_webhook_url_ssrf_blocked' };
+    }
+  } catch {
+    // Keep validation deterministic in offline/test environments while still checking
+    // resolved addresses whenever DNS data is available.
+  }
+
+  return { value: normalized };
+}
+
+function normalizeWebhookSecretInput(value: string | null | undefined): { value: string | null | undefined; validationError?: string } {
+  if (value === undefined) return { value: undefined };
+  if (value === null) return { value: null };
+  if (typeof value !== 'string') return { value: undefined, validationError: 'event_webhook_secret_invalid' };
+  const normalized = value.trim();
+  if (!normalized) return { value: undefined, validationError: 'event_webhook_secret_invalid' };
+  if (normalized.length > 256) return { value: undefined, validationError: 'event_webhook_secret_too_long' };
+  return { value: normalized };
 }
 
 function normalizeWebhookSecret(value: string | null | undefined) {

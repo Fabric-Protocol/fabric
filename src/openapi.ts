@@ -186,8 +186,41 @@ export const openApiDocument = {
         summary: 'Get current node profile',
         security: [{ ApiKeyAuth: [] }],
         responses: {
-          '200': { description: 'Node profile' },
+          '200': {
+            description: 'Node profile',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/MeResponse' },
+              },
+            },
+          },
           '401': { description: 'Unauthorized' },
+        },
+      },
+      patch: {
+        summary: 'Update current node profile',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/MePatchRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'Updated node profile',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/MeResponse' },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Rate limit exceeded' },
         },
       },
     },
@@ -457,6 +490,92 @@ export const openApiDocument = {
           url: { type: 'string', nullable: true },
         },
         required: ['kind', 'handle', 'url'],
+      },
+      NodeProfile: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          display_name: { type: 'string' },
+          email: { type: 'string', nullable: true },
+          email_verified_at: { type: 'string', nullable: true },
+          recovery_public_key_configured: { type: 'boolean' },
+          messaging_handles: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/MessagingHandle' },
+          },
+          event_webhook_url: {
+            type: 'string',
+            format: 'uri',
+            nullable: true,
+            maxLength: 2048,
+            description: 'HTTPS webhook URL. Local/private/link-local destinations and URL fragments/credentials are rejected.',
+          },
+          status: { type: 'string' },
+          plan: { type: 'string' },
+          is_subscriber: { type: 'boolean' },
+          created_at: { type: 'string' },
+        },
+        required: [
+          'id',
+          'display_name',
+          'email',
+          'email_verified_at',
+          'recovery_public_key_configured',
+          'messaging_handles',
+          'event_webhook_url',
+          'status',
+          'plan',
+          'is_subscriber',
+          'created_at',
+        ],
+      },
+      MePatchRequest: {
+        type: 'object',
+        properties: {
+          display_name: { type: 'string', nullable: true },
+          email: { type: 'string', nullable: true },
+          recovery_public_key: { type: 'string', nullable: true },
+          messaging_handles: {
+            type: 'array',
+            maxItems: 10,
+            nullable: true,
+            items: { $ref: '#/components/schemas/MessagingHandle' },
+          },
+          event_webhook_url: {
+            type: 'string',
+            format: 'uri',
+            nullable: true,
+            maxLength: 2048,
+            description: 'Absolute HTTPS URL; URL userinfo and fragment are not allowed.',
+          },
+          event_webhook_secret: {
+            type: 'string',
+            nullable: true,
+            writeOnly: true,
+            maxLength: 256,
+            description: 'Optional signing secret. Webhook signature headers are only included when this field is set; null clears it.',
+          },
+        },
+        required: ['display_name', 'email'],
+      },
+      MeResponse: {
+        type: 'object',
+        properties: {
+          node: { $ref: '#/components/schemas/NodeProfile' },
+          subscription: {
+            type: 'object',
+            properties: {
+              plan: { type: 'string' },
+              status: { type: 'string' },
+              period_start: { type: 'string', nullable: true },
+              period_end: { type: 'string', nullable: true },
+              credits_rollover_enabled: { type: 'boolean' },
+            },
+            required: ['plan', 'status', 'period_start', 'period_end', 'credits_rollover_enabled'],
+          },
+          credits_balance: { type: 'number' },
+        },
+        required: ['node', 'subscription', 'credits_balance'],
       },
       RevealContactResponse: {
         type: 'object',
