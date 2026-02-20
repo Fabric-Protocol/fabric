@@ -2,6 +2,16 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-20 - MVP stores webhook signing secret plaintext at rest
+Decision:
+- Store `event_webhook_secret` plaintext at rest in MVP; defer encryption-at-rest to Phase 2.
+Rationale:
+- No existing KMS/pgcrypto/vault encryption utility exists in-repo; adding one now increases scope and delivery risk.
+- The secret is user-provided for webhook signing, can be rotated/cleared, and is never returned by `/v1/me`.
+- Phase 2 can add encryption-at-rest consistently with key management and rotation.
+Scope/impact:
+- API, infra, onboarding.
+
 ## 2026-02-20 - Documentation precedence is locked
 Decision:
 - `docs/specs/*` is normative source-of-truth.

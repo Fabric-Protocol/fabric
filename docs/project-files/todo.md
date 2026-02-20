@@ -241,16 +241,20 @@ Last updated: 2026-02-20
   - add `scripts/smoke-offers-eventing.mjs` writing artifacts under `artifacts/`
 
 ### Phase 0.5 — Eventing/webhook follow-up (next thread)
-- [ ] Add self-serve webhook configuration endpoints (remove SQL/admin-only setup):
-  - authenticated set/clear webhook URL
-  - optional set/rotate webhook secret
-  - OpenAPI + tests + rate-limit/validation/SSRF protections
-- [ ] Update agent onboarding docs and `/docs/agents` for eventing/webhooks:
-  - webhook vs `/events` polling fallback
-  - metadata-only payload (no offer snapshots, no contact PII)
-  - reveal-contact remains separate
-  - signing headers behavior (present only when secret set; omitted when null)
-  - at-least-once delivery + dedupe by event id
+- [x] Add self-serve webhook configuration via `PATCH /v1/me` (remove SQL/admin-only setup):
+  - set/clear `event_webhook_url` with HTTPS validation and SSRF checks (localhost/loopback/private/link-local + DNS resolution block)
+  - set/clear `event_webhook_secret` (nullable clear, trim, non-empty, max length 256, never returned by `GET /v1/me`)
+  - route-specific rate limit plus OpenAPI and test coverage
+- [x] Fix idempotency null-path insert regression (`idempotency_keys.path`):
+  - derive a safe fallback path from request URL when route metadata is missing
+  - add regression tests
+- [x] Allow partial `PATCH /v1/me` without requiring `display_name`/`email`:
+  - validator and OpenAPI updated
+  - tests cover partial patch and empty `{}` acceptance
+- [x] Complete final eventing/webhooks confirmations plus agent docs:
+  - clearing `event_webhook_secret` omits signing headers on subsequent webhook deliveries
+  - `/events` cursor pagination tested with strictly-after semantics (`limit=1`, then `since=next_cursor`)
+  - eventing guidance added to `docs/specs/02__agent-onboarding.md` and runtime `/docs/agents`
 
 ### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
 - [x] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
@@ -276,6 +280,7 @@ Last updated: 2026-02-20
 
 ### Next Phase (ranked by likelihood)
 High likelihood:
+- [ ] Encrypt webhook secrets at rest (KMS/pgcrypto/vault) with rotation plan and docs update.
 - [ ] Internationalization baseline (Phase 1):
   - verify Supabase/Postgres UTF-8 encoding (manual SQL check)
   - add optional `language_tag` (BCP-47) for user-entered free-text in units/requests
@@ -297,6 +302,7 @@ High likelihood:
   - `good|watch|limited|suspended|banned`
   - admin override path and audit logging
 Medium likelihood:
+- [ ] Add explicit retry/backoff and failure visibility docs/runbook for webhook delivery (timeouts/5xx behavior, operational signals).
 - [ ] Cross-language free-text discovery (Phase Next):
   - decide bridging approach (pivot MT fields vs multilingual embeddings vs hybrid) with search budget/credit metering integration
   - add indexing/storage, abuse controls, and diagnostics for cross-language matches
@@ -306,7 +312,7 @@ Medium likelihood:
 - [ ] Add storefront-tier higher limits for paid/verified nodes after abuse controls mature.
 - [ ] Add messaging/negotiation threads for nuanced deals with moderation safeguards.
 Low likelihood:
-- [ ] No additional low-likelihood items locked in current thread notes.
+- [ ] Add optional webhook receiver helper snippet/library in SDK (signature verification plus dedupe scaffolding).
 
 ### Decisions locked
 - Offer/deal progression is not subscriber-gated; use suspension/legal/rate-limit controls.
