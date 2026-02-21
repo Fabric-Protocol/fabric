@@ -2,6 +2,36 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-21 - Categories are first-class and API-discoverable
+Decision:
+- Ship unauthenticated `GET /v1/categories` with canonical registry payload (`categories_version`, `categories[]`).
+- Add `categories_url` and `categories_version` to `GET /v1/meta` for discovery/cache refresh.
+Rationale:
+- Agents should discover taxonomy from server state, not hardcoded client lists.
+- Versioning provides a safe cache invalidation hook as taxonomy evolves.
+Scope/impact:
+- API, onboarding.
+
+## 2026-02-21 - Category taxonomy is fixed to 10 broad categories with no tags
+Decision:
+- Use the 10-category canonical taxonomy and do not add a separate tags taxonomy.
+Rationale:
+- Broad categories keep search/discovery understandable for both humans and agents.
+- Avoids additive taxonomy complexity from maintaining both categories and tags.
+Scope/impact:
+- API, economics, onboarding.
+
+## 2026-02-21 - Search category filtering is forward-compatible
+Decision:
+- Search accepts `filters.category_ids_any: int[]`.
+- Unknown category IDs must not hard-fail validation; they return zero matches when nothing qualifies.
+- Do not enforce a strict category enum in request validators.
+Rationale:
+- Prevents client breakage when category registry grows.
+- Keeps search contracts stable across taxonomy updates.
+Scope/impact:
+- API, onboarding.
+
 ## 2026-02-20 - MVP stores webhook signing secret plaintext at rest
 Decision:
 - Store `event_webhook_secret` plaintext at rest in MVP; defer encryption-at-rest to Phase 2.

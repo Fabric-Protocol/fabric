@@ -193,12 +193,13 @@ Last updated: 2026-02-20
   - log detail views (via detail GET path)
   - ensure offer outcomes persist `accepted|rejected|expired|cancelled`
 - [ ] Add non-binding `estimated_value` field to units.
-- [ ] Update onboarding docs and examples:
-  - explain budget-vs-results behavior and query adjustment using budget fields
-  - encourage early creation of units + requests (cheap/free)
-  - include concrete category/deal examples (including Delivery/Transport)
-  - mention anti-scrape rate-limit rationale and category suggestion intake
-  - mention saved searches/alerts as planned future capability (no timeline promises)
+- [x] Update onboarding docs and examples:
+  - include 10 categories with 5 examples each
+  - include explicit multi-unit offers + multi-offer composition guidance
+  - include two scenario illustrations (date night; agent bundle)
+- [x] Run canonical docs drift check for category contracts:
+  - `docs/specs/20__api-contracts.md` includes `/v1/categories`, `/v1/meta` category fields, and `filters.category_ids_any`
+  - `docs/specs/22__projections-and-search.md` reflects `filters.category_ids_any`
 - [ ] Review agent onboarding docs and flows for gaps (separate pass after copy updates).
 - [ ] Review full agent workflows for MVP feature/anti-abuse gaps:
   - search -> offer -> acceptance -> contact reveal -> fulfillment
@@ -268,6 +269,17 @@ Last updated: 2026-02-20
   - Stripe + credits health
   - liquidity/reliability metrics
   - webhook health (when applicable)
+- [ ] Lightweight MCP server (read-only, pre–go live):
+  - expose safe read operations only (search, get unit/request, get offer, get events, get credits)
+  - no mutations
+  - thin wrapper over existing HTTP API (no new business logic)
+  - strict allowlist + rate limits
+  - publish `mcp_url` via GET /v1/meta
+  - document briefly in /docs/agents
+- [ ] Improve 402 credits-exhausted response:
+  - replace “not enough credits” with actionable message
+  - include direct “get credits” URL (Stripe Checkout)
+  - keep response machine-readable for agents  
 
 ### Phase 0.5 — Workflow hardening (latest thread notes)
 - [x] Update `docs/project-files/00__read-first__workflow.md`:
@@ -336,6 +348,14 @@ Low likelihood:
   - enforce idempotency by invoice id
 - [x] Define downgrade semantics (recommended: apply at next renewal)
 
+### Phase 1.5 (High Priority After Go Live)
+- [ ] Crypto pay-ins via Bcon (agent-first rail):
+  - default: USDC on Base
+  - create invoice → return pay-to address + amount
+  - reconcile via webhook/tx hash
+  - persist node ↔ invoice ↔ tx hash mapping
+  - grant credits idempotently on confirmed payment
+
 ## Phase 2 — Agent adoption acceleration
 - [ ] SDKs (full): TS + Python, versioned, CI publish, examples
 - [ ] MCP server (official): hosted on Cloud Run; discoverable via `/v1/meta`
@@ -352,6 +372,14 @@ Low likelihood:
 - [ ] Add per-node reputation metrics plus routing:
   - success rate, response timeliness, dispute rate
 - [ ] Add `offers_accepted_total` to network stats after metric definition is finalized
+- [ ] Stripe stablecoin enablement:
+  - periodically re-check dashboard eligibility
+  - request approval when eligible
+  - document supported chains/tokens
+  - [ ] Stripe x402 crypto API (eligibility-dependent):
+  - request private preview access
+  - design 402 → pay → resume flow
+  - persist payment reference ↔ credits grant mapping
 
 ## Phase 3 — Hardening / abuse / trust
 - [ ] Abuse controls: tiered limits by plan; anomaly detection; automated suspension triggers + review
@@ -361,6 +389,11 @@ Low likelihood:
 - [ ] Add machine-readable compliance metadata:
   - retention, licensing, and data-handling declarations
 - [ ] Add verification/provenance framework and dispute/recourse primitives
+- [ ] ACH readiness (deferred):
+  - handle checkout.session.async_payment_succeeded
+  - handle checkout.session.async_payment_failed
+  - ensure fulfillment only on confirmed payment
+  - add idempotency tests
 
 ## Consolidated phased list (canonical)
 - Phase 0.5: OpenAPI publish, real /docs/agents, legal/support content, ops runbooks, verify gating + rate limits + retention, manual suspension
