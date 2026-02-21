@@ -83,7 +83,7 @@ async function activateBasicSubscriber(app, nodeId, eventIdPrefix = 'evt_subscri
   const body = {
     id: `${eventIdPrefix}_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
   };
   const sig = sign(body);
   return app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
@@ -2427,7 +2427,7 @@ test('webhook processes checkout.session.completed and is idempotent by event id
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh');
   const nodeId = b.json().node.id;
-  const body = { id: 'evt_1', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_1', subscription: 'sub_1' } } };
+  const body = { id: 'evt_1', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_1', subscription: 'sub_1' } } };
   const sig = sign(body);
   const r1 = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
   const r2 = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
@@ -2439,11 +2439,42 @@ test('webhook processes checkout.session.completed and is idempotent by event id
   await app.close();
 });
 
+test('webhook checkout.session.completed with unpaid status stores Stripe mapping but does not activate subscription', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-wh-unpaid');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_unpaid_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_unpaid_${nodeId.slice(0, 8)}`;
+  const body = {
+    id: `evt_unpaid_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: {
+      object: {
+        payment_status: 'unpaid',
+        metadata: { node_id: nodeId, plan_code: 'basic' },
+        customer: customerId,
+        subscription: subscriptionId,
+      },
+    },
+  };
+  const sig = sign(body);
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(res.statusCode, 200);
+
+  const me = await repo.getMe(nodeId);
+  assert.equal(me.sub_status, 'none');
+  assert.equal(me.plan_code, 'free');
+  const mapping = await repo.getSubscriptionMapping(nodeId);
+  assert.equal(mapping.stripe_customer_id, customerId);
+  assert.equal(mapping.stripe_subscription_id, subscriptionId);
+  await app.close();
+});
+
 test('webhook accepts valid signature when stripe-signature has multiple v1 values', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-multi');
   const nodeId = b.json().node.id;
-  const body = { id: 'evt_2', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_2', subscription: 'sub_2' } } };
+  const body = { id: 'evt_2', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_2', subscription: 'sub_2' } } };
   const sig = sign(body);
   const header = `t=${sig.t},v1=00${sig.v1.slice(2)},v1=${sig.v1}`;
   const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': header }, payload: sig.raw });
@@ -2455,7 +2486,7 @@ test('webhook returns stripe_signature_invalid when signature verification fails
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-bad-sig');
   const nodeId = b.json().node.id;
-  const body = { id: 'evt_bad_sig', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: 'cus_bad', subscription: 'sub_bad' } } };
+  const body = { id: 'evt_bad_sig', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: 'cus_bad', subscription: 'sub_bad' } } };
   const sig = sign(body);
   const badHeader = `t=${sig.t},v1=${'0'.repeat(64)}`;
   const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': badHeader }, payload: sig.raw });
@@ -2475,7 +2506,7 @@ test('webhook maps subscription events by stored stripe_customer_id when node me
   const checkoutEvent = {
     id: `evt_map_checkout_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
   };
   const checkoutSig = sign(checkoutEvent);
   const checkoutRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': checkoutSig.header }, payload: checkoutSig.raw });
@@ -2506,7 +2537,7 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
   const checkoutEvent = {
     id: `evt_map_checkout_2_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
   };
   const checkoutSig = sign(checkoutEvent);
   const checkoutRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': checkoutSig.header }, payload: checkoutSig.raw });
@@ -2789,7 +2820,7 @@ test('invoice.paid upgrade proration grants plan-difference credits once per inv
   const activateBasic = {
     id: `evt_upgrade_activate_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
   };
   const activateSig = sign(activateBasic);
   const activateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
@@ -2858,7 +2889,7 @@ test('invoice.paid downgrade on subscription_update is deferred until renewal in
   const activatePro = {
     id: `evt_downgrade_activate_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: customerId, subscription: subscriptionId } },
   };
   const activateSig = sign(activatePro);
   const activateRes = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
@@ -3016,7 +3047,7 @@ test('metering only charges on HTTP 200 for search', async () => {
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
 
-  const body = { id: 'evt_sub', type: 'checkout.session.completed', data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: 'cus', subscription: 'sub' } } };
+  const body = { id: 'evt_sub', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: 'cus', subscription: 'sub' } } };
   const sig = sign(body);
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 
@@ -3042,7 +3073,7 @@ test('search returns credits_exhausted for subscriber with insufficient credits'
   const activateBody = {
     id: `evt_subscriber_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_${nodeId.slice(0, 8)}`, subscription: `sub_${nodeId.slice(0, 8)}` } },
   };
   const activateSig = sign(activateBody);
   const activated = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });
@@ -3610,7 +3641,7 @@ test('search excludes caller-owned published listings and requests by default', 
   const activateBody = {
     id: `evt_subscriber_self_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
-    data: { object: { metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_self_${nodeId.slice(0, 8)}`, subscription: `sub_self_${nodeId.slice(0, 8)}` } },
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: `cus_self_${nodeId.slice(0, 8)}`, subscription: `sub_self_${nodeId.slice(0, 8)}` } },
   };
   const activateSig = sign(activateBody);
   const activated = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': activateSig.header }, payload: activateSig.raw });

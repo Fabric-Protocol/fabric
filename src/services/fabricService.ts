@@ -1533,7 +1533,7 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
   if (!pack) return { handled: false, reason: 'not_topup_event' as const };
   if (eventType === 'checkout.session.completed') {
     const paymentStatus = nonEmptyString(eventObject?.payment_status);
-    if (paymentStatus && paymentStatus !== 'paid') {
+    if (paymentStatus !== 'paid') {
       return { handled: true, applied: false, reason: 'topup_payment_not_paid' as const, pack_code: pack.pack_code };
     }
   }
@@ -1626,6 +1626,32 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
         }));
       }
       return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, topup };
+    }
+    const paymentStatus = nonEmptyString(object?.payment_status);
+    if (paymentStatus !== 'paid') {
+      const existing = await repo.getMe(nodeId);
+      const existingPlan = normalizePlanCode(existing?.plan_code) ?? 'free';
+      const existingStatus = nonEmptyString(existing?.sub_status) ?? 'none';
+      await repo.upsertSubscription(
+        nodeId,
+        planCodeForStorage(existingPlan),
+        existingStatus,
+        existing?.current_period_start ?? null,
+        existing?.current_period_end ?? null,
+        stripeCustomerId,
+        stripeSubscriptionId,
+      );
+      return {
+        mapped: true,
+        node_id: nodeId,
+        mapping_source: mapping.source,
+        event_type: type,
+        subscription_pending: {
+          node_id: nodeId,
+          payment_status: paymentStatus ?? 'unknown',
+          stripe_subscription_id: stripeSubscriptionId,
+        },
+      };
     }
     const planCode = await resolvePlanCode(nodeId, event, 'basic');
     const storedPlanCode = planCodeForStorage(planCode);
