@@ -642,6 +642,7 @@ export async function searchPublic(
   cursor: string | null,
   callerNodeId: string | null = null,
   targetNodeId: string | null = null,
+  categoryIdsAny: number[] = [],
 ) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
   const params: unknown[] = [limit];
@@ -665,6 +666,16 @@ export async function searchPublic(
   if (targetNodeId) {
     where.push(`p.node_id = $${nextIdx}`);
     params.push(targetNodeId);
+    nextIdx += 1;
+  }
+  if (categoryIdsAny.length > 0) {
+    const categoryKeys = categoryIdsAny.map((value) => String(value));
+    where.push(`exists (
+      select 1
+      from jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
+      where c.category_id = any($${nextIdx}::text[])
+    )`);
+    params.push(categoryKeys);
     nextIdx += 1;
   }
 

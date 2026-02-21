@@ -44,12 +44,29 @@ export const openApiDocument = {
                     api_version: { type: 'string' },
                     required_legal_version: { type: 'string' },
                     openapi_url: { type: 'string' },
+                    categories_url: { type: 'string' },
+                    categories_version: { type: 'integer' },
                     legal_urls: { type: 'object' },
                     support_url: { type: 'string' },
                     docs_urls: { type: 'object' },
                   },
-                  required: ['api_version', 'required_legal_version', 'openapi_url', 'legal_urls', 'support_url', 'docs_urls'],
+                  required: ['api_version', 'required_legal_version', 'openapi_url', 'categories_url', 'categories_version', 'legal_urls', 'support_url', 'docs_urls'],
                 },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/v1/categories': {
+      get: {
+        summary: 'Category registry for units/requests and search filters',
+        responses: {
+          '200': {
+            description: 'Categories payload',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/CategoriesResponse' },
               },
             },
           },
@@ -236,10 +253,65 @@ export const openApiDocument = {
       post: {
         summary: 'Estimate search credit cost without executing search',
         security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SearchQuoteRequest' },
+            },
+          },
+        },
         responses: {
           '200': { description: 'Quote estimate' },
           '401': { description: 'Unauthorized' },
           '422': { description: 'Validation error' },
+        },
+      },
+    },
+    '/v1/search/listings': {
+      post: {
+        summary: 'Search public listings',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SearchRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Search result page' },
+          '401': { description: 'Unauthorized' },
+          '402': { description: 'Credits exhausted' },
+          '403': { description: 'Subscriber required' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Rate limit exceeded' },
+        },
+      },
+    },
+    '/v1/search/requests': {
+      post: {
+        summary: 'Search public requests',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SearchRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Search result page' },
+          '401': { description: 'Unauthorized' },
+          '402': { description: 'Credits exhausted' },
+          '403': { description: 'Subscriber required' },
+          '422': { description: 'Validation error' },
+          '429': { description: 'Rate limit exceeded' },
         },
       },
     },
@@ -430,6 +502,102 @@ export const openApiDocument = {
       },
     },
     schemas: {
+      Category: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          slug: { type: 'string' },
+          name: { type: 'string' },
+          description: { type: 'string' },
+          examples: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['id', 'slug', 'name', 'description', 'examples'],
+      },
+      CategoriesResponse: {
+        type: 'object',
+        properties: {
+          categories_version: { type: 'integer' },
+          categories: {
+            type: 'array',
+            items: { $ref: '#/components/schemas/Category' },
+          },
+        },
+        required: ['categories_version', 'categories'],
+      },
+      SearchFilters: {
+        type: 'object',
+        properties: {
+          center: { type: 'object', additionalProperties: true },
+          radius_miles: { type: 'number' },
+          regions: { type: 'array', items: { type: 'string' } },
+          languages: { type: 'array', items: { type: 'string' } },
+          ship_to_regions: { type: 'array', items: { type: 'string' } },
+          ships_from_regions: { type: 'array', items: { type: 'string' } },
+          max_ship_days: { type: 'number' },
+          delivery_methods: { type: 'array', items: { type: 'string' } },
+          scope_notes: { type: 'string' },
+          category_ids_any: {
+            type: 'array',
+            items: { type: 'integer' },
+            description: 'Forward-compatible category filter. Unknown IDs are accepted and return empty results when no items match.',
+          },
+        },
+        additionalProperties: true,
+      },
+      SearchTarget: {
+        type: 'object',
+        properties: {
+          node_id: { type: 'string', format: 'uuid', nullable: true },
+          username: { type: 'string', nullable: true },
+        },
+        required: [],
+      },
+      SearchRequest: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', nullable: true },
+          scope: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
+          filters: { $ref: '#/components/schemas/SearchFilters' },
+          broadening: {
+            type: 'object',
+            properties: {
+              level: { type: 'integer', minimum: 0 },
+              allow: { type: 'boolean' },
+            },
+            required: ['level', 'allow'],
+          },
+          budget: {
+            type: 'object',
+            properties: {
+              credits_requested: { type: 'integer', minimum: 0 },
+            },
+            required: ['credits_requested'],
+          },
+          target: { $ref: '#/components/schemas/SearchTarget' },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          cursor: { type: 'string', nullable: true },
+        },
+        required: ['q', 'scope', 'filters', 'broadening', 'budget', 'limit', 'cursor'],
+      },
+      SearchQuoteRequest: {
+        type: 'object',
+        properties: {
+          q: { type: 'string', nullable: true },
+          scope: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
+          filters: { $ref: '#/components/schemas/SearchFilters' },
+          broadening: {
+            type: 'object',
+            properties: {
+              level: { type: 'integer', minimum: 0 },
+              allow: { type: 'boolean' },
+            },
+            required: ['level', 'allow'],
+          },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+          cursor: { type: 'string', nullable: true },
+        },
+        required: ['q', 'scope', 'filters', 'broadening', 'limit', 'cursor'],
+      },
       OfferCreateRequest: {
         type: 'object',
         properties: {

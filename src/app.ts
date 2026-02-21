@@ -8,6 +8,7 @@ import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
+import { CATEGORIES_RESPONSE, CATEGORIES_VERSION } from './categories.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -701,6 +702,7 @@ function isPublicRoute(path: string) {
     || path === '/healthz'
     || path === '/openapi.json'
     || path === '/v1/meta'
+    || path === '/v1/categories'
     || path === '/support'
     || path === '/docs/agents'
     || path === '/legal/terms'
@@ -751,6 +753,8 @@ function buildMetaPayload(req: FastifyRequest) {
     api_version: config.apiVersion,
     required_legal_version: config.requiredLegalVersion,
     openapi_url: absoluteUrl(req, '/openapi.json'),
+    categories_url: absoluteUrl(req, '/v1/categories'),
+    categories_version: CATEGORIES_VERSION,
     legal_urls: legalUrls(req),
     support_url: absoluteUrl(req, '/support'),
     docs_urls: {
@@ -925,13 +929,19 @@ function detectDisabledSearchFeatures(payload: any) {
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
-    local_in_person: ['center', 'radius_miles', 'regions'],
-    remote_online_service: ['regions', 'languages'],
-    ship_to: ['ship_to_regions', 'ships_from_regions', 'max_ship_days'],
-    digital_delivery: ['regions', 'delivery_methods'],
-    OTHER: ['scope_notes'],
+    local_in_person: ['center', 'radius_miles', 'regions', 'category_ids_any'],
+    remote_online_service: ['regions', 'languages', 'category_ids_any'],
+    ship_to: ['ship_to_regions', 'ships_from_regions', 'max_ship_days', 'category_ids_any'],
+    digital_delivery: ['regions', 'delivery_methods', 'category_ids_any'],
+    OTHER: ['scope_notes', 'category_ids_any'],
   };
   if (keys.some((k) => !allowed[scope].includes(k))) return { ok: false, reason: 'unknown_keys' };
+  const categoryIdsAny = (filters as any).category_ids_any;
+  if (categoryIdsAny !== undefined) {
+    if (!Array.isArray(categoryIdsAny) || categoryIdsAny.some((value) => !Number.isInteger(value))) {
+      return { ok: false, reason: 'category_ids_any_invalid' };
+    }
+  }
   if (scope === 'local_in_person') {
     const hasCenter = !!(filters as any).center && typeof (filters as any).radius_miles === 'number';
     const hasRegions = Array.isArray((filters as any).regions) && (filters as any).regions.length > 0;
@@ -1134,6 +1144,7 @@ export function buildApp() {
 
   app.get('/openapi.json', async (_req, reply) => reply.type('application/json; charset=utf-8').send(openApiDocument));
   app.get('/v1/meta', async (req) => buildMetaPayload(req));
+  app.get('/v1/categories', async () => CATEGORIES_RESPONSE);
 
   app.get('/legal/terms', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.terms));
   app.get('/legal/privacy', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.privacy));

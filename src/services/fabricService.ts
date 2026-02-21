@@ -421,7 +421,10 @@ export const fabricService = {
 
     const isCapped = totalCost > creditsRequested;
     const effectiveLimit = isCapped ? 0 : limit;
-    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, parsedCursor.after, nodeId, targetNodeId);
+    const categoryIdsAny = Array.isArray(body?.filters?.category_ids_any)
+      ? body.filters.category_ids_any.filter((value: unknown) => Number.isInteger(value))
+      : [];
+    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, parsedCursor.after, nodeId, targetNodeId, categoryIdsAny);
     const creditsCharged = isCapped ? 0 : totalCost;
 
     if (creditsCharged > 0) {

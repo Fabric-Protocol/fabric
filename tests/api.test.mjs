@@ -185,14 +185,59 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   assert.equal(body.api_version, 'v1');
   assert.equal(body.required_legal_version, REQUIRED_LEGAL_VERSION);
   assert.equal(body.openapi_url, 'https://fabric.example/openapi.json');
+  assert.equal(body.categories_url, 'https://fabric.example/v1/categories');
+  assert.equal(body.categories_version, 1);
   assert.equal(body.legal_urls.terms, 'https://fabric.example/legal/terms');
   assert.equal(body.legal_urls.privacy, 'https://fabric.example/legal/privacy');
   assert.equal(body.legal_urls.aup, 'https://fabric.example/legal/acceptable-use');
   assert.equal(body.support_url, 'https://fabric.example/support');
   assert.equal(body.docs_urls.agents_url, 'https://fabric.example/docs/agents');
   assert.match(body.openapi_url, /^https:\/\//);
+  assert.match(body.categories_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /\/docs\/agents$/);
+  await app.close();
+});
+
+test('GET /v1/categories returns stable registry and version hook', async () => {
+  const app = buildApp();
+  const categories = await app.inject({
+    method: 'GET',
+    url: '/v1/categories',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(categories.statusCode, 200);
+  const payload = categories.json();
+  assert.equal(payload.categories_version, 1);
+  assert.equal(Array.isArray(payload.categories), true);
+  assert.equal(payload.categories.length, 10);
+
+  const ids = new Set();
+  const slugs = new Set();
+  for (const category of payload.categories) {
+    assert.equal(Number.isInteger(category.id), true);
+    assert.equal(typeof category.slug, 'string');
+    assert.equal(typeof category.name, 'string');
+    assert.equal(typeof category.description, 'string');
+    assert.equal(Array.isArray(category.examples), true);
+    assert.equal(category.examples.length, 5);
+    assert.match(category.slug, /^[a-z0-9]+(?:_[a-z0-9]+)*$/);
+    ids.add(category.id);
+    slugs.add(category.slug);
+  }
+  assert.equal(ids.size, 10);
+  assert.equal(slugs.size, 10);
+
+  const meta = await app.inject({
+    method: 'GET',
+    url: '/v1/meta',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(meta.statusCode, 200);
+  const metaBody = meta.json();
+  assert.equal(metaBody.categories_version, payload.categories_version);
+  assert.equal(metaBody.categories_url, 'https://fabric.example/v1/categories');
+
   await app.close();
 });
 
@@ -214,6 +259,9 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const body = res.json();
   assert.equal(typeof body.openapi, 'string');
   assert.match(body.openapi, /^3\./);
+  assert.equal(Boolean(body.paths?.['/v1/categories']?.get), true);
+  assert.equal(Boolean(body.paths?.['/v1/search/listings']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/search/requests']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/counter']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/accept']?.post), true);
@@ -236,6 +284,14 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const mePatchRequired = Array.isArray(mePatchSchema.required) ? mePatchSchema.required : [];
   assert.equal(mePatchRequired.includes('display_name'), false);
   assert.equal(mePatchRequired.includes('email'), false);
+  assert.equal(body.components?.schemas?.CategoriesResponse?.required?.includes('categories_version'), true);
+  assert.equal(body.components?.schemas?.CategoriesResponse?.required?.includes('categories'), true);
+  const searchFilters = body.components?.schemas?.SearchFilters ?? {};
+  assert.equal(searchFilters.properties?.category_ids_any?.type, 'array');
+  assert.equal(searchFilters.properties?.category_ids_any?.items?.type, 'integer');
+  const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
+  assert.equal(metaRequired.includes('categories_url'), true);
+  assert.equal(metaRequired.includes('categories_version'), true);
   await app.close();
 });
 
@@ -3209,6 +3265,71 @@ test('search target.username restricts results and returns budget/node summaries
   assert.equal(body.nodes[0].node_id, targetANodeId);
   assert.equal(Object.prototype.hasOwnProperty.call(body.nodes[0], 'category_counts_nonzero'), true);
   assert.equal(typeof body.nodes[0].category_counts_nonzero, 'object');
+  await app.close();
+});
+
+test('search category_ids_any filters results and unknown ids do not hard-fail validation', async () => {
+  const app = buildApp();
+
+  const searcherBoot = await bootstrap(app, 'boot-category-filter-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_category_filter')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-category-filter-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `category-filter-${TEST_RUN_SUFFIX}-${targetNodeId.slice(0, 6)}`;
+
+  const unitA = await repo.createResource('units', targetNodeId, { ...unitPayload('Category A', scopeNotes), category_ids: [101] });
+  const unitB = await repo.createResource('units', targetNodeId, { ...unitPayload('Category B', scopeNotes), category_ids: [202] });
+  const unitC = await repo.createResource('units', targetNodeId, { ...unitPayload('Category C', scopeNotes), category_ids: [101, 303] });
+
+  for (const unit of [unitA, unitB, unitC]) {
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+  }
+
+  const knownCategory = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-category-filter-known' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: scopeNotes, category_ids_any: [101] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(knownCategory.statusCode, 200);
+  assert.equal(knownCategory.json().items.length > 0, true);
+  assert.equal(
+    knownCategory.json().items.every((row) => Array.isArray(row.item?.category_ids) && row.item.category_ids.includes(101)),
+    true,
+  );
+
+  const unknownCategory = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-category-filter-unknown' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: scopeNotes, category_ids_any: [999999] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(unknownCategory.statusCode, 200);
+  assert.equal(Array.isArray(unknownCategory.json().items), true);
+  assert.equal(unknownCategory.json().items.length, 0);
+
   await app.close();
 });
 
