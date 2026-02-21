@@ -170,7 +170,7 @@ Last updated: 2026-02-20
 - [ ] Add top-level Search Budget Contract object to search responses:
   - include `credits_requested`, `credits_charged`, coverage fields, and page/broadening breakdown
   - keep this contract at top-level (not nested under metadata)
-- [ ] Enforce hard spend ceiling:
+- [x] Enforce hard spend ceiling:
   - `credits_charged` must always be `<= credits_requested`
   - return actionable insufficient-budget guidance when cap blocks full execution
 - [ ] Implement broadening economics defaults:
@@ -182,13 +182,13 @@ Last updated: 2026-02-20
 - [ ] Lock go-live matching behavior:
   - structured eligibility filters + keyword ranking only
   - no lexical override/expansion and no semantic/vector infrastructure at go-live
-- [ ] Keep go-live supply-vs-demand parity:
+- [x] Keep go-live supply-vs-demand parity:
   - same mechanics and pricing for both sides in Phase 0.5
-- [ ] Define canonical pricing rule for target-constrained search (`target { node_id?, username? }`) in specs, then implement and test low-cost follow-up pricing.
-- [ ] Ensure primary search results include per-node non-zero category counts.
-- [ ] Implement node per-category drilldown behavior:
+- [x] Define canonical pricing rule for target-constrained search (`target { node_id?, username? }`) in specs, then implement and test low-cost follow-up pricing.
+- [x] Ensure primary search results include per-node non-zero category counts.
+- [x] Implement node per-category drilldown behavior:
   - cheap pricing, paginated, rate-limited
-- [ ] Add visibility data capture plumbing:
+- [x] Add visibility data capture plumbing:
   - log search impressions (unit returned in results)
   - log detail views (via detail GET path)
   - ensure offer outcomes persist `accepted|rejected|expired|cancelled`
@@ -222,7 +222,7 @@ Last updated: 2026-02-20
 - [x] Add legal/docs disclaimer:
   - contact/messaging identity is user-provided
   - Fabric does not guarantee identity or fulfillment; settlement is off-platform
-- [ ] Expand onboarding docs:
+- [x] Expand onboarding docs:
   - add "multi-dimensional trading flexibility"
   - add 5-8 concrete mixed-consideration examples and how terms live in offer notes
 
