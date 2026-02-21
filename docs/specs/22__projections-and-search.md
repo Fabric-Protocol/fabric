@@ -108,7 +108,9 @@ Hard prohibitions:
 {
   "q": "string|null",
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
-  "filters": {},
+  "filters": {
+    "category_ids_any": [1, 2]
+  },
   "broadening": { "level": 0, "allow": false },
   "budget": { "credits_requested": 5 },
   "target": { "node_id": null, "username": null },
@@ -169,9 +171,21 @@ OTHER
 json
 Copy code
 { "scope_notes": "string" }
+
+Optional on all scopes:
+
+json
+Copy code
+{
+  "category_ids_any": [1, 2]
+}
 Validation:
 
 unknown keys → 422 with error.code="validation_error".
+
+`filters.category_ids_any` accepts integer IDs (no fixed enum validation).
+
+Unknown category IDs in `category_ids_any` MUST NOT return 400/422; they return zero matches if nothing qualifies.
 
 5) Search response shapes (locked)
 5.1 SearchListingsResponse

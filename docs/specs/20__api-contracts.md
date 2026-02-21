@@ -37,6 +37,8 @@ Machine-readable service metadata for legal gating and support discovery.
   "api_version": "v1",
   "required_legal_version": "2026-02-17",
   "openapi_url": "https://<host>/openapi.json",
+  "categories_url": "https://<host>/v1/categories",
+  "categories_version": 1,
   "legal_urls": {
     "terms": "https://<host>/legal/terms",
     "privacy": "https://<host>/legal/privacy",
@@ -48,6 +50,37 @@ Machine-readable service metadata for legal gating and support discovery.
   }
 }
 ```
+
+## GET /v1/categories
+
+### Auth
+None
+
+### Purpose
+Server-discoverable category registry for `category_ids` usage and search filtering.
+
+### Response 200
+```json
+{
+  "categories_version": 1,
+  "categories": [
+    {
+      "id": 1,
+      "slug": "goods",
+      "name": "Goods",
+      "description": "Physical items",
+      "examples": ["string", "string", "string", "string", "string"]
+    }
+  ]
+}
+```
+
+Category object shape:
+- `id`: integer
+- `slug`: string
+- `name`: string
+- `description`: string
+- `examples`: string[]
 
 ## GET /openapi.json
 
@@ -1044,7 +1077,9 @@ Request (locked)
 {
   "q": "string|null",
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
-  "filters": {},
+  "filters": {
+    "category_ids_any": [1, 2]
+  },
   "broadening": { "level": 0, "allow": false },
   "budget": { "credits_requested": 5 },
   "target": { "node_id": null, "username": null },
@@ -1097,11 +1132,20 @@ scope = digital_delivery
 scope = OTHER
 { "scope_notes": "string" }
 
+Optional on all scopes
+{
+  "category_ids_any": [1, 2]
+}
+
 Validation:
 
 filters must contain only fields allowed for the selected scope.
 
 unknown keys → 422 with error.code="validation_error".
+
+`filters.category_ids_any` accepts integer IDs (no fixed enum validation).
+
+Unknown category IDs in `category_ids_any` MUST NOT return 400/422; they return zero matches if nothing qualifies.
 
 budget.credits_requested is a hard spend ceiling for this call:
 
@@ -1134,7 +1178,9 @@ Request (locked)
 {
   "q": "string|null",
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
-  "filters": {},
+  "filters": {
+    "category_ids_any": [1, 2]
+  },
   "broadening": { "level": 0, "allow": false },
   "budget": { "credits_requested": 5 },
   "target": { "node_id": null, "username": null },
