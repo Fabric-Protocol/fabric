@@ -521,6 +521,13 @@ offer/thread ids and hold expiry
 
 metering outcomes (credits spent) for search/expansion calls
 
+Payment setup guidance
+
+- Use a dedicated payment method for agent usage, separated from broader personal/company spending when possible.
+- Prefer corporate or virtual cards that support spending limits, per-card caps, and fast revocation/rotation.
+- For subscriptions and credit-pack top-ups via Stripe Checkout, apply owner controls: alerts, spending caps, monitoring, and an internal approval policy.
+- Treat payment setup as risk management and operational hygiene; do not design workflows around bypassing bank or issuer controls.
+
 11a) Offer lifecycle events (webhooks + polling)
 
 - Configure webhook delivery on your node profile via `PATCH /v1/me`:
