@@ -260,7 +260,7 @@ Last updated: 2026-02-20
 ### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
 - [x] Remove subscriber-only gating from offer create/counteroffer/accept/contact reveal; enforce `not_suspended`, legal accepted, and rate limits/throttles instead.
 - [ ] Keep "credit packs" terminology consistent in Stripe display naming and docs.
-- [ ] Add onboarding payment guidance:
+- [x] Add onboarding payment guidance:
   - recommend dedicated payment method for agent usage
   - prefer corporate/virtual cards with spending limits
   - emphasize owner controls (spending caps/monitoring) and avoid "bypass bank controls" framing
