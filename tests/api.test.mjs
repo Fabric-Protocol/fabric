@@ -3732,6 +3732,79 @@ test('ship_to search applies route specificity scoring and max_ship_days filteri
   await app.close();
 });
 
+test('ship_to search matches projection dest_region for ship_to_regions filters', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-search-shipto-projection-searcher');
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+
+  const targetBoot = await bootstrap(app, 'boot-search-shipto-projection-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `shipto-projection-${TEST_RUN_SUFFIX}-${targetNodeId.slice(0, 6)}`;
+
+  const matching = await repo.createResource('units', targetNodeId, {
+    ...unitPayload('Ship projection match', scopeNotes),
+    scope_primary: 'ship_to',
+    scope_secondary: [],
+    origin_region: { country_code: 'US', admin1: 'CA' },
+    dest_region: { country_code: 'US', admin1: 'CA' },
+    max_ship_days: 3,
+  });
+  const nonMatching = await repo.createResource('units', targetNodeId, {
+    ...unitPayload('Ship projection miss', scopeNotes),
+    scope_primary: 'ship_to',
+    scope_secondary: [],
+    origin_region: { country_code: 'US', admin1: 'CA' },
+    dest_region: { country_code: 'US', admin1: 'NV' },
+    max_ship_days: 3,
+  });
+
+  for (const unit of [matching, nonMatching]) {
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+  }
+
+  const matchRes = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-shipto-projection-match' },
+    payload: {
+      q: null,
+      scope: 'ship_to',
+      filters: { ship_to_regions: ['US-CA'] },
+      budget: { credits_requested: 200 },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(matchRes.statusCode, 200);
+  const matchBody = matchRes.json();
+  const matchingIds = matchBody.items.map((row) => row.item?.id);
+  assert.equal(matchingIds.includes(matching.id), true);
+  assert.equal(matchingIds.includes(nonMatching.id), false);
+  const matchedRow = matchBody.items.find((row) => row.item?.id === matching.id);
+  assert.equal(Boolean(matchedRow), true);
+  assert.equal(Number(matchedRow.rank.sort_keys.route_specificity_score), 2);
+
+  const missRes = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-shipto-projection-miss' },
+    payload: {
+      q: null,
+      scope: 'ship_to',
+      filters: { ship_to_regions: ['US-NY'] },
+      budget: { credits_requested: 200 },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(missRes.statusCode, 200);
+  assert.equal(missRes.json().items.length, 0);
+  await app.close();
+});
+
 test('search scrape guard returns 429 for repeated broad queries', async () => {
   const app = buildApp();
   const searcherBoot = await bootstrap(app, 'boot-search-scrape-guard');

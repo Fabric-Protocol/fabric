@@ -659,7 +659,7 @@ function parseRegionFilters(raw: unknown): RegionFilter[] {
   });
 }
 
-function buildRegionMatchExpressions(regionExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
+function buildRegionMatchExpressions(regionCountryExpr: string, regionAdminExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
   const countryOnly: string[] = [];
   const specific: string[] = [];
 
@@ -672,17 +672,17 @@ function buildRegionMatchExpressions(regionExpr: string, filters: RegionFilter[]
       const adminIdx = nextIdx.value;
       params.push(filter.admin1);
       nextIdx.value += 1;
-      specific.push(`((${regionExpr}->>'country_code')=$${countryIdx} and (${regionExpr}->>'admin1')=$${adminIdx})`);
+      specific.push(`(${regionCountryExpr}=$${countryIdx} and ${regionAdminExpr}=$${adminIdx})`);
       continue;
     }
 
-    countryOnly.push(`((${regionExpr}->>'country_code')=$${countryIdx})`);
+    countryOnly.push(`(${regionCountryExpr}=$${countryIdx})`);
   }
 
   const specificExpr = specific.length > 0 ? `(${specific.join(' or ')})` : 'false';
-  const countryExpr = countryOnly.length > 0 ? `(${countryOnly.join(' or ')})` : 'false';
-  const anyExpr = `(${regionExpr} is not null and (${specificExpr} or ${countryExpr}))`;
-  const scoreExpr = `(case when ${specificExpr} then 2 when ${countryExpr} then 1 else 0 end)`;
+  const countryOnlyExpr = countryOnly.length > 0 ? `(${countryOnly.join(' or ')})` : 'false';
+  const anyExpr = `(${regionCountryExpr} is not null and (${specificExpr} or ${countryOnlyExpr}))`;
+  const scoreExpr = `(case when ${specificExpr} then 2 when ${countryOnlyExpr} then 1 else 0 end)`;
 
   return { anyExpr, scoreExpr };
 }
@@ -727,21 +727,45 @@ export async function searchPublic(
   let routeSpecificityExpr = '0::int';
 
   if (scope === 'local_in_person' && regions.length > 0) {
-    const serviceMatch = buildRegionMatchExpressions("p.doc->'service_region'", regions, params, nextIdx);
+    const serviceMatch = buildRegionMatchExpressions(
+      "(p.doc->'service_region'->>'country_code')",
+      "(p.doc->'service_region'->>'admin1')",
+      regions,
+      params,
+      nextIdx,
+    );
     where.push(serviceMatch.anyExpr);
   }
 
   if (scope === 'remote_online_service' && regions.length > 0) {
-    const serviceMatch = buildRegionMatchExpressions("p.doc->'service_region'", regions, params, nextIdx);
+    const serviceMatch = buildRegionMatchExpressions(
+      "(p.doc->'service_region'->>'country_code')",
+      "(p.doc->'service_region'->>'admin1')",
+      regions,
+      params,
+      nextIdx,
+    );
     where.push(serviceMatch.anyExpr);
   }
 
   if (scope === 'ship_to') {
-    const destMatch = buildRegionMatchExpressions("p.doc->'dest_region'", shipToRegions, params, nextIdx);
+    const destMatch = buildRegionMatchExpressions(
+      "(p.doc->'dest_region'->>'country_code')",
+      "(p.doc->'dest_region'->>'admin1')",
+      shipToRegions,
+      params,
+      nextIdx,
+    );
     where.push(destMatch.anyExpr);
 
     if (shipsFromRegions.length > 0) {
-      const originMatch = buildRegionMatchExpressions("p.doc->'origin_region'", shipsFromRegions, params, nextIdx);
+      const originMatch = buildRegionMatchExpressions(
+        "(p.doc->'origin_region'->>'country_code')",
+        "(p.doc->'origin_region'->>'admin1')",
+        shipsFromRegions,
+        params,
+        nextIdx,
+      );
       where.push(originMatch.anyExpr);
       routeSpecificityExpr = `(${destMatch.scoreExpr} + ${originMatch.scoreExpr})::int`;
     } else {
