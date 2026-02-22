@@ -2,6 +2,35 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-22 - Search access is credits-only (no subscriber gate)
+Decision:
+- Search does not require `subscriber_required`; access is allowed for ACTIVE, not-suspended nodes and metered by credits.
+Rationale:
+- Entitlement drift caused false 403s.
+- Credit balance is the real spend gate.
+Scope/impact:
+- API, economics.
+
+## 2026-02-22 - Search broadening is deprecated and optional
+Decision:
+- `SearchRequest.broadening` may be omitted.
+- Missing broadening defaults to `{ level: 0, allow: false }`.
+- Broadening cost is `0`.
+Rationale:
+- Broadening is being phased out in favor of explicit filters.
+- Keep backward compatibility.
+Scope/impact:
+- API contracts, economics.
+
+## 2026-02-22 - Search excludes caller-owned inventory
+Decision:
+- Ship-to search excludes caller-owned listings/requests via `p.node_id <> callerNodeId`.
+Rationale:
+- Prevents self-search noise.
+- Preserves marketplace-style discovery.
+Scope/impact:
+- Product semantics, search behavior.
+
 ## 2026-02-21 - Categories are first-class and API-discoverable
 Decision:
 - Ship unauthenticated `GET /v1/categories` with canonical registry payload (`categories_version`, `categories[]`).

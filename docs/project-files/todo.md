@@ -167,21 +167,18 @@ Last updated: 2026-02-20
 - [x] Apply workflow guidance from thread notes explicitly:
   - keep responses concise to conserve context
   - request missing source artifacts/text instead of making assumptions
-- [ ] Add top-level Search Budget Contract object to search responses:
+- [x] Add top-level Search Budget Contract object to search responses:
   - include `credits_requested`, `credits_charged`, coverage fields, and page/broadening breakdown
   - keep this contract at top-level (not nested under metadata)
 - [x] Enforce hard spend ceiling:
   - `credits_charged` must always be `<= credits_requested`
   - return actionable insufficient-budget guidance when cap blocks full execution
-- [ ] Implement broadening economics defaults:
-  - default broadening to strict/low
-  - charge more as broadening increases
-- [ ] Implement pagination add-on economics:
-  - page 1 included in base search cost
-  - pages 2-3 small add-on, 4-5 medium, 6-10 large, 11+ prohibitive
-- [ ] Lock go-live matching behavior:
-  - structured eligibility filters + keyword ranking only
-  - no lexical override/expansion and no semantic/vector infrastructure at go-live
+- [x] Deprecate `SearchRequest.broadening`; omission defaults to `{ level: 0, allow: false }` and broadening cost is `0`.
+- [ ] Add proper idempotent Supabase migration(s) to align `visibility_events` with `docs/specs/21__db-ddl.sql` (remove schema drift).
+  - include backfill, NOT NULL/check constraints, and expected indexes
+- [ ] Add decision-log entry for "Lock go-live matching behavior" (structured eligibility filters + keyword ranking only; no lexical override/expansion; no semantic/vector at go-live).
+  - include explicit Phase 2 TODO for lexical override/expansion
+  - include explicit Phase 3 TODO for semantic/vector infra
 - [x] Keep go-live supply-vs-demand parity:
   - same mechanics and pricing for both sides in Phase 0.5
 - [x] Define canonical pricing rule for target-constrained search (`target { node_id?, username? }`) in specs, then implement and test low-cost follow-up pricing.
@@ -192,7 +189,7 @@ Last updated: 2026-02-20
   - log search impressions (unit returned in results)
   - log detail views (via detail GET path)
   - ensure offer outcomes persist `accepted|rejected|expired|cancelled`
-- [ ] Add non-binding `estimated_value` field to units.
+- [x] Add non-binding `estimated_value` field to units. (verified)
 - [x] Update onboarding docs and examples:
   - include 10 categories with 5 examples each
   - include explicit multi-unit offers + multi-offer composition guidance
@@ -315,6 +312,7 @@ High likelihood:
   - admin override path and audit logging
 Medium likelihood:
 - [ ] Add explicit retry/backoff and failure visibility docs/runbook for webhook delivery (timeouts/5xx behavior, operational signals).
+- [ ] Implement/confirm pagination add-on economics tiers (pages 2-3 / 4-5 / 6+ prohibitive) and ensure returned budget breakdown matches policy.
 - [ ] Cross-language free-text discovery (Phase Next):
   - decide bridging approach (pivot MT fields vs multilingual embeddings vs hybrid) with search budget/credit metering integration
   - add indexing/storage, abuse controls, and diagnostics for cross-language matches
@@ -325,6 +323,7 @@ Medium likelihood:
 - [ ] Add messaging/negotiation threads for nuanced deals with moderation safeguards.
 Low likelihood:
 - [ ] Add optional webhook receiver helper snippet/library in SDK (signature verification plus dedupe scaffolding).
+- [ ] Add regions catalog / stricter ISO 3166-2 validation endpoint; keep current regex as format-only until catalog exists.
 
 ### Decisions locked
 - Offer/deal progression is not subscriber-gated; use suspension/legal/rate-limit controls.
