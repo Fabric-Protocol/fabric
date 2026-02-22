@@ -1102,6 +1102,8 @@ Must include either center+radius_miles or regions (or both).
 
 radius_miles min 1, max 200.
 
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
+
 scope = remote_online_service
 {
   "regions": ["string"],
@@ -1109,6 +1111,8 @@ scope = remote_online_service
 }
 
 Rule: at least one of regions or languages.
+
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
 
 scope = ship_to
 {
@@ -1123,11 +1127,20 @@ ship_to_regions required.
 
 max_ship_days optional; min 1, max 30.
 
+`ship_to_regions` and `ships_from_regions` (if provided) must use region IDs in `CC` or `CC-AA` format and match regex `^[A-Z]{2}(-[A-Z0-9]{1,3})?$`.
+
+Matching semantics for region filters:
+- `CC` matches any row with `country_code=CC` (any or null `admin1`).
+- `CC-AA` matches only rows with `country_code=CC` and `admin1=AA`.
+- No reverse broadening: a row with only `country_code=CC` does not satisfy `CC-AA`.
+
 scope = digital_delivery
 {
   "regions": ["string"],
   "delivery_methods": ["string"]
 }
+
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
 
 scope = OTHER
 { "scope_notes": "string" }
@@ -1162,9 +1175,16 @@ target is optional:
 Response 200
 
 Returns SearchListingsResponse (see 22__projections-and-search.md).
-The response `budget` object includes `coverage` with executed page index, executed broadening level, and returned item count.
+The response `budget` object includes:
+- `coverage.page_index_executed`, `coverage.broadening_level_executed`, `coverage.items_returned`
+- aliases for agent consumers: `coverage.executed_page_index`, `coverage.executed_broadening_level`, `coverage.returned_count`
+- `breakdown.base_search_cost`, `breakdown.broadening_cost`, `breakdown.page_cost`
+- additive aliases: `breakdown.base_cost`, `breakdown.pagination_addons`, `breakdown.geo_addon` (currently `0`)
+- `credits_charged <= credits_requested` always.
 
 Errors
+
+400 validation_error (invalid_cursor or cursor_mismatch for query-shape/keyset mismatch)
 
 403 subscriber_required
 
@@ -1193,9 +1213,11 @@ Validation and budgeting rules are identical to /v1/search/listings (including l
 Response 200
 
 Returns SearchRequestsResponse (see 22__projections-and-search.md).
-The response `budget` object includes `coverage` with executed page index, executed broadening level, and returned item count.
+The response `budget` object includes the same `coverage` and `breakdown` fields/aliases as `/v1/search/listings`.
 
 Errors
+
+400 validation_error (invalid_cursor or cursor_mismatch for query-shape/keyset mismatch)
 
 403 subscriber_required
 
@@ -2038,4 +2060,5 @@ Recompute public_listings from all published, non-deleted Units not taken down/s
 Recompute public_requests from all published, non-deleted Requests not taken down/suspended.
 
 Apply allowlist for public fields.
+
 

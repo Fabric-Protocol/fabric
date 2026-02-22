@@ -60,6 +60,7 @@ Allowlisted fields:
 - `origin_region`, `dest_region` (ship_to scopes; structured regions only)
 - `service_region` (remote; country + optional admin1)
 - `delivery_format` (digital)
+- `max_ship_days` (optional shipping SLA days)
 - `photos[]` (public URLs only)
 - `published_at`, `updated_at`
 
@@ -78,6 +79,7 @@ Allowlisted fields:
 - `location_text_public` (coarse only; never precise geo)
 - `origin_region`, `dest_region` (if applicable)
 - `service_region`, `delivery_format` (if applicable)
+- `max_ship_days` (optional shipping SLA days)
 - `need_by`, `accept_substitutions`
 - `published_at`, `updated_at`
 
@@ -117,6 +119,8 @@ Hard prohibitions:
   "limit": 20,
   "cursor": "string|null"
 }
+
+`cursor` is an opaque keyset token and must be reused only with the same query shape (`scope`, `q`, `filters`, `target`).
 4.2 Filters by scope (validated; unknown keys rejected)
 local_in_person
 
@@ -133,6 +137,8 @@ Must include either center+radius_miles or regions (or both).
 
 radius_miles min 1, max 200.
 
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
+
 remote_online_service
 
 json
@@ -142,6 +148,8 @@ Copy code
   "languages": ["string"]
 }
 Rule: at least one of regions or languages.
+
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
 
 ship_to
 
@@ -158,6 +166,13 @@ ship_to_regions required.
 
 max_ship_days optional; min 1, max 30.
 
+`ship_to_regions` and `ships_from_regions` (if provided) must use region IDs in `CC` or `CC-AA` format and match regex `^[A-Z]{2}(-[A-Z0-9]{1,3})?$`.
+
+Matching semantics for region filters:
+- `CC` matches any row with `country_code=CC` (any or null `admin1`).
+- `CC-AA` matches only rows with `country_code=CC` and `admin1=AA`.
+- No reverse broadening: a row with only `country_code=CC` does not satisfy `CC-AA`.
+
 digital_delivery
 
 json
@@ -166,6 +181,8 @@ Copy code
   "regions": ["string"],
   "delivery_methods": ["string"]
 }
+
+If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
 OTHER
 
 json
@@ -205,13 +222,19 @@ Copy code
       "base_search_cost": 5,
       "broadening_level": 0,
       "broadening_cost": 0,
-      "page_index": 0,
-      "page_cost": 5
+      "page_index": 1,
+      "page_cost": 0,
+      "base_cost": 5,
+      "pagination_addons": 0,
+      "geo_addon": 0
     },
     "coverage": {
       "page_index_executed": 1,
       "broadening_level_executed": 0,
-      "items_returned": 20
+      "items_returned": 20,
+      "executed_page_index": 1,
+      "executed_broadening_level": 0,
+      "returned_count": 20
     },
     "was_capped": false,
     "cap_reason": null,
@@ -222,10 +245,10 @@ Copy code
       "item": { /* PublicListing */ },
       "rank": {
         "sort_keys": {
-          "distance_miles": 3.2,
+          "distance_miles": null,
           "route_specificity_score": 4,
           "fts_rank": 0.12,
-          "recency_score": 0.7
+          "recency_score": 1739558400
         }
       }
     }
@@ -255,13 +278,19 @@ Copy code
       "base_search_cost": 5,
       "broadening_level": 0,
       "broadening_cost": 0,
-      "page_index": 0,
-      "page_cost": 5
+      "page_index": 1,
+      "page_cost": 0,
+      "base_cost": 5,
+      "pagination_addons": 0,
+      "geo_addon": 0
     },
     "coverage": {
       "page_index_executed": 1,
       "broadening_level_executed": 0,
-      "items_returned": 20
+      "items_returned": 20,
+      "executed_page_index": 1,
+      "executed_broadening_level": 0,
+      "returned_count": 20
     },
     "was_capped": false,
     "cap_reason": null,
@@ -272,10 +301,10 @@ Copy code
       "item": { /* PublicRequest */ },
       "rank": {
         "sort_keys": {
-          "distance_miles": 3.2,
+          "distance_miles": null,
           "route_specificity_score": 4,
           "fts_rank": 0.12,
-          "recency_score": 0.7
+          "recency_score": 1739558400
         }
       }
     }
@@ -289,17 +318,25 @@ Copy code
   "has_more": true
 }
 6) Ranking/sorting (MVP semantics)
-MVP ranking uses a composite of:
+MVP ranking uses:
 
-distance_miles (local_in_person only; ascending)
+- `fts_rank` from Postgres full-text search on precomputed projection vectors (`search_tsv`) built from `title`, `public_summary`, `description`, and `tags`.
+- `route_specificity_score` for `ship_to` scope (specific `CC-AA` matches score above broad `CC` matches; destination and origin scores add).
+- `recency_score` as `extract(epoch from updated_at)` for transparency/debugging.
+- `distance_miles` remains `null` in Phase 0.5 (geo ranking deferred).
 
-route_specificity_score (ship_to only; descending)
+Deterministic ordering:
 
-fts_rank (full-text relevance; descending)
+- `ship_to`: `route_specificity_score DESC`, `fts_rank DESC`, `updated_at DESC`, `id DESC`
+- other scopes: `fts_rank DESC`, `updated_at DESC`, `id DESC`
 
-recency_score (descending)
+Cursor semantics:
 
-The response MUST include rank.sort_keys for transparency/debugging.
+- Search pagination uses opaque keyset cursors derived from the active sort tuple.
+- Cursor payload includes scope + query-shape fingerprint.
+- Reusing a cursor with a different query shape must return `400 validation_error` (`cursor_mismatch`).
+
+The response MUST include `rank.sort_keys` for transparency/debugging.
 
 Phase 0.5 go-live lock (normative):
 

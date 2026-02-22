@@ -405,8 +405,9 @@ export const fabricService = {
     const targetResolution = await resolveSearchTargetNode(body.target ?? null);
     if (targetResolution.validationError) return { validationError: targetResolution.validationError };
     const targetNodeId = targetResolution.targetNodeId;
-
-    const parsedCursor = decodeSearchCursor(body?.cursor ?? null);
+    const cursorFingerprint = searchCursorFingerprint(kind, body);
+    const parsedCursor = decodeSearchCursor(body?.cursor ?? null, body?.scope, cursorFingerprint);
+    if (parsedCursor.validationError) return { validationError: parsedCursor.validationError };
     const baseSearchCost = targetNodeId ? config.searchTargetCreditCost : config.searchCreditCost;
     const broadeningLevel = Number(body?.broadening?.level ?? 0);
     const broadeningCost = broadeningLevel;
@@ -424,7 +425,17 @@ export const fabricService = {
     const categoryIdsAny = Array.isArray(body?.filters?.category_ids_any)
       ? body.filters.category_ids_any.filter((value: unknown) => Number.isInteger(value))
       : [];
-    const rows = await repo.searchPublic(kind, body.scope, effectiveLimit, parsedCursor.after, nodeId, targetNodeId, categoryIdsAny);
+    const rows = await repo.searchPublic(
+      kind,
+      body.scope,
+      body?.q ?? null,
+      body?.filters ?? {},
+      effectiveLimit,
+      parsedCursor.after,
+      nodeId,
+      targetNodeId,
+      categoryIdsAny,
+    );
     const creditsCharged = isCapped ? 0 : totalCost;
 
     if (creditsCharged > 0) {
@@ -433,11 +444,34 @@ export const fabricService = {
     await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, broadeningLevel, creditsCharged);
 
     const hasMore = effectiveLimit > 0 && rows.length === effectiveLimit;
-    const nextCursor = hasMore ? encodeSearchCursor(rows[rows.length - 1]?.published_at, pageIndex + 1) : null;
+    const lastRow = rows[rows.length - 1];
+    const nextCursor = hasMore
+      ? encodeSearchCursor(
+          {
+            route_specificity_score: Number(lastRow?.route_specificity_score ?? 0),
+            fts_rank: Number(lastRow?.fts_rank ?? 0),
+            updated_at: lastRow?.updated_at ?? null,
+            id: lastRow?.entity_id ?? null,
+          },
+          pageIndex + 1,
+          body.scope,
+          cursorFingerprint,
+        )
+      : null;
     const cappedGuidance = pageIndex >= config.searchPageProhibitiveFrom
       ? `Increase budget.credits_requested, reduce paging depth, or restart with narrower filters; pages ${config.searchPageProhibitiveFrom}+ are restricted.`
       : 'Increase budget.credits_requested or lower broadening.level/limit and retry.';
-    const items = rows.map((r) => ({ item: r.doc, rank: { sort_keys: { distance_miles: null, route_specificity_score: 0, fts_rank: 0, recency_score: 0 } } }));
+    const items = rows.map((r) => ({
+      item: r.doc,
+      rank: {
+        sort_keys: {
+          distance_miles: null,
+          route_specificity_score: Number(r.route_specificity_score ?? 0),
+          fts_rank: Number(r.fts_rank ?? 0),
+          recency_score: Number(r.recency_score ?? 0),
+        },
+      },
+    }));
     const searchId = crypto.randomUUID();
     if (items.length > 0) {
       const subjectKind: 'listing' | 'request' = kind === 'listings' ? 'listing' : 'request';
@@ -472,11 +506,17 @@ export const fabricService = {
           broadening_cost: broadeningCost,
           page_index: pageIndex,
           page_cost: pageCost,
+          base_cost: baseSearchCost,
+          pagination_addons: pageCost,
+          geo_addon: 0,
         },
         coverage: {
           page_index_executed: pageIndex,
           broadening_level_executed: broadeningLevel,
           items_returned: items.length,
+          executed_page_index: pageIndex,
+          executed_broadening_level: broadeningLevel,
+          returned_count: items.length,
         },
         was_capped: isCapped,
         cap_reason: isCapped ? 'insufficient_budget' : null,
@@ -830,33 +870,123 @@ async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
 const SEARCH_CURSOR_PREFIX = 'pg1:';
 const OFFER_EVENT_CURSOR_PREFIX = 'ev1:';
 
-function decodeSearchCursor(cursor: string | null | undefined): { after: string | null; pageIndex: number } {
-  if (typeof cursor !== 'string' || !cursor) return { after: null, pageIndex: 1 };
-  if (cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
-    const encoded = cursor.slice(SEARCH_CURSOR_PREFIX.length);
-    try {
-      const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-      const after = typeof parsed?.a === 'string' ? parsed.a : null;
-      const pageIndex = Number(parsed?.p);
-      if (after && Number.isInteger(pageIndex) && pageIndex >= 2) {
-        return { after, pageIndex };
-      }
-    } catch {
-      // Fall back to legacy cursor parsing below.
-    }
-  }
-  return { after: cursor, pageIndex: 2 };
+function searchCursorFingerprint(kind: 'listings' | 'requests', body: any) {
+  const fingerprintPayload = {
+    kind,
+    scope: body?.scope ?? null,
+    q: typeof body?.q === 'string' ? body.q.trim() : body?.q ?? null,
+    filters: body?.filters ?? {},
+    target: body?.target ?? null,
+  };
+  return crypto.createHash('sha256').update(stableStringify(fingerprintPayload)).digest('hex');
 }
 
-function encodeSearchCursor(publishedAt: unknown, nextPageIndex: number): string | null {
-  if (!publishedAt) return null;
-  const asIso = publishedAt instanceof Date
-    ? publishedAt.toISOString()
-    : typeof publishedAt === 'string'
-      ? publishedAt
+function stableStringify(value: any): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(',')}}`;
+}
+
+function decodeSearchCursor(
+  cursor: string | null | undefined,
+  expectedScope: string,
+  expectedFingerprint: string,
+): {
+  after: repo.SearchAfterTuple | null;
+  pageIndex: number;
+  validationError?: 'invalid_cursor' | 'cursor_mismatch';
+} {
+  if (cursor == null || cursor === '') return { after: null, pageIndex: 1 };
+  if (typeof cursor !== 'string' || !cursor.startsWith(SEARCH_CURSOR_PREFIX)) {
+    return { after: null, pageIndex: 1, validationError: 'invalid_cursor' };
+  }
+
+  const encoded = cursor.slice(SEARCH_CURSOR_PREFIX.length);
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    const pageIndex = Number(parsed?.p);
+    if (!Number.isInteger(pageIndex) || pageIndex < 2) {
+      return { after: null, pageIndex: 1, validationError: 'invalid_cursor' };
+    }
+
+    if (typeof parsed?.s !== 'string' || typeof parsed?.f !== 'string') {
+      return { after: null, pageIndex: 1, validationError: 'invalid_cursor' };
+    }
+    if (parsed.s !== expectedScope || parsed.f !== expectedFingerprint) {
+      return { after: null, pageIndex: 1, validationError: 'cursor_mismatch' };
+    }
+
+    const rawAfter = parsed?.a;
+    const rawId = rawAfter?.id;
+    const rawUpdatedAt = rawAfter?.updated_at;
+    const rawFtsRank = Number(rawAfter?.fts_rank);
+    const rawRouteScore = Number(rawAfter?.route_specificity_score ?? 0);
+    const normalizedUpdatedAt = rawUpdatedAt instanceof Date
+      ? rawUpdatedAt.toISOString()
+      : typeof rawUpdatedAt === 'string'
+        ? rawUpdatedAt
+        : null;
+    if (
+      typeof rawId !== 'string'
+      || !normalizedUpdatedAt
+      || Number.isNaN(Date.parse(normalizedUpdatedAt))
+      || !Number.isFinite(rawFtsRank)
+      || !Number.isFinite(rawRouteScore)
+    ) {
+      return { after: null, pageIndex: 1, validationError: 'invalid_cursor' };
+    }
+
+    return {
+      after: {
+        id: rawId,
+        updated_at: normalizedUpdatedAt,
+        fts_rank: rawFtsRank,
+        route_specificity_score: rawRouteScore,
+      },
+      pageIndex,
+    };
+  } catch {
+    return { after: null, pageIndex: 1, validationError: 'invalid_cursor' };
+  }
+}
+
+function encodeSearchCursor(
+  after: { route_specificity_score: number; fts_rank: number; updated_at: unknown; id: unknown },
+  nextPageIndex: number,
+  scope: string,
+  fingerprint: string,
+): string | null {
+  const asIso = after.updated_at instanceof Date
+    ? after.updated_at.toISOString()
+    : typeof after.updated_at === 'string'
+      ? after.updated_at
       : null;
-  if (!asIso || !Number.isInteger(nextPageIndex) || nextPageIndex < 2) return null;
-  const payload = JSON.stringify({ a: asIso, p: nextPageIndex });
+  if (
+    !Number.isInteger(nextPageIndex)
+    || nextPageIndex < 2
+    || typeof scope !== 'string'
+    || typeof fingerprint !== 'string'
+    || typeof after.id !== 'string'
+    || !asIso
+    || Number.isNaN(Date.parse(asIso))
+    || !Number.isFinite(Number(after.fts_rank))
+    || !Number.isFinite(Number(after.route_specificity_score))
+  ) {
+    return null;
+  }
+  const payload = JSON.stringify({
+    v: 2,
+    s: scope,
+    f: fingerprint,
+    p: nextPageIndex,
+    a: {
+      id: after.id,
+      updated_at: asIso,
+      fts_rank: Number(after.fts_rank),
+      route_specificity_score: Number(after.route_specificity_score),
+    },
+  });
   return `${SEARCH_CURSOR_PREFIX}${Buffer.from(payload, 'utf8').toString('base64url')}`;
 }
 

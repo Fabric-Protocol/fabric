@@ -1,3 +1,5 @@
+const REGION_ID_PATTERN = '^[A-Z]{2}(-[A-Z0-9]{1,3})?$';
+
 export const openApiDocument = {
   openapi: '3.0.3',
   info: {
@@ -284,6 +286,7 @@ export const openApiDocument = {
         },
         responses: {
           '200': { description: 'Search result page' },
+          '400': { description: 'Invalid search cursor' },
           '401': { description: 'Unauthorized' },
           '402': { description: 'Credits exhausted' },
           '403': { description: 'Subscriber required' },
@@ -307,6 +310,7 @@ export const openApiDocument = {
         },
         responses: {
           '200': { description: 'Search result page' },
+          '400': { description: 'Invalid search cursor' },
           '401': { description: 'Unauthorized' },
           '402': { description: 'Credits exhausted' },
           '403': { description: 'Subscriber required' },
@@ -529,11 +533,11 @@ export const openApiDocument = {
         properties: {
           center: { type: 'object', additionalProperties: true },
           radius_miles: { type: 'number' },
-          regions: { type: 'array', items: { type: 'string' } },
+          regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
           languages: { type: 'array', items: { type: 'string' } },
-          ship_to_regions: { type: 'array', items: { type: 'string' } },
-          ships_from_regions: { type: 'array', items: { type: 'string' } },
-          max_ship_days: { type: 'number' },
+          ship_to_regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
+          ships_from_regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
+          max_ship_days: { type: 'integer', minimum: 1, maximum: 30 },
           delivery_methods: { type: 'array', items: { type: 'string' } },
           scope_notes: { type: 'string' },
           category_ids_any: {

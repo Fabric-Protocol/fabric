@@ -430,16 +430,16 @@ function tableFor(kind: 'units' | 'requests') { return kind; }
 
 export async function createResource(kind: 'units'|'requests', nodeId: string, payload: any) {
   if (kind === 'units') {
-    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-      returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
-    return rows[0];
-  }
-  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,need_by,accept_substitutions,tags,category_ids,public_summary)
+    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary)
       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.need_by,payload.accept_substitutions ?? true,payload.tags,payload.category_ids,payload.public_summary]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
+    return rows[0];
+  }
+  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,tags,category_ids,public_summary)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+      returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.tags,payload.category_ids,payload.public_summary]);
   return rows[0];
 }
 
@@ -453,9 +453,9 @@ export async function createUnitWithUploadTrial(
       insert into units(
         node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,
         scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,
-        dest_region,service_region,delivery_format,tags,category_ids,public_summary
+        dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary
       )
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
       returning
         id,
         node_id,
@@ -474,12 +474,12 @@ export async function createUnitWithUploadTrial(
       select
         $1,
         'unit_upload_count',
-        $21,
+        $22,
         upload_count.c,
         now(),
-        now() + make_interval(days => $22::int)
+        now() + make_interval(days => $23::int)
       from upload_count
-      where upload_count.c >= $21
+      where upload_count.c >= $22
       on conflict (node_id) do nothing
       returning node_id, starts_at, ends_at, upload_count_at_grant
     ),
@@ -488,10 +488,10 @@ export async function createUnitWithUploadTrial(
       select
         $1,
         'grant_trial',
-        $23,
+        $24,
         jsonb_build_object(
           'reason', 'upload_threshold_trial',
-          'threshold', $21,
+          'threshold', $22,
           'upload_count', insert_trial.upload_count_at_grant,
           'trial_ends_at', insert_trial.ends_at
         ),
@@ -507,11 +507,11 @@ export async function createUnitWithUploadTrial(
         'granted',
         jsonb_build_object(
           'source', 'unit_upload_count',
-          'threshold', $21,
+          'threshold', $22,
           'upload_count', insert_trial.upload_count_at_grant,
           'trial_starts_at', insert_trial.starts_at,
           'trial_ends_at', insert_trial.ends_at,
-          'credits_granted', $23
+          'credits_granted', $24
         )
       from insert_trial
       returning id
@@ -545,6 +545,7 @@ export async function createUnitWithUploadTrial(
     payload.dest_region,
     payload.service_region,
     payload.delivery_format,
+    payload.max_ship_days,
     payload.tags,
     payload.category_ids,
     payload.public_summary,
@@ -574,10 +575,10 @@ export async function patchResource(kind:'units'|'requests', nodeId:string, id:s
         quantity=coalesce($8,quantity),estimated_value=coalesce($9,estimated_value),measure=coalesce($10,measure),custom_measure=coalesce($11,custom_measure),
         scope_primary=coalesce($12,scope_primary),scope_secondary=coalesce($13,scope_secondary),scope_notes=coalesce($14,scope_notes),
         location_text_public=coalesce($15,location_text_public),origin_region=coalesce($16,origin_region),dest_region=coalesce($17,dest_region),
-        service_region=coalesce($18,service_region),delivery_format=coalesce($19,delivery_format),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary)
+        service_region=coalesce($18,service_region),delivery_format=coalesce($19,delivery_format),max_ship_days=coalesce($20,max_ship_days),tags=coalesce($21,tags),category_ids=coalesce($22,category_ids),public_summary=coalesce($23,public_summary)
         where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
         returning id,row_version as version`,
-      [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
+      [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
     return rows[0] ?? null;
   }
   const rows = await query<any>(`update requests set
@@ -585,10 +586,10 @@ export async function patchResource(kind:'units'|'requests', nodeId:string, id:s
       desired_quantity=coalesce($8,desired_quantity),measure=coalesce($9,measure),custom_measure=coalesce($10,custom_measure),
       scope_primary=coalesce($11,scope_primary),scope_secondary=coalesce($12,scope_secondary),scope_notes=coalesce($13,scope_notes),
       location_text_public=coalesce($14,location_text_public),origin_region=coalesce($15,origin_region),dest_region=coalesce($16,dest_region),
-      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),tags=coalesce($19,tags),category_ids=coalesce($20,category_ids),public_summary=coalesce($21,public_summary)
+      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),max_ship_days=coalesce($19,max_ship_days),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary)
       where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
       returning id,row_version as version`,
-    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.tags,payload.category_ids,payload.public_summary]);
+    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
   return rows[0] ?? null;
 }
 
@@ -613,7 +614,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
       title: row.title,description: row.description,public_summary: row.public_summary,quantity: row.quantity,estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : null,measure: row.measure,
       custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
       location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
-      delivery_format: row.delivery_format,photos: row.photos,published_at: row.published_at,updated_at: row.updated_at,
+      delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,photos: row.photos,published_at: row.published_at,updated_at: row.updated_at,
     };
     await query(`insert into public_listings(unit_id,node_id,doc,published_at) values($1,$2,$3,now())
       on conflict (unit_id) do update set doc=excluded.doc,published_at=excluded.published_at,updated_at=now()`, [row.id,row.node_id,doc]);
@@ -624,7 +625,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
     title: row.title,description: row.description,public_summary: row.public_summary,desired_quantity: row.desired_quantity,measure: row.measure,
     custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
     location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
-    delivery_format: row.delivery_format,need_by: row.need_by,accept_substitutions: row.accept_substitutions,published_at: row.published_at,updated_at: row.updated_at,
+    delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,need_by: row.need_by,accept_substitutions: row.accept_substitutions,published_at: row.published_at,updated_at: row.updated_at,
   };
   await query(`insert into public_requests(request_id,node_id,doc,published_at) values($1,$2,$3,now())
     on conflict (request_id) do update set doc=excluded.doc,published_at=excluded.published_at,updated_at=now()`, [row.id,row.node_id,doc]);
@@ -635,60 +636,221 @@ export async function removeProjection(kind:'units'|'requests', id:string) {
   else await query('delete from public_requests where request_id=$1',[id]);
 }
 
+export type SearchAfterTuple = {
+  route_specificity_score: number;
+  fts_rank: number;
+  updated_at: string;
+  id: string;
+};
+
+type RegionFilter = {
+  countryCode: string;
+  admin1: string | null;
+};
+
+function parseRegionFilters(raw: unknown): RegionFilter[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((value) => {
+    if (typeof value !== 'string') return [];
+    const normalized = value.trim().toUpperCase();
+    if (!/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/.test(normalized)) return [];
+    const [countryCode, admin1] = normalized.split('-', 2);
+    return [{ countryCode, admin1: admin1 ?? null }];
+  });
+}
+
+function buildRegionMatchExpressions(regionExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
+  const countryOnly: string[] = [];
+  const specific: string[] = [];
+
+  for (const filter of filters) {
+    const countryIdx = nextIdx.value;
+    params.push(filter.countryCode);
+    nextIdx.value += 1;
+
+    if (filter.admin1) {
+      const adminIdx = nextIdx.value;
+      params.push(filter.admin1);
+      nextIdx.value += 1;
+      specific.push(`((${regionExpr}->>'country_code')=$${countryIdx} and (${regionExpr}->>'admin1')=$${adminIdx})`);
+      continue;
+    }
+
+    countryOnly.push(`((${regionExpr}->>'country_code')=$${countryIdx})`);
+  }
+
+  const specificExpr = specific.length > 0 ? `(${specific.join(' or ')})` : 'false';
+  const countryExpr = countryOnly.length > 0 ? `(${countryOnly.join(' or ')})` : 'false';
+  const anyExpr = `(${regionExpr} is not null and (${specificExpr} or ${countryExpr}))`;
+  const scoreExpr = `(case when ${specificExpr} then 2 when ${countryExpr} then 1 else 0 end)`;
+
+  return { anyExpr, scoreExpr };
+}
+
 export async function searchPublic(
   kind: 'listings' | 'requests',
   scope: string,
+  q: string | null,
+  filters: any,
   limit: number,
-  cursor: string | null,
+  cursor: SearchAfterTuple | null,
   callerNodeId: string | null = null,
   targetNodeId: string | null = null,
   categoryIdsAny: number[] = [],
 ) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
+  const idColumn = kind === 'listings' ? 'p.unit_id' : 'p.request_id';
   const params: unknown[] = [limit];
   const where: string[] = [];
 
-  let nextIdx = 2;
-  where.push(`(p.doc->>'scope_primary')=$${nextIdx}`);
+  const nextIdx = { value: 2 };
+  where.push(`(p.doc->>'scope_primary')=$${nextIdx.value}`);
   params.push(scope);
-  nextIdx += 1;
+  nextIdx.value += 1;
 
-  if (cursor) {
-    where.push(`p.published_at < $${nextIdx}::timestamptz`);
-    params.push(cursor);
-    nextIdx += 1;
+  const trimmedQ = typeof q === 'string' ? q.trim() : '';
+  let ftsRankExpr = '0::double precision';
+  if (trimmedQ.length > 0) {
+    const qIdx = nextIdx.value;
+    params.push(trimmedQ);
+    nextIdx.value += 1;
+    ftsRankExpr = `ts_rank_cd(coalesce(p.search_tsv, ''::tsvector), websearch_to_tsquery('english', $${qIdx}))`;
+    where.push(`coalesce(p.search_tsv, ''::tsvector) @@ websearch_to_tsquery('english', $${qIdx})`);
   }
+
+  const filterPayload = filters && typeof filters === 'object' && !Array.isArray(filters) ? filters : {};
+  const regions = parseRegionFilters((filterPayload as any).regions);
+  const shipToRegions = parseRegionFilters((filterPayload as any).ship_to_regions);
+  const shipsFromRegions = parseRegionFilters((filterPayload as any).ships_from_regions);
+  const maxShipDaysRaw = (filterPayload as any).max_ship_days;
+  const maxShipDays = Number.isInteger(maxShipDaysRaw) ? Number(maxShipDaysRaw) : null;
+  let routeSpecificityExpr = '0::int';
+
+  if (scope === 'local_in_person' && regions.length > 0) {
+    const serviceMatch = buildRegionMatchExpressions("p.doc->'service_region'", regions, params, nextIdx);
+    where.push(serviceMatch.anyExpr);
+  }
+
+  if (scope === 'remote_online_service' && regions.length > 0) {
+    const serviceMatch = buildRegionMatchExpressions("p.doc->'service_region'", regions, params, nextIdx);
+    where.push(serviceMatch.anyExpr);
+  }
+
+  if (scope === 'ship_to') {
+    const destMatch = buildRegionMatchExpressions("p.doc->'dest_region'", shipToRegions, params, nextIdx);
+    where.push(destMatch.anyExpr);
+
+    if (shipsFromRegions.length > 0) {
+      const originMatch = buildRegionMatchExpressions("p.doc->'origin_region'", shipsFromRegions, params, nextIdx);
+      where.push(originMatch.anyExpr);
+      routeSpecificityExpr = `(${destMatch.scoreExpr} + ${originMatch.scoreExpr})::int`;
+    } else {
+      routeSpecificityExpr = `${destMatch.scoreExpr}::int`;
+    }
+
+    if (maxShipDays !== null) {
+      where.push(`(p.doc->>'max_ship_days') is not null and (p.doc->>'max_ship_days')::int <= $${nextIdx.value}`);
+      params.push(maxShipDays);
+      nextIdx.value += 1;
+    }
+  }
+
   if (callerNodeId) {
-    where.push(`p.node_id <> $${nextIdx}`);
+    where.push(`p.node_id <> $${nextIdx.value}`);
     params.push(callerNodeId);
-    nextIdx += 1;
+    nextIdx.value += 1;
   }
   if (targetNodeId) {
-    where.push(`p.node_id = $${nextIdx}`);
+    where.push(`p.node_id = $${nextIdx.value}`);
     params.push(targetNodeId);
-    nextIdx += 1;
+    nextIdx.value += 1;
   }
   if (categoryIdsAny.length > 0) {
     const categoryKeys = categoryIdsAny.map((value) => String(value));
     where.push(`exists (
       select 1
       from jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
-      where c.category_id = any($${nextIdx}::text[])
+      where c.category_id = any($${nextIdx.value}::text[])
     )`);
     params.push(categoryKeys);
-    nextIdx += 1;
+    nextIdx.value += 1;
   }
 
   where.push("n.status='ACTIVE'");
   where.push('n.suspended_at is null');
   where.push('n.deleted_at is null');
 
+  const cursorWhere: string[] = [];
+  if (cursor) {
+    if (scope === 'ship_to') {
+      const routeIdx = nextIdx.value;
+      params.push(cursor.route_specificity_score);
+      nextIdx.value += 1;
+      const ftsIdx = nextIdx.value;
+      params.push(cursor.fts_rank);
+      nextIdx.value += 1;
+      const updatedAtIdx = nextIdx.value;
+      params.push(cursor.updated_at);
+      nextIdx.value += 1;
+      const idIdx = nextIdx.value;
+      params.push(cursor.id);
+      nextIdx.value += 1;
+
+      cursorWhere.push(`(
+        ranked.route_specificity_score < $${routeIdx}
+        or (ranked.route_specificity_score = $${routeIdx} and ranked.fts_rank < $${ftsIdx})
+        or (ranked.route_specificity_score = $${routeIdx} and ranked.fts_rank = $${ftsIdx} and ranked.updated_at < $${updatedAtIdx}::timestamptz)
+        or (ranked.route_specificity_score = $${routeIdx} and ranked.fts_rank = $${ftsIdx} and ranked.updated_at = $${updatedAtIdx}::timestamptz and ranked.entity_id < $${idIdx}::uuid)
+      )`);
+    } else {
+      const ftsIdx = nextIdx.value;
+      params.push(cursor.fts_rank);
+      nextIdx.value += 1;
+      const updatedAtIdx = nextIdx.value;
+      params.push(cursor.updated_at);
+      nextIdx.value += 1;
+      const idIdx = nextIdx.value;
+      params.push(cursor.id);
+      nextIdx.value += 1;
+
+      cursorWhere.push(`(
+        ranked.fts_rank < $${ftsIdx}
+        or (ranked.fts_rank = $${ftsIdx} and ranked.updated_at < $${updatedAtIdx}::timestamptz)
+        or (ranked.fts_rank = $${ftsIdx} and ranked.updated_at = $${updatedAtIdx}::timestamptz and ranked.entity_id < $${idIdx}::uuid)
+      )`);
+    }
+  }
+
+  const orderBy = scope === 'ship_to'
+    ? 'ranked.route_specificity_score desc, ranked.fts_rank desc, ranked.updated_at desc, ranked.entity_id desc'
+    : 'ranked.fts_rank desc, ranked.updated_at desc, ranked.entity_id desc';
+
   return query<any>(
-    `select p.*
-     from ${table} p
-     join nodes n on n.id=p.node_id
-     where ${where.join('\n       and ')}
-     order by p.published_at desc
+    `with ranked as (
+       select
+         p.doc,
+         p.node_id,
+         p.published_at,
+         p.updated_at,
+         ${idColumn} as entity_id,
+         ${ftsRankExpr}::double precision as fts_rank,
+         ${routeSpecificityExpr}::int as route_specificity_score
+       from ${table} p
+       join nodes n on n.id=p.node_id
+       where ${where.join('\n         and ')}
+     )
+     select
+       ranked.doc,
+       ranked.node_id,
+       ranked.published_at,
+       ranked.updated_at,
+       ranked.entity_id,
+       ranked.fts_rank,
+       ranked.route_specificity_score,
+       extract(epoch from ranked.updated_at)::double precision as recency_score
+     from ranked
+     ${cursorWhere.length > 0 ? `where ${cursorWhere.join('\n       and ')}` : ''}
+     order by ${orderBy}
      limit $1`,
     params,
   );

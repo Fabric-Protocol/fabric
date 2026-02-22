@@ -28,13 +28,14 @@ type RateLimitRule = { name: string; limit: number; windowSeconds: number; subje
 const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
 const searchBroadQueryState = new Map<string, number[]>();
 const SEARCH_CURSOR_PREFIX = 'pg1:';
+const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
 
 const resourceSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
   quantity: z.number().nullable().optional(), estimated_value: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
   scope_primary: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']).nullable().optional(), scope_secondary: z.array(z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER'])).nullable().optional(),
   scope_notes: z.string().nullable().optional(), location_text_public: z.string().nullable().optional(), origin_region: z.any().optional(), dest_region: z.any().optional(), service_region: z.any().optional(),
-  delivery_format: z.string().nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
+  delivery_format: z.string().nullable().optional(), max_ship_days: z.number().int().min(1).max(30).nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
 });
 const messagingHandleSchema = z.object({
   kind: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9._-]+$/),
@@ -927,6 +928,10 @@ function detectDisabledSearchFeatures(payload: any) {
 }
 
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
+  const invalidRegionId = (values: unknown) => {
+    if (!Array.isArray(values)) return false;
+    return values.some((value) => typeof value !== 'string' || !REGION_ID_REGEX.test(value.trim()));
+  };
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
     local_in_person: ['center', 'radius_miles', 'regions', 'category_ids_any'],
@@ -946,19 +951,27 @@ function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
     const hasCenter = !!(filters as any).center && typeof (filters as any).radius_miles === 'number';
     const hasRegions = Array.isArray((filters as any).regions) && (filters as any).regions.length > 0;
     const radius = (filters as any).radius_miles;
+    if (invalidRegionId((filters as any).regions)) return { ok: false, reason: 'region_id_invalid' };
     if (!hasCenter && !hasRegions) return { ok: false, reason: 'local_requires_center_or_regions' };
     if (radius !== undefined && (radius < 1 || radius > 200)) return { ok: false, reason: 'radius_out_of_range' };
   }
   if (scope === 'remote_online_service') {
     const hasRegions = Array.isArray((filters as any).regions) && (filters as any).regions.length > 0;
     const hasLanguages = Array.isArray((filters as any).languages) && (filters as any).languages.length > 0;
+    if (invalidRegionId((filters as any).regions)) return { ok: false, reason: 'region_id_invalid' };
     if (!hasRegions && !hasLanguages) return { ok: false, reason: 'remote_requires_regions_or_languages' };
   }
   if (scope === 'ship_to') {
     const shipTo = (filters as any).ship_to_regions;
+    if (invalidRegionId(shipTo) || invalidRegionId((filters as any).ships_from_regions)) {
+      return { ok: false, reason: 'region_id_invalid' };
+    }
     if (!Array.isArray(shipTo) || shipTo.length === 0) return { ok: false, reason: 'ship_to_regions_required' };
     const d = (filters as any).max_ship_days;
-    if (d !== undefined && (d < 1 || d > 30)) return { ok: false, reason: 'max_ship_days_out_of_range' };
+    if (d !== undefined && (!Number.isInteger(d) || d < 1 || d > 30)) return { ok: false, reason: 'max_ship_days_out_of_range' };
+  }
+  if (scope === 'digital_delivery') {
+    if (invalidRegionId((filters as any).regions)) return { ok: false, reason: 'region_id_invalid' };
   }
   if (scope === 'OTHER') {
     if (typeof (filters as any).scope_notes !== 'string' || !(filters as any).scope_notes) return { ok: false, reason: 'scope_notes_required' };
@@ -1535,7 +1548,13 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
-    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
+    if ((out as any).validationError) {
+      const reason = (out as any).validationError;
+      if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
+        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid search cursor', { reason }));
+      }
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
+    }
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
@@ -1554,7 +1573,13 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
-    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason: (out as any).validationError }));
+    if ((out as any).validationError) {
+      const reason = (out as any).validationError;
+      if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
+        return reply.status(400).send(errorEnvelope('validation_error', 'Invalid search cursor', { reason }));
+      }
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
+    }
     if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
@@ -1847,13 +1872,13 @@ export function buildApp() {
     if (kind === 'all' || kind === 'listings') {
       await query('truncate table public_listings');
       await query(`insert into public_listings(unit_id,node_id,doc,published_at)
-        select u.id,u.node_id,jsonb_build_object('id',u.id,'node_id',u.node_id,'scope_primary',u.scope_primary,'scope_secondary',u.scope_secondary,'title',u.title,'description',u.description,'public_summary',u.public_summary,'quantity',u.quantity,'measure',u.measure,'custom_measure',u.custom_measure,'category_ids',u.category_ids,'tags',u.tags,'type',u.type,'condition',u.condition,'location_text_public',u.location_text_public,'origin_region',u.origin_region,'dest_region',u.dest_region,'service_region',u.service_region,'delivery_format',u.delivery_format,'photos',u.photos,'published_at',u.published_at,'updated_at',u.updated_at),u.published_at
+        select u.id,u.node_id,jsonb_build_object('id',u.id,'node_id',u.node_id,'scope_primary',u.scope_primary,'scope_secondary',u.scope_secondary,'title',u.title,'description',u.description,'public_summary',u.public_summary,'quantity',u.quantity,'measure',u.measure,'custom_measure',u.custom_measure,'category_ids',u.category_ids,'tags',u.tags,'type',u.type,'condition',u.condition,'location_text_public',u.location_text_public,'origin_region',u.origin_region,'dest_region',u.dest_region,'service_region',u.service_region,'delivery_format',u.delivery_format,'max_ship_days',u.max_ship_days,'photos',u.photos,'published_at',u.published_at,'updated_at',u.updated_at),u.published_at
         from units u join nodes n on n.id=u.node_id where u.published_at is not null and u.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='listing' and t.target_id=u.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=u.node_id and t.reversed_at is null)`);
     }
     if (kind === 'all' || kind === 'requests') {
       await query('truncate table public_requests');
       await query(`insert into public_requests(request_id,node_id,doc,published_at)
-        select r.id,r.node_id,jsonb_build_object('id',r.id,'node_id',r.node_id,'scope_primary',r.scope_primary,'scope_secondary',r.scope_secondary,'title',r.title,'description',r.description,'public_summary',r.public_summary,'desired_quantity',r.desired_quantity,'measure',r.measure,'custom_measure',r.custom_measure,'category_ids',r.category_ids,'tags',r.tags,'type',r.type,'condition',r.condition,'location_text_public',r.location_text_public,'origin_region',r.origin_region,'dest_region',r.dest_region,'service_region',r.service_region,'delivery_format',r.delivery_format,'need_by',r.need_by,'accept_substitutions',r.accept_substitutions,'published_at',r.published_at,'updated_at',r.updated_at),r.published_at
+        select r.id,r.node_id,jsonb_build_object('id',r.id,'node_id',r.node_id,'scope_primary',r.scope_primary,'scope_secondary',r.scope_secondary,'title',r.title,'description',r.description,'public_summary',r.public_summary,'desired_quantity',r.desired_quantity,'measure',r.measure,'custom_measure',r.custom_measure,'category_ids',r.category_ids,'tags',r.tags,'type',r.type,'condition',r.condition,'location_text_public',r.location_text_public,'origin_region',r.origin_region,'dest_region',r.dest_region,'service_region',r.service_region,'delivery_format',r.delivery_format,'max_ship_days',r.max_ship_days,'need_by',r.need_by,'accept_substitutions',r.accept_substitutions,'published_at',r.published_at,'updated_at',r.updated_at),r.published_at
         from requests r join nodes n on n.id=r.node_id where r.published_at is not null and r.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='request' and t.target_id=r.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=r.node_id and t.reversed_at is null)`);
     }
     const listingsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_listings'))[0].c);

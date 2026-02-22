@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 
 delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
@@ -51,6 +52,12 @@ const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 const emailProvider = await import('../dist/src/services/emailProvider.js');
 const fabricService = await import('../dist/src/services/fabricService.js');
+
+const searchRankingMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-22__apply_search_ranking.sql', import.meta.url),
+  'utf8',
+);
+await query(searchRankingMigrationSql);
 
 async function bootstrap(
   app,
@@ -289,6 +296,11 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const searchFilters = body.components?.schemas?.SearchFilters ?? {};
   assert.equal(searchFilters.properties?.category_ids_any?.type, 'array');
   assert.equal(searchFilters.properties?.category_ids_any?.items?.type, 'integer');
+  assert.equal(searchFilters.properties?.regions?.items?.pattern, '^[A-Z]{2}(-[A-Z0-9]{1,3})?$');
+  assert.equal(searchFilters.properties?.ship_to_regions?.items?.pattern, '^[A-Z]{2}(-[A-Z0-9]{1,3})?$');
+  assert.equal(searchFilters.properties?.ships_from_regions?.items?.pattern, '^[A-Z]{2}(-[A-Z0-9]{1,3})?$');
+  assert.equal(Boolean(body.paths?.['/v1/search/listings']?.post?.responses?.['400']), true);
+  assert.equal(Boolean(body.paths?.['/v1/search/requests']?.post?.responses?.['400']), true);
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
@@ -3120,6 +3132,49 @@ test('metering only charges on HTTP 200 for search', async () => {
   await app.close();
 });
 
+test('search validates region IDs using canonical CC or CC-AA format', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-region-format');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_subscriber_region_format')).statusCode, 200);
+
+  const valid = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-format-valid' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['US', 'US-CA'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(valid.statusCode, 200);
+
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-format-invalid' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['us-ca'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(invalid.statusCode, 422);
+  assert.equal(invalid.json().error.code, 'validation_error');
+  assert.equal(invalid.json().error.details.reason, 'region_id_invalid');
+  await app.close();
+});
+
 test('search returns credits_exhausted for subscriber with insufficient credits', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-insufficient');
@@ -3548,6 +3603,136 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.match(page6.json().budget.guidance, /pages/i);
   const afterPage6Balance = await repo.creditBalance(searcherNodeId);
   assert.equal(afterPage6Balance, beforePage6Balance);
+  await app.close();
+});
+
+test('search keyset cursor returns disjoint pages and rejects query-shape mismatch', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-search-keyset-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_keyset')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-search-keyset-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `keyset-${TEST_RUN_SUFFIX}-${searcherNodeId.slice(0, 6)}`;
+
+  for (let i = 0; i < 3; i += 1) {
+    const unit = await repo.createResource('units', targetNodeId, {
+      ...unitPayload(`Keyset token item ${i}`, scopeNotes),
+      category_ids: [1200 + i],
+      public_summary: `Keyset token summary ${i}`,
+    });
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+  }
+
+  const payloadBase = {
+    q: 'keyset token',
+    scope: 'OTHER',
+    filters: { scope_notes: scopeNotes },
+    broadening: { level: 0, allow: false },
+    budget: { credits_requested: 200 },
+    target: { node_id: targetNodeId },
+    limit: 1,
+  };
+
+  const page1 = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-keyset-page-1' },
+    payload: { ...payloadBase, cursor: null },
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(page1.json().items.length, 1);
+  assert.equal(typeof page1.json().cursor, 'string');
+  assert.equal(page1.json().items[0].rank.sort_keys.fts_rank > 0, true);
+
+  const page2 = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-keyset-page-2' },
+    payload: { ...payloadBase, cursor: page1.json().cursor },
+  });
+  assert.equal(page2.statusCode, 200);
+  assert.equal(page2.json().items.length, 1);
+  assert.notEqual(page2.json().items[0].item.id, page1.json().items[0].item.id);
+
+  const mismatch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-keyset-mismatch' },
+    payload: {
+      ...payloadBase,
+      filters: { scope_notes: `${scopeNotes}-changed` },
+      cursor: page1.json().cursor,
+    },
+  });
+  assert.equal(mismatch.statusCode, 400);
+  assert.equal(mismatch.json().error.code, 'validation_error');
+  assert.equal(mismatch.json().error.details.reason, 'cursor_mismatch');
+  await app.close();
+});
+
+test('ship_to search applies route specificity scoring and max_ship_days filtering', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-search-shipto-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_shipto')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-search-shipto-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `shipto-${TEST_RUN_SUFFIX}-${searcherNodeId.slice(0, 6)}`;
+
+  const buildShipToPayload = (title, originAdmin1, destAdmin1, maxShipDays) => ({
+    ...unitPayload(title, scopeNotes),
+    scope_primary: 'ship_to',
+    scope_secondary: [],
+    origin_region: { country_code: 'US', admin1: originAdmin1 },
+    dest_region: { country_code: 'US', admin1: destAdmin1 },
+    max_ship_days: maxShipDays,
+    public_summary: `${title} ship route token`,
+    tags: ['ship-route-token'],
+  });
+
+  const specific = await repo.createResource('units', targetNodeId, buildShipToPayload('Ship route token specific', 'CA', 'CA', 3));
+  const countryOnly = await repo.createResource('units', targetNodeId, buildShipToPayload('Ship route token country', 'NY', 'TX', 4));
+  const tooSlow = await repo.createResource('units', targetNodeId, buildShipToPayload('Ship route token too slow', 'CA', 'CA', 10));
+
+  for (const unit of [specific, countryOnly, tooSlow]) {
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+  }
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-shipto-specificity' },
+    payload: {
+      q: 'ship route token',
+      scope: 'ship_to',
+      filters: {
+        ship_to_regions: ['US-CA', 'US'],
+        ships_from_regions: ['US-CA', 'US'],
+        max_ship_days: 5,
+      },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: 200 },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.items.length >= 2, true);
+  assert.equal(body.items.some((row) => row.item.id === specific.id), true);
+  assert.equal(body.items.some((row) => row.item.id === countryOnly.id), true);
+  assert.equal(body.items.some((row) => row.item.id === tooSlow.id), false);
+  assert.equal(body.items.every((row) => Number(row.item.max_ship_days) <= 5), true);
+  assert.equal(body.items[0].item.id, specific.id);
+  assert.equal(body.items[0].rank.sort_keys.route_specificity_score > body.items[1].rank.sort_keys.route_specificity_score, true);
   await app.close();
 });
 
@@ -4048,6 +4233,58 @@ test('unit estimated_value appears in unit detail and public listing search surf
   const found = search.json().items.find((row) => row.item?.id === unitId);
   assert.equal(Boolean(found), true);
   assert.equal(Number(found.item.estimated_value), 1234.5);
+  await app.close();
+});
+
+test('max_ship_days persists on units and requests', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-max-ship-owner');
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+  const scopeNotes = `max-ship-${TEST_RUN_SUFFIX}-${ownerBoot.json().node.id.slice(0, 6)}`;
+
+  const createUnit = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'max-ship-unit-create' },
+    payload: {
+      ...unitPayload('Max ship unit', scopeNotes),
+      scope_primary: 'ship_to',
+      origin_region: { country_code: 'US', admin1: 'CA' },
+      dest_region: { country_code: 'US', admin1: 'CA' },
+      max_ship_days: 4,
+    },
+  });
+  assert.equal(createUnit.statusCode, 200);
+
+  const unitDetail = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${createUnit.json().unit.id}`,
+    headers: { authorization: `ApiKey ${ownerApiKey}` },
+  });
+  assert.equal(unitDetail.statusCode, 200);
+  assert.equal(unitDetail.json().max_ship_days, 4);
+
+  const createRequest = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'max-ship-request-create' },
+    payload: {
+      ...unitPayload('Max ship request', scopeNotes),
+      scope_primary: 'ship_to',
+      origin_region: { country_code: 'US', admin1: 'CA' },
+      dest_region: { country_code: 'US', admin1: 'NV' },
+      max_ship_days: 6,
+    },
+  });
+  assert.equal(createRequest.statusCode, 200);
+
+  const requestDetail = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${createRequest.json().request.id}`,
+    headers: { authorization: `ApiKey ${ownerApiKey}` },
+  });
+  assert.equal(requestDetail.statusCode, 200);
+  assert.equal(requestDetail.json().max_ship_days, 6);
   await app.close();
 });
 
