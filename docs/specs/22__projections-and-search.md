@@ -94,14 +94,14 @@ Hard prohibitions:
 
 ---
 
-## 4) Search (two endpoints, metered, entitled-spender-only)
+## 4) Search (two endpoints, metered)
 
 - Search is split by intent:
   - `POST /v1/search/listings`
   - `POST /v1/search/requests`
 - Search is:
   - authenticated
-  - entitled-spender-only (`active subscription` OR `active trial`)
+  - available to ACTIVE, not-suspended authenticated nodes
   - credit-metered
   - cursor-paginated
 
@@ -119,6 +119,8 @@ Hard prohibitions:
   "limit": 20,
   "cursor": "string|null"
 }
+
+`broadening` is optional/deprecated; omitted or null defaults to `{ "level": 0, "allow": false }`.
 
 `cursor` is an opaque keyset token and must be reused only with the same query shape (`scope`, `q`, `filters`, `target`).
 4.2 Filters by scope (validated; unknown keys rejected)
@@ -344,7 +346,7 @@ Phase 0.5 go-live lock (normative):
 - Semantic/vector retrieval is disabled for search.
 - Query expansion, synonym expansion, and lexical override inputs are disabled for search.
 
-7) Broadening (paid, explicit, auditable)
+7) Broadening (deprecated, explicit, auditable)
 Broadening fields:
 
 json
@@ -354,13 +356,11 @@ Rules:
 
 Defaults are narrow; broadening expands deterministically.
 
-Broadening increases per-page cost (linear per-page pricing):
-
-cost_per_page = base_page_cost + active_broadening_adders
+Broadening no longer increases credit cost in MVP.
 
 Broadening level MUST be recorded in search logs.
 
-Broadening cost adders MUST be reflected in budget.breakdown.broadening_cost.
+`budget.breakdown.broadening_cost` MUST remain `0`.
 
 Pagination add-on policy:
 
@@ -374,10 +374,10 @@ Target-constrained pricing policy:
 - If `target` resolves to a node, search uses low-cost base pricing for this call.
 - `budget.breakdown.base_search_cost` MUST reflect `SEARCH_TARGET_CREDIT_COST` for target-constrained calls and `SEARCH_CREDIT_COST` otherwise.
 
-If budget.credits_requested prevents executing requested broadening/page, return partial results within budget with:
+If budget.credits_requested prevents executing requested page, return partial results within budget with:
 
 - budget.was_capped=true
-- budget.guidance describing how to increase budget or reduce broadening/limit.
+- budget.guidance describing how to increase budget or reduce limit.
 
 8) Node “inventory expansion” (metered)
 Endpoints:
@@ -388,7 +388,7 @@ GET /v1/public/nodes/{node_id}/requests
 
 Rules:
 
-entitled-spender-only (`active subscription` OR `active trial`)
+authenticated ACTIVE, not-suspended node
 
 credit-metered
 
@@ -417,7 +417,7 @@ GET /v1/public/nodes/{node_id}/requests/categories/{category_id}
 
 Rules:
 
-- Same auth/entitlement requirements as node inventory expansion.
+- Same auth/node-state requirements as node inventory expansion.
 - Cursor-paginated.
 - Filtered to a single numeric `category_id`.
 - Debits a low fixed per-call charge (`nodeCategoryDrilldownCost`).

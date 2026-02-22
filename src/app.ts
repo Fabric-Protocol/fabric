@@ -14,7 +14,6 @@ type AuthedRequest = FastifyRequest & {
   nodeId?: string;
   plan?: string;
   isSubscriber?: boolean;
-  hasSpendEntitlement?: boolean;
   idem?: { key: string; hash: string; keyScope: string };
 };
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
@@ -42,12 +41,15 @@ const messagingHandleSchema = z.object({
   handle: z.string().trim().min(1).max(128),
   url: z.string().trim().url().max(2048).nullable().optional(),
 });
+const broadeningSchema = z.object({ level: z.number().int().min(0), allow: z.boolean() })
+  .nullish()
+  .transform((value) => value ?? { level: 0, allow: false });
 
 const searchSchema = z.object({
   q: z.string().nullable(),
   scope: z.enum(['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER']),
   filters: z.record(z.any()),
-  broadening: z.object({ level: z.number().int().min(0), allow: z.boolean() }),
+  broadening: broadeningSchema,
   budget: z.object({ credits_requested: z.number().int().min(0) }),
   target: z.object({
     node_id: z.string().uuid().nullable().optional(),
@@ -1095,7 +1097,6 @@ export function buildApp() {
     (req as AuthedRequest).nodeId = found.node_id;
     (req as AuthedRequest).plan = found.plan_code;
     (req as AuthedRequest).isSubscriber = isSubscriber;
-    (req as AuthedRequest).hasSpendEntitlement = isSubscriber || found.has_active_trial;
     reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
     reply.header('X-Credits-Remaining', String(await repo.creditBalance(found.node_id)));
 
@@ -1547,7 +1548,7 @@ export function buildApp() {
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1555,7 +1556,6 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1572,7 +1572,7 @@ export function buildApp() {
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, parsed.data, (req as AuthedRequest).idem!.key);
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', parsed.data, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1580,22 +1580,19 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
 
   app.get('/v1/public/nodes/:node_id/listings', async (req, reply) => {
     const q = req.query as any;
-    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', !!(req as AuthedRequest).hasSpendEntitlement, Number(q.limit ?? 20), q.cursor ?? null);
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
   app.get('/v1/public/nodes/:node_id/requests', async (req, reply) => {
     const q = req.query as any;
-    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', !!(req as AuthedRequest).hasSpendEntitlement, Number(q.limit ?? 20), q.cursor ?? null);
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
+    const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1614,11 +1611,9 @@ export function buildApp() {
       (req.params as any).node_id,
       'listings',
       categoryId,
-      !!(req as AuthedRequest).hasSpendEntitlement,
       limit,
       q.cursor ?? null,
     );
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1637,11 +1632,9 @@ export function buildApp() {
       (req.params as any).node_id,
       'requests',
       categoryId,
-      !!(req as AuthedRequest).hasSpendEntitlement,
       limit,
       q.cursor ?? null,
     );
-    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('subscriber_required', 'Subscriber required'));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });

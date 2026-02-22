@@ -289,7 +289,7 @@ export const openApiDocument = {
           '400': { description: 'Invalid search cursor' },
           '401': { description: 'Unauthorized' },
           '402': { description: 'Credits exhausted' },
-          '403': { description: 'Subscriber required' },
+          '403': { description: 'Forbidden' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
         },
@@ -313,7 +313,7 @@ export const openApiDocument = {
           '400': { description: 'Invalid search cursor' },
           '401': { description: 'Unauthorized' },
           '402': { description: 'Credits exhausted' },
-          '403': { description: 'Subscriber required' },
+          '403': { description: 'Forbidden' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
         },
@@ -564,6 +564,8 @@ export const openApiDocument = {
           filters: { $ref: '#/components/schemas/SearchFilters' },
           broadening: {
             type: 'object',
+            nullable: true,
+            description: 'Deprecated. Optional; omitted or null defaults to { level: 0, allow: false }.',
             properties: {
               level: { type: 'integer', minimum: 0 },
               allow: { type: 'boolean' },
@@ -581,7 +583,7 @@ export const openApiDocument = {
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
           cursor: { type: 'string', nullable: true },
         },
-        required: ['q', 'scope', 'filters', 'broadening', 'budget', 'limit', 'cursor'],
+        required: ['q', 'scope', 'filters', 'budget', 'limit', 'cursor'],
       },
       SearchQuoteRequest: {
         type: 'object',
@@ -591,6 +593,8 @@ export const openApiDocument = {
           filters: { $ref: '#/components/schemas/SearchFilters' },
           broadening: {
             type: 'object',
+            nullable: true,
+            description: 'Deprecated. Optional; omitted or null defaults to { level: 0, allow: false }.',
             properties: {
               level: { type: 'integer', minimum: 0 },
               allow: { type: 'boolean' },
@@ -600,7 +604,7 @@ export const openApiDocument = {
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
           cursor: { type: 'string', nullable: true },
         },
-        required: ['q', 'scope', 'filters', 'broadening', 'limit', 'cursor'],
+        required: ['q', 'scope', 'filters', 'limit', 'cursor'],
       },
       OfferCreateRequest: {
         type: 'object',

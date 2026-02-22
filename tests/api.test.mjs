@@ -301,6 +301,12 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(searchFilters.properties?.ships_from_regions?.items?.pattern, '^[A-Z]{2}(-[A-Z0-9]{1,3})?$');
   assert.equal(Boolean(body.paths?.['/v1/search/listings']?.post?.responses?.['400']), true);
   assert.equal(Boolean(body.paths?.['/v1/search/requests']?.post?.responses?.['400']), true);
+  assert.equal(body.paths?.['/v1/search/listings']?.post?.responses?.['403']?.description, 'Forbidden');
+  assert.equal(body.paths?.['/v1/search/requests']?.post?.responses?.['403']?.description, 'Forbidden');
+  const searchRequestRequired = body.components?.schemas?.SearchRequest?.required ?? [];
+  const searchQuoteRequestRequired = body.components?.schemas?.SearchQuoteRequest?.required ?? [];
+  assert.equal(searchRequestRequired.includes('broadening'), false);
+  assert.equal(searchQuoteRequestRequired.includes('broadening'), false);
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
@@ -939,7 +945,7 @@ test('publish endpoint rejects suspended node before projection write', async ()
   await app.close();
 });
 
-test('search remains subscriber-gated while offer progression (create/counter/accept/reveal) is available without subscriber status', async () => {
+test('search is credits-gated (not subscriber-gated) while offer progression (create/counter/accept/reveal) is available without subscriber status', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-no-sub-seller', {
     display_name: 'Offer No Sub Seller',
@@ -960,10 +966,12 @@ test('search remains subscriber-gated while offer progression (create/counter/ac
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-1' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
-  assert.equal(search.statusCode, 403);
-  assert.equal(search.json().error.code, 'subscriber_required');
+  assert.equal(search.statusCode, 200);
+  assert.equal(search.json().broadening.level, 0);
+  assert.equal(search.json().broadening.allow, false);
+  assert.equal(search.json().budget.breakdown.broadening_cost, 0);
 
   const sellerUnit = await repo.createResource('units', sellerNodeId, unitPayload('No-sub offer unit', 'no-sub-offer-scope'));
   const created = await app.inject({
@@ -2033,7 +2041,7 @@ test('unit upload threshold grants one trial entitlement and one credit grant', 
   await app.close();
 });
 
-test('active upload trial allows metered search, then expiry blocks spend until subscribed', async () => {
+test('active upload trial allows metered search, and expiry no longer blocks credits-based search', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-upload-trial-expiry');
   const nodeId = b.json().node.id;
@@ -2065,28 +2073,16 @@ test('active upload trial allows metered search, then expiry blocks spend until 
     [nodeId],
   );
 
-  const balanceBeforeDenied = await repo.creditBalance(nodeId);
+  const balanceBeforeExpiredSearch = await repo.creditBalance(nodeId);
   const expiredSearch = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-expired' },
     payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
   });
-  assert.equal(expiredSearch.statusCode, 403);
-  assert.equal(expiredSearch.json().error.code, 'subscriber_required');
-  const balanceAfterDenied = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterDenied, balanceBeforeDenied);
-
-  const activated = await activateBasicSubscriber(app, nodeId, 'evt_trial_to_sub');
-  assert.equal(activated.statusCode, 200);
-
-  const subscribedSearch = await app.inject({
-    method: 'POST',
-    url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-subscriber' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
-  });
-  assert.equal(subscribedSearch.statusCode, 200);
+  assert.equal(expiredSearch.statusCode, 200);
+  const balanceAfterExpiredSearch = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterExpiredSearch < balanceBeforeExpiredSearch, true);
   await app.close();
 });
 
@@ -2165,7 +2161,7 @@ test('POST /v1/credits/quote is idempotent and does not mutate balance', async (
     payload,
   });
   assert.equal(first.statusCode, 200);
-  assert.equal(first.json().search_quote.estimated_cost, 4);
+  assert.equal(first.json().search_quote.estimated_cost, 2);
   assert.equal(first.json().affordability.can_afford_estimate, true);
 
   const replay = await app.inject({
@@ -3546,7 +3542,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page1.statusCode, 200);
   assert.equal(page1.json().budget.breakdown.page_index, 1);
   assert.equal(page1.json().budget.breakdown.page_cost, 0);
-  assert.equal(page1.json().budget.credits_charged, config.searchTargetCreditCost + 1);
+  assert.equal(page1.json().budget.credits_charged, config.searchTargetCreditCost);
 
   const page2 = await app.inject({
     method: 'POST',
@@ -3557,7 +3553,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page2.statusCode, 200);
   assert.equal(page2.json().budget.breakdown.page_index, 2);
   assert.equal(page2.json().budget.breakdown.page_cost, config.searchPageAddOnSmall);
-  assert.equal(page2.json().budget.credits_charged, config.searchTargetCreditCost + 1 + config.searchPageAddOnSmall);
+  assert.equal(page2.json().budget.credits_charged, config.searchTargetCreditCost + config.searchPageAddOnSmall);
 
   const page3 = await app.inject({
     method: 'POST',
@@ -3576,7 +3572,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page4.statusCode, 200);
   assert.equal(page4.json().budget.breakdown.page_index, 4);
   assert.equal(page4.json().budget.breakdown.page_cost, config.searchPageAddOnLarge);
-  assert.equal(page4.json().budget.credits_charged, config.searchTargetCreditCost + 1 + config.searchPageAddOnLarge);
+  assert.equal(page4.json().budget.credits_charged, config.searchTargetCreditCost + config.searchPageAddOnLarge);
 
   const page5 = await app.inject({
     method: 'POST',
@@ -3587,7 +3583,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page5.statusCode, 200);
 
   const beforePage6Balance = await repo.creditBalance(searcherNodeId);
-  const modestBudget = config.searchTargetCreditCost + 1;
+  const modestBudget = config.searchTargetCreditCost;
   const page6 = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',

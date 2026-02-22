@@ -17,7 +17,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Gating**: spend-gated endpoints allow active subscription OR active trial entitlement; offer lifecycle endpoints require legal assent + auth + rate-limit controls (not subscriber-only).
+- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits; offer lifecycle endpoints require legal assent + auth + rate-limit controls (not subscriber-only).
 
 ---
 
@@ -663,7 +663,6 @@ Request
   "q": "string|null",
   "scope": "local_in_person|remote_online_service|ship_to|digital_delivery|OTHER",
   "filters": {},
-  "broadening": { "level": 0, "allow": false },
   "limit": 20,
   "cursor": "string|null"
 }
@@ -674,7 +673,8 @@ Same shape as `GET /v1/credits/quote`, but `search_quote` is computed from reque
 
 Rules
 
-- `estimated_cost = SEARCH_CREDIT_COST + broadening.level`
+- `estimated_cost = SEARCH_CREDIT_COST` (broadening is deprecated and currently contributes 0 credits)
+- `broadening` is optional/deprecated; omitted or null defaults to `{ "level": 0, "allow": false }`.
 - Quote endpoints do not execute search and do not mutate credits ledger.
 - `POST /v1/credits/quote` uses normal idempotency replay/conflict semantics.
 
@@ -1050,16 +1050,16 @@ Response 200
 
 8) Search (metered) — TWO ENDPOINTS (LOCKED)
 
-Search is entitled-spender-only (`active subscription` OR `active trial`) + metered and requires Idempotency-Key.
+Search is authenticated + metered and requires Idempotency-Key. Access is allowed for ACTIVE, not-suspended nodes with sufficient credits.
 
 POST /v1/search/listings
 Auth
 
 Required
 
-Entitled spender-only
+Node state
 
-Yes (active subscription OR active trial; otherwise 403 subscriber_required)
+ACTIVE and not suspended (otherwise 403 forbidden)
 
 Idempotency-Key
 
@@ -1086,6 +1086,8 @@ Request (locked)
   "limit": 20,
   "cursor": "string|null"
 }
+
+`broadening` is optional/deprecated; omitted or null defaults to `{ "level": 0, "allow": false }`.
 
 Filters schemas (validated by scope)
 
@@ -1186,7 +1188,7 @@ Errors
 
 400 validation_error (invalid_cursor or cursor_mismatch for query-shape/keyset mismatch)
 
-403 subscriber_required
+403 forbidden (revoked API key or suspended/non-ACTIVE node)
 
 402 credits_exhausted
 
@@ -1208,6 +1210,8 @@ Request (locked)
   "cursor": "string|null"
 }
 
+`broadening` is optional/deprecated; omitted or null defaults to `{ "level": 0, "allow": false }`.
+
 Validation and budgeting rules are identical to /v1/search/listings (including low-cost target-constrained base pricing).
 
 Response 200
@@ -1219,7 +1223,7 @@ Errors
 
 400 validation_error (invalid_cursor or cursor_mismatch for query-shape/keyset mismatch)
 
-403 subscriber_required
+403 forbidden (revoked API key or suspended/non-ACTIVE node)
 
 402 credits_exhausted
 
@@ -1227,16 +1231,16 @@ Errors
 
 9) Node “inventory expansion” after a hit (metered)
 
-These are metered reads (credit spend), entitled-spender-only (subscription or active trial), and require Idempotency-Key.
+These are metered reads (credit spend) for authenticated ACTIVE, not-suspended nodes and require Idempotency-Key.
 
 GET /v1/public/nodes/{node_id}/listings
 Auth
 
 Required
 
-Entitled spender-only
+Node state
 
-Yes (active subscription OR active trial)
+ACTIVE and not suspended
 
 Idempotency-Key
 
@@ -1268,9 +1272,9 @@ Auth
 
 Required
 
-Entitled spender-only
+Node state
 
-Yes (active subscription OR active trial)
+ACTIVE and not suspended
 
 Idempotency-Key
 

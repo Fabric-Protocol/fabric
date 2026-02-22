@@ -328,7 +328,7 @@ export const fabricService = {
     }
 
     const level = Number(quotePayload?.broadening?.level ?? 0);
-    const estimatedCost = config.searchCreditCost + level;
+    const estimatedCost = config.searchCreditCost;
     const balance = await repo.creditBalance(nodeId);
     const me = await repo.getMe(nodeId);
 
@@ -344,7 +344,7 @@ export const fabricService = {
         breakdown: {
           base_search_cost: config.searchCreditCost,
           broadening_level: level,
-          broadening_cost: level,
+          broadening_cost: 0,
         },
       },
       affordability: {
@@ -400,8 +400,7 @@ export const fabricService = {
     return kind === 'units' ? { projection: { kind: 'listing', source_unit_id: id, published_at: new Date().toISOString() } } : { projection: { kind: 'request', source_request_id: id, published_at: new Date().toISOString() } };
   },
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
-  async search(nodeId: string, kind: 'listings' | 'requests', hasSpendEntitlement: boolean, body: any, idemKey: string) {
-    if (!hasSpendEntitlement) return { forbidden: true };
+  async search(nodeId: string, kind: 'listings' | 'requests', body: any, idemKey: string) {
     const targetResolution = await resolveSearchTargetNode(body.target ?? null);
     if (targetResolution.validationError) return { validationError: targetResolution.validationError };
     const targetNodeId = targetResolution.targetNodeId;
@@ -410,7 +409,7 @@ export const fabricService = {
     if (parsedCursor.validationError) return { validationError: parsedCursor.validationError };
     const baseSearchCost = targetNodeId ? config.searchTargetCreditCost : config.searchCreditCost;
     const broadeningLevel = Number(body?.broadening?.level ?? 0);
-    const broadeningCost = broadeningLevel;
+    const broadeningCost = 0;
     const pageIndex = parsedCursor.pageIndex;
     const pageCost = pageAddOnCost(pageIndex);
     const totalCost = baseSearchCost + broadeningCost + pageCost;
@@ -460,7 +459,7 @@ export const fabricService = {
       : null;
     const cappedGuidance = pageIndex >= config.searchPageProhibitiveFrom
       ? `Increase budget.credits_requested, reduce paging depth, or restart with narrower filters; pages ${config.searchPageProhibitiveFrom}+ are restricted.`
-      : 'Increase budget.credits_requested or lower broadening.level/limit and retry.';
+      : 'Increase budget.credits_requested or lower limit and retry.';
     const items = rows.map((r) => ({
       item: r.doc,
       rank: {
@@ -527,8 +526,7 @@ export const fabricService = {
       has_more: hasMore,
     };
   },
-  async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', hasSpendEntitlement: boolean, limit: number, cursor: string | null) {
-    if (!hasSpendEntitlement) return { forbidden: true };
+  async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', limit: number, cursor: string | null) {
     const cost = config.searchCreditCost;
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
@@ -543,11 +541,9 @@ export const fabricService = {
     targetNodeId: string,
     kind: 'listings' | 'requests',
     categoryId: number,
-    hasSpendEntitlement: boolean,
     limit: number,
     cursor: string | null,
   ) {
-    if (!hasSpendEntitlement) return { forbidden: true };
     const cost = config.nodeCategoryDrilldownCost;
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
