@@ -61,9 +61,13 @@ PATCH on mutable resources requires `If-Match: <version>` and rejects stale writ
 ```json
 { "error": { "code": "STRING_CODE", "message": "human readable", "details": {} } }
 3) Quickstart checklist (30 minutes)
+Discover required legal version + capabilities
+
+GET /v1/meta → read `required_legal_version`; use it in the bootstrap payload below.
+
 Create your Node + first API key
 
-POST /v1/bootstrap
+POST /v1/bootstrap (supply `legal.version` from `GET /v1/meta`; never hardcode a date)
 
 Verify node profile + credits
 

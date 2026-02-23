@@ -415,19 +415,32 @@ export const fabricService = {
     const parsedCursor = decodeSearchCursor(body?.cursor ?? null, body?.scope, cursorFingerprint);
     if (parsedCursor.validationError) return { validationError: parsedCursor.validationError };
     const baseSearchCost = targetNodeId ? config.searchTargetCreditCost : config.searchCreditCost;
-    const broadeningLevel = Number(body?.broadening?.level ?? 0);
     const broadeningCost = 0;
     const pageIndex = parsedCursor.pageIndex;
     const pageCost = pageAddOnCost(pageIndex);
     const totalCost = baseSearchCost + broadeningCost + pageCost;
-    const creditsRequested = Number(body?.budget?.credits_requested ?? 0);
+    const creditsMax = Number(body?.budget?.credits_max ?? 0);
     const limit = body.limit ?? 20;
+
+    if (totalCost > creditsMax) {
+      return {
+        budgetCapExceeded: {
+          needed: totalCost,
+          max: creditsMax,
+          breakdown: {
+            base_search_cost: baseSearchCost,
+            broadening_cost: broadeningCost,
+            page_index: pageIndex,
+            page_cost: pageCost,
+            geo_addon: 0,
+          },
+        },
+      };
+    }
 
     const balance = await repo.creditBalance(nodeId);
     if (balance < totalCost) return { creditsExhausted: { credits_required: totalCost, credits_balance: balance } };
 
-    const isCapped = totalCost > creditsRequested;
-    const effectiveLimit = isCapped ? 0 : limit;
     const categoryIdsAny = Array.isArray(body?.filters?.category_ids_any)
       ? body.filters.category_ids_any.filter((value: unknown) => Number.isInteger(value))
       : [];
@@ -436,20 +449,18 @@ export const fabricService = {
       body.scope,
       body?.q ?? null,
       body?.filters ?? {},
-      effectiveLimit,
+      limit,
       parsedCursor.after,
       nodeId,
       targetNodeId,
       categoryIdsAny,
     );
-    const creditsCharged = isCapped ? 0 : totalCost;
+    const creditsCharged = totalCost;
 
-    if (creditsCharged > 0) {
-      await repo.addCredit(nodeId, pageIndex > 1 ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
-    }
-    await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, broadeningLevel, creditsCharged);
+    await repo.addCredit(nodeId, pageIndex > 1 ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
+    await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, 0, creditsCharged);
 
-    const hasMore = effectiveLimit > 0 && rows.length === effectiveLimit;
+    const hasMore = rows.length === limit;
     const lastRow = rows[rows.length - 1];
     const nextCursor = hasMore
       ? encodeSearchCursor(
@@ -464,9 +475,6 @@ export const fabricService = {
           cursorFingerprint,
         )
       : null;
-    const cappedGuidance = pageIndex >= config.searchPageProhibitiveFrom
-      ? `Increase budget.credits_requested, reduce paging depth, or restart with narrower filters; pages ${config.searchPageProhibitiveFrom}+ are restricted.`
-      : 'Increase budget.credits_requested or lower limit and retry.';
     const items = rows.map((r) => ({
       item: r.doc,
       rank: {
@@ -501,32 +509,16 @@ export const fabricService = {
       scope: body.scope,
       limit,
       cursor: nextCursor,
-      broadening: body.broadening ?? { level: 0, allow: false },
       applied_filters: body.filters ?? {},
       budget: {
-        credits_requested: creditsRequested,
         credits_charged: creditsCharged,
         breakdown: {
           base_search_cost: baseSearchCost,
-          broadening_level: broadeningLevel,
           broadening_cost: broadeningCost,
           page_index: pageIndex,
           page_cost: pageCost,
-          base_cost: baseSearchCost,
-          pagination_addons: pageCost,
           geo_addon: 0,
         },
-        coverage: {
-          page_index_executed: pageIndex,
-          broadening_level_executed: broadeningLevel,
-          items_returned: items.length,
-          executed_page_index: pageIndex,
-          executed_broadening_level: broadeningLevel,
-          returned_count: items.length,
-        },
-        was_capped: isCapped,
-        cap_reason: isCapped ? 'insufficient_budget' : null,
-        guidance: isCapped ? cappedGuidance : null,
       },
       items,
       nodes: summarizeSearchNodes(rows),
@@ -550,14 +542,33 @@ export const fabricService = {
     categoryId: number,
     limit: number,
     cursor: string | null,
+    creditsMax?: number,
   ) {
-    const cost = config.nodeCategoryDrilldownCost;
+    const { publishedAt, pageIndex } = decodeDrilldownCursor(cursor);
+    const cost = drilldownPageCost(pageIndex);
+
+    if (creditsMax !== undefined && cost > creditsMax) {
+      return {
+        budgetCapExceeded: {
+          needed: cost,
+          max: creditsMax,
+          breakdown: { page_index: pageIndex, page_cost: cost },
+        },
+      };
+    }
+
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
-    const rows = await repo.listNodePublicByCategory(targetNodeId, kind, categoryId, limit, cursor);
-    await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}_category`, category_id: categoryId }, null);
+    const rows = await repo.listNodePublicByCategory(targetNodeId, kind, categoryId, limit, publishedAt);
+    await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}_category`, category_id: categoryId, page_index: pageIndex }, null);
     const hasMore = rows.length === limit;
-    const nextCursor = hasMore ? rows[rows.length - 1]?.published_at ?? null : null;
+    const rawPublishedAt = rows[rows.length - 1]?.published_at ?? null;
+    const lastPublishedAtIso = rawPublishedAt instanceof Date
+      ? rawPublishedAt.toISOString()
+      : typeof rawPublishedAt === 'string'
+        ? rawPublishedAt
+        : null;
+    const nextCursor = hasMore && lastPublishedAtIso ? encodeDrilldownCursor(lastPublishedAtIso, pageIndex + 1) : null;
     return {
       node_id: targetNodeId,
       category_id: categoryId,
@@ -565,7 +576,29 @@ export const fabricService = {
       cursor: nextCursor,
       items: rows.map((r) => r.doc),
       has_more: hasMore,
+      budget: {
+        credits_charged: cost,
+        breakdown: { page_index: pageIndex, page_cost: cost },
+      },
     };
+  },
+  async nodePublicCategoriesSummary(_nodeId: string, nodeIds: string[], kind: 'listings' | 'requests' | 'both') {
+    const rows = await repo.listNodeCategorySummary(nodeIds, kind);
+    const summaries: Record<string, { listings?: Array<{ category_id: number; count: number }>; requests?: Array<{ category_id: number; count: number }> }> = {};
+    for (const nid of nodeIds) {
+      summaries[nid] = {};
+      if (kind === 'listings' || kind === 'both') summaries[nid].listings = [];
+      if (kind === 'requests' || kind === 'both') summaries[nid].requests = [];
+    }
+    for (const row of rows) {
+      if (!summaries[row.node_id]) summaries[row.node_id] = {};
+      if (row.kind === 'listings') {
+        (summaries[row.node_id].listings ??= []).push({ category_id: row.category_id, count: row.count });
+      } else {
+        (summaries[row.node_id].requests ??= []).push({ category_id: row.category_id, count: row.count });
+      }
+    }
+    return { summaries };
   },
   async listEvents(nodeId: string, sinceCursor: string | null, limit: number) {
     const decoded = decodeEventCursor(sinceCursor);
@@ -1009,8 +1042,35 @@ function encodeSearchCursor(
 
 function pageAddOnCost(pageIndex: number) {
   if (pageIndex <= 1) return 0;
-  if (pageIndex >= 6) return 100;
+  if (pageIndex >= config.searchPageProhibitiveFrom) return config.searchPageProhibitiveCost;
   return pageIndex;
+}
+
+const DRILLDOWN_CURSOR_PREFIX = 'dd1:';
+
+function encodeDrilldownCursor(publishedAt: string, nextPage: number): string {
+  return `${DRILLDOWN_CURSOR_PREFIX}${Buffer.from(JSON.stringify({ pa: publishedAt, p: nextPage }), 'utf8').toString('base64url')}`;
+}
+
+function decodeDrilldownCursor(cursor: string | null): { publishedAt: string | null; pageIndex: number } {
+  if (!cursor) return { publishedAt: null, pageIndex: 1 };
+  if (cursor.startsWith(DRILLDOWN_CURSOR_PREFIX)) {
+    try {
+      const parsed = JSON.parse(Buffer.from(cursor.slice(DRILLDOWN_CURSOR_PREFIX.length), 'base64url').toString('utf8'));
+      if (typeof parsed.pa === 'string' && Number.isInteger(parsed.p) && parsed.p >= 2) {
+        return { publishedAt: parsed.pa, pageIndex: parsed.p };
+      }
+    } catch { /* fall through */ }
+    return { publishedAt: null, pageIndex: 1 };
+  }
+  // Legacy: treat raw string as published_at (page 2 for continuity)
+  return { publishedAt: cursor, pageIndex: 2 };
+}
+
+function drilldownPageCost(pageIndex: number): number {
+  return pageIndex < config.drilldownHighCostPageFrom
+    ? config.nodeCategoryDrilldownCost
+    : config.nodeCategoryDrilldownHighCost;
 }
 
 async function resolveSearchTargetNode(rawTarget: any): Promise<{ targetNodeId: string | null; validationError?: 'target_mismatch' | 'target_not_found' }> {

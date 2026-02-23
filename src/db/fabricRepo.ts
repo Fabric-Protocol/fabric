@@ -1016,6 +1016,33 @@ export async function listNodePublicByCategory(nodeId: string, kind: 'listings' 
   );
 }
 
+export async function listNodeCategorySummary(nodeIds: string[], kind: 'listings' | 'requests' | 'both') {
+  if (nodeIds.length === 0) return [] as Array<{ node_id: string; kind: string; category_id: number; count: number }>;
+  const tables: Array<{ table: string; kind: 'listings' | 'requests' }> = [];
+  if (kind === 'listings' || kind === 'both') tables.push({ table: 'public_listings', kind: 'listings' });
+  if (kind === 'requests' || kind === 'both') tables.push({ table: 'public_requests', kind: 'requests' });
+
+  const results: Array<{ node_id: string; kind: string; category_id: number; count: number }> = [];
+  for (const { table, kind: k } of tables) {
+    const rows = await query<{ node_id: string; category_id: string; count: string }>(
+      `select p.node_id, c.category_id, count(*)::text as count
+       from ${table} p
+       join nodes n on n.id = p.node_id
+       cross join lateral jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
+       where p.node_id = any($1::uuid[])
+         and n.status = 'ACTIVE'
+         and n.suspended_at is null
+         and n.deleted_at is null
+       group by p.node_id, c.category_id`,
+      [nodeIds],
+    );
+    for (const row of rows) {
+      results.push({ node_id: row.node_id, kind: k, category_id: Number(row.category_id), count: Number(row.count) });
+    }
+  }
+  return results;
+}
+
 export async function getUnitsOwners(unitIds: string[]) {
   return query<{ id: string; node_id: string }>('select id,node_id from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
 }

@@ -5,20 +5,28 @@ This file gives runnable `curl` examples for contract-backed MVP flows.
 ## 0) Setup
 ```bash
 BASE="http://localhost:8080"
-BOOT_IDEM="$(uuidgen)"
 ```
 
 ## 1) Bootstrap + API key
+
+Step 1a — Retrieve the required legal version from the meta endpoint:
 ```bash
+META=$(curl -sS "$BASE/v1/meta")
+LEGAL_VERSION=$(printf '%s' "$META" | jq -r '.required_legal_version')
+```
+
+Step 1b — Bootstrap your node using the version returned above:
+```bash
+BOOT_IDEM="$(uuidgen)"
 BOOT=$(curl -sS -X POST "$BASE/v1/bootstrap" \
   -H "Idempotency-Key: $BOOT_IDEM" \
   -H "Content-Type: application/json" \
-  -d '{
-    "display_name":"Agent Node",
-    "email":null,
-    "referral_code":null,
-    "legal":{"accepted":true,"version":"2026-02-17"}
-  }')
+  -d "{
+    \"display_name\":\"Agent Node\",
+    \"email\":null,
+    \"referral_code\":null,
+    \"legal\":{\"accepted\":true,\"version\":\"$LEGAL_VERSION\"}
+  }")
 
 API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
 NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')
@@ -66,7 +74,7 @@ curl -sS -X POST "$BASE/v1/units/$UNIT_ID/publish" \
 ```
 
 ## 4) Search listings
-Requires active subscription (or active trial entitlement if configured).
+Credit-metered: requires ACTIVE, not-suspended node with sufficient credits. No subscription required.
 ```bash
 SEARCH_IDEM="$(uuidgen)"
 curl -sS -X POST "$BASE/v1/search/listings" \

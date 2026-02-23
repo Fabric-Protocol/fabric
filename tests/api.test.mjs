@@ -1004,11 +1004,9 @@ test('search is credits-gated (not subscriber-gated) while offer progression (cr
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-1' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(search.statusCode, 200);
-  assert.equal(search.json().broadening.level, 0);
-  assert.equal(search.json().broadening.allow, false);
   assert.equal(search.json().budget.breakdown.broadening_cost, 0);
 
   const sellerUnit = await repo.createResource('units', sellerNodeId, unitPayload('No-sub offer unit', 'no-sub-offer-scope'));
@@ -2283,7 +2281,7 @@ test('active upload trial allows metered search, and expiry no longer blocks cre
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-active' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(trialSearch.statusCode, 200);
 
@@ -2297,7 +2295,7 @@ test('active upload trial allows metered search, and expiry no longer blocks cre
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-expired' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(expiredSearch.statusCode, 200);
   const balanceAfterExpiredSearch = await repo.creditBalance(nodeId);
@@ -3391,12 +3389,12 @@ test('metering only charges on HTTP 200 for search', async () => {
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 
   const bal1 = await repo.creditBalance(nodeId);
-  const bad = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's1' }, payload: { q: null, scope: 'ship_to', filters: {}, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null } });
+  const bad = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's1' }, payload: { q: null, scope: 'ship_to', filters: {}, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null } });
   assert.equal(bad.statusCode, 422);
   const bal2 = await repo.creditBalance(nodeId);
   assert.equal(bal2, bal1);
 
-  const ok = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's2' }, payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null } });
+  const ok = await app.inject({ method: 'POST', url: '/v1/search/listings', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 's2' }, payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null } });
   assert.equal(ok.statusCode, 200);
   const bal3 = await repo.creditBalance(nodeId);
   assert.equal(bal3 < bal2, true);
@@ -3419,7 +3417,7 @@ test('search validates region IDs using canonical CC or CC-AA format', async () 
       scope: 'local_in_person',
       filters: { regions: ['US', 'US-CA'] },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       limit: 20,
       cursor: null,
     },
@@ -3435,7 +3433,7 @@ test('search validates region IDs using canonical CC or CC-AA format', async () 
       scope: 'local_in_person',
       filters: { regions: ['us-ca'] },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       limit: 20,
       cursor: null,
     },
@@ -3468,14 +3466,37 @@ test('search returns credits_exhausted for subscriber with insufficient credits'
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-insufficient' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(res.statusCode, 402);
   assert.equal(res.json().error.code, 'credits_exhausted');
   await app.close();
 });
 
-test('search requires budget.credits_requested', async () => {
+test('search returns 402 credits_exhausted for non-subscriber node with zero credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-no-sub-no-credits');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  // Drain all credits without activating any subscription
+  const current = await repo.creditBalance(nodeId);
+  if (current > 0) {
+    await repo.addCredit(nodeId, 'adjustment_manual', -(current + 1), { reason: 'test_drain' }, `drain-nosub-${nodeId}`);
+  }
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-no-sub-no-credits' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
+  });
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'credits_exhausted');
+  await app.close();
+});
+
+test('search requires budget.credits_max', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-budget-required');
   const nodeId = b.json().node.id;
@@ -3493,7 +3514,7 @@ test('search requires budget.credits_requested', async () => {
   await app.close();
 });
 
-test('search caps spend to budget and returns guidance', async () => {
+test('search budget cap exceeded returns 402 with needed/max/breakdown', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-budget-cap');
   const nodeId = b.json().node.id;
@@ -3510,17 +3531,18 @@ test('search caps spend to budget and returns guidance', async () => {
       scope: 'OTHER',
       filters: { scope_notes: 'budget-cap-test' },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: 0 },
+      budget: { credits_max: 0 },
       limit: 20,
       cursor: null,
     },
   });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.json().budget.was_capped, true);
-  assert.equal(res.json().budget.cap_reason, 'insufficient_budget');
-  assert.equal(res.json().budget.credits_charged <= res.json().budget.credits_requested, true);
-  assert.equal(typeof res.json().budget.guidance, 'string');
-  assert.equal(res.json().budget.guidance.length > 0, true);
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'budget_cap_exceeded');
+  assert.equal(res.json().error.details.needed, config.searchCreditCost);
+  assert.equal(res.json().error.details.max, 0);
+  assert.equal(typeof res.json().error.details.breakdown, 'object');
+  assert.equal(res.json().error.details.breakdown.base_search_cost, config.searchCreditCost);
+  assert.equal(res.json().error.details.breakdown.broadening_cost, 0);
   const balanceAfter = await repo.creditBalance(nodeId);
   assert.equal(balanceAfter, balanceBefore);
   await app.close();
@@ -3569,7 +3591,7 @@ test('search target.username restricts results and returns budget/node summaries
       scope: 'OTHER',
       filters: { scope_notes: 'targeting-shared-scope' },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { username: targetAUsername },
       limit: 20,
       cursor: null,
@@ -3580,12 +3602,9 @@ test('search target.username restricts results and returns budget/node summaries
   assert.equal(body.items.length > 0, true);
   assert.equal(body.items.every((row) => row.item?.node_id === targetANodeId), true);
   assert.equal(typeof body.budget, 'object');
-  assert.equal(typeof body.budget.credits_requested, 'number');
   assert.equal(typeof body.budget.credits_charged, 'number');
-  assert.equal(typeof body.budget.coverage, 'object');
-  assert.equal(body.budget.coverage.page_index_executed, 1);
-  assert.equal(body.budget.coverage.broadening_level_executed, 0);
-  assert.equal(body.budget.coverage.items_returned, body.items.length);
+  assert.equal(typeof body.budget.breakdown, 'object');
+  assert.equal(body.budget.breakdown.page_index, 1);
   assert.equal(Array.isArray(body.nodes), true);
   assert.equal(body.nodes.length, 1);
   assert.equal(body.nodes[0].node_id, targetANodeId);
@@ -3624,7 +3643,7 @@ test('search category_ids_any filters results and unknown ids do not hard-fail v
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes, category_ids_any: [101] },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -3646,7 +3665,7 @@ test('search category_ids_any filters results and unknown ids do not hard-fail v
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes, category_ids_any: [999999] },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -3686,7 +3705,7 @@ test('target-constrained search uses low-cost base pricing', async () => {
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: 200 },
+      budget: { credits_max: 200 },
       limit: 20,
       cursor: null,
     },
@@ -3702,7 +3721,7 @@ test('target-constrained search uses low-cost base pricing', async () => {
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: 200 },
+      budget: { credits_max: 200 },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -3736,7 +3755,7 @@ test('search rejects mismatched target.node_id and target.username', async () =>
       scope: 'OTHER',
       filters: { scope_notes: 'target-mismatch' },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { node_id: targetANodeId, username: targetBUsername },
       limit: 20,
       cursor: null,
@@ -3764,7 +3783,7 @@ test('search rejects unresolved target', async () => {
       scope: 'OTHER',
       filters: { scope_notes: 'target-not-found' },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { username: `missing-${TEST_RUN_SUFFIX}` },
       limit: 20,
       cursor: null,
@@ -3803,7 +3822,7 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     scope: 'OTHER',
     filters: { scope_notes: scopeNotes },
     broadening: { level: 1, allow: true },
-    budget: { credits_requested: creditsRequested },
+    budget: { credits_max: creditsRequested },
     target: { node_id: targetNodeId },
     limit: 1,
     cursor,
@@ -3873,13 +3892,12 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-tier-page-6' },
     payload: searchPayload(page5.json().cursor, modestBudget),
   });
-  assert.equal(page6.statusCode, 200);
-  assert.equal(page6.json().budget.breakdown.page_index, 6);
-  assert.equal(page6.json().budget.breakdown.page_cost, 100);
-  assert.equal(page6.json().budget.was_capped, true);
-  assert.equal(page6.json().budget.credits_charged <= page6.json().budget.credits_requested, true);
-  assert.equal(typeof page6.json().budget.guidance, 'string');
-  assert.match(page6.json().budget.guidance, /pages/i);
+  assert.equal(page6.statusCode, 402);
+  assert.equal(page6.json().error.code, 'budget_cap_exceeded');
+  assert.equal(page6.json().error.details.needed, config.searchTargetCreditCost + 100);
+  assert.equal(page6.json().error.details.max, modestBudget);
+  assert.equal(page6.json().error.details.breakdown.page_index, 6);
+  assert.equal(page6.json().error.details.breakdown.page_cost, 100);
   const afterPage6Balance = await repo.creditBalance(searcherNodeId);
   assert.equal(afterPage6Balance, beforePage6Balance);
 
@@ -3892,7 +3910,6 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page6FullBudget.statusCode, 200);
   assert.equal(page6FullBudget.json().budget.breakdown.page_index, 6);
   assert.equal(page6FullBudget.json().budget.breakdown.page_cost, 100);
-  assert.equal(page6FullBudget.json().budget.was_capped, false);
 
   const page7 = await app.inject({
     method: 'POST',
@@ -3903,7 +3920,6 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   assert.equal(page7.statusCode, 200);
   assert.equal(page7.json().budget.breakdown.page_index, 7);
   assert.equal(page7.json().budget.breakdown.page_cost, 100);
-  assert.equal(page7.json().budget.was_capped, false);
   });
   await app.close();
 });
@@ -3934,7 +3950,7 @@ test('search keyset cursor returns disjoint pages and rejects query-shape mismat
     scope: 'OTHER',
     filters: { scope_notes: scopeNotes },
     broadening: { level: 0, allow: false },
-    budget: { credits_requested: 200 },
+    budget: { credits_max: 200 },
     target: { node_id: targetNodeId },
     limit: 1,
   };
@@ -4020,7 +4036,7 @@ test('ship_to search applies route specificity scoring and max_ship_days filteri
         max_ship_days: 5,
       },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: 200 },
+      budget: { credits_max: 200 },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -4077,7 +4093,7 @@ test('ship_to search matches projection dest_region for ship_to_regions filters'
       q: null,
       scope: 'ship_to',
       filters: { ship_to_regions: ['US-CA'] },
-      budget: { credits_requested: 200 },
+      budget: { credits_max: 200 },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -4100,7 +4116,7 @@ test('ship_to search matches projection dest_region for ship_to_regions filters'
       q: null,
       scope: 'ship_to',
       filters: { ship_to_regions: ['US-NY'] },
-      budget: { credits_requested: 200 },
+      budget: { credits_max: 200 },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -4123,7 +4139,7 @@ test('search scrape guard returns 429 for repeated broad queries', async () => {
     scope: 'digital_delivery',
     filters: {},
     broadening: { level: config.searchBroadeningHighThreshold, allow: true },
-    budget: { credits_requested: config.searchCreditCost + config.searchBroadeningHighThreshold + 5 },
+    budget: { credits_max: config.searchCreditCost + 5 },
     limit: 50,
     cursor: null,
   };
@@ -4193,7 +4209,7 @@ test('search listings and requests share pricing mechanics and keyword rank keys
     scope: 'OTHER',
     filters: { scope_notes: scopeNotes },
     broadening: { level: 1, allow: true },
-    budget: { credits_requested: 200 },
+    budget: { credits_max: 200 },
     target: { node_id: targetNodeId },
     limit: 20,
     cursor: null,
@@ -4247,7 +4263,7 @@ test('search rejects semantic/vector/expansion inputs in phase 0.5', async () =>
       scope: 'OTHER',
       filters: { scope_notes: 'phase05-lock' },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       limit: 20,
       cursor: null,
       semantic: { enabled: true },
@@ -4288,7 +4304,7 @@ test('search persists visibility impression events for returned items', async ()
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { node_id: targetNodeId },
       limit: 20,
       cursor: null,
@@ -4382,7 +4398,7 @@ test('search excludes caller-owned published listings and requests by default', 
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-listings-${nodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(listingsRes.statusCode, 200);
   const ownListingSeen = listingsRes.json().items.some((row) => row.item?.node_id === nodeId);
@@ -4392,7 +4408,7 @@ test('search excludes caller-owned published listings and requests by default', 
     method: 'POST',
     url: '/v1/search/requests',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `search-self-requests-${nodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'self-exclude-test' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(requestsRes.statusCode, 200);
   const ownRequestSeen = requestsRes.json().items.some((row) => row.item?.node_id === nodeId);
@@ -4441,7 +4457,7 @@ test('search and public node inventory exclude suspended nodes', async () => {
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-before-${searcherNodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(before.statusCode, 200);
   const seenBefore = before.json().items.some((row) => row.item?.node_id === targetNodeId);
@@ -4453,7 +4469,7 @@ test('search and public node inventory exclude suspended nodes', async () => {
     method: 'POST',
     url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': `suspend-search-after-${searcherNodeId}` },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'suspended-visibility' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
   assert.equal(after.statusCode, 200);
   const seenAfter = after.json().items.some((row) => row.item?.node_id === targetNodeId);
@@ -4598,7 +4614,7 @@ test('unit estimated_value appears in unit detail and public listing search surf
       scope: 'OTHER',
       filters: { scope_notes: scopeNotes },
       broadening: { level: 0, allow: false },
-      budget: { credits_requested: config.searchCreditCost },
+      budget: { credits_max: config.searchCreditCost },
       target: { node_id: ownerNodeId },
       limit: 20,
       cursor: null,
@@ -5097,5 +5113,244 @@ test('recovery start enforces per-node rate limit', async () => {
   });
 
   await app.close();
+});
+
+test('POST /v1/public/nodes/categories-summary returns counts by category', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-catsum-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+
+  const callerBoot = await bootstrap(app, 'boot-catsum-caller');
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  const callerNodeId = callerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_catsum_subscriber')).statusCode, 200);
+
+  const u1 = await repo.createResource('units', ownerNodeId, { ...unitPayload('CatSum A', 'catsum-scope'), category_ids: [301, 302] });
+  const u2 = await repo.createResource('units', ownerNodeId, { ...unitPayload('CatSum B', 'catsum-scope'), category_ids: [301] });
+  const u3 = await repo.createResource('units', ownerNodeId, { ...unitPayload('CatSum C', 'catsum-scope'), category_ids: [303] });
+  for (const u of [u1, u2, u3]) {
+    await repo.setPublished('units', u.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, u.id));
+  }
+
+  const balBefore = await repo.creditBalance(callerNodeId);
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/public/nodes/categories-summary',
+    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-basic' },
+    payload: { node_ids: [ownerNodeId], kind: 'listings' },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(typeof body.summaries, 'object');
+  const summary = body.summaries[ownerNodeId];
+  assert.ok(summary, 'summary for owner node missing');
+  assert.ok(Array.isArray(summary.listings), 'listings array missing');
+  assert.equal(summary.requests, undefined, 'requests should not be present for kind=listings');
+
+  const catMap = Object.fromEntries(summary.listings.map((c) => [c.category_id, c.count]));
+  assert.equal(catMap[301], 2);
+  assert.equal(catMap[302], 1);
+  assert.equal(catMap[303], 1);
+
+  const balAfter = await repo.creditBalance(callerNodeId);
+  assert.equal(balAfter, balBefore, 'categories-summary must charge 0 credits');
+  await app.close();
+});
+
+test('POST /v1/public/nodes/categories-summary respects kind flag', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-catsum-kind-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+
+  const callerBoot = await bootstrap(app, 'boot-catsum-kind-caller');
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  const callerNodeId = callerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_catsum_kind_sub')).statusCode, 200);
+
+  const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('CatKind item', 'catkind-scope'), category_ids: [401] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const request = await repo.createResource('requests', ownerNodeId, { ...unitPayload('CatKind req', 'catkind-scope'), category_ids: [402] });
+  await repo.setPublished('requests', request.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', ownerNodeId, request.id));
+
+  const listingsOnly = await app.inject({
+    method: 'POST',
+    url: '/v1/public/nodes/categories-summary',
+    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-listings' },
+    payload: { node_ids: [ownerNodeId], kind: 'listings' },
+  });
+  assert.equal(listingsOnly.statusCode, 200);
+  assert.ok(Array.isArray(listingsOnly.json().summaries[ownerNodeId].listings));
+  assert.equal(listingsOnly.json().summaries[ownerNodeId].requests, undefined);
+
+  const requestsOnly = await app.inject({
+    method: 'POST',
+    url: '/v1/public/nodes/categories-summary',
+    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-requests' },
+    payload: { node_ids: [ownerNodeId], kind: 'requests' },
+  });
+  assert.equal(requestsOnly.statusCode, 200);
+  assert.equal(requestsOnly.json().summaries[ownerNodeId].listings, undefined);
+  assert.ok(Array.isArray(requestsOnly.json().summaries[ownerNodeId].requests));
+
+  const both = await app.inject({
+    method: 'POST',
+    url: '/v1/public/nodes/categories-summary',
+    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-both' },
+    payload: { node_ids: [ownerNodeId], kind: 'both' },
+  });
+  assert.equal(both.statusCode, 200);
+  assert.ok(Array.isArray(both.json().summaries[ownerNodeId].listings));
+  assert.ok(Array.isArray(both.json().summaries[ownerNodeId].requests));
+  await app.close();
+});
+
+test('node category drilldown page 11+ charges 5 credits per page', async () => {
+  await withConfigOverrides({ drilldownHighCostPageFrom: 2 }, async () => {
+    const app = buildApp();
+    const callerBoot = await bootstrap(app, 'boot-drilldown-highcost-caller');
+    const callerNodeId = callerBoot.json().node.id;
+    const callerApiKey = callerBoot.json().api_key.api_key;
+    assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_drilldown_highcost_sub')).statusCode, 200);
+
+    const ownerBoot = await bootstrap(app, 'boot-drilldown-highcost-owner');
+    const ownerNodeId = ownerBoot.json().node.id;
+
+    const u1 = await repo.createResource('units', ownerNodeId, { ...unitPayload('HighCost 1', 'highcost-scope'), category_ids: [555] });
+    const u2 = await repo.createResource('units', ownerNodeId, { ...unitPayload('HighCost 2', 'highcost-scope'), category_ids: [555] });
+    for (const u of [u1, u2]) {
+      await repo.setPublished('units', u.id, true);
+      await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, u.id));
+    }
+    await query("update public_listings set published_at = now() - interval '1 seconds' where unit_id=$1", [u2.id]);
+
+    const page1 = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerNodeId}/listings/categories/555?limit=1`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(page1.statusCode, 200);
+    assert.equal(page1.json().budget.credits_charged, config.nodeCategoryDrilldownCost);
+
+    const balBefore = await repo.creditBalance(callerNodeId);
+    const page2 = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerNodeId}/listings/categories/555?limit=1&cursor=${encodeURIComponent(page1.json().cursor)}`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(page2.statusCode, 200);
+    assert.equal(page2.json().budget.credits_charged, config.nodeCategoryDrilldownHighCost);
+    const balAfter = await repo.creditBalance(callerNodeId);
+    assert.equal(balBefore - balAfter, config.nodeCategoryDrilldownHighCost);
+    await app.close();
+  });
+});
+
+test('node category drilldown budget cap returns 402', async () => {
+  const app = buildApp();
+  const callerBoot = await bootstrap(app, 'boot-drilldown-cap-caller');
+  const callerNodeId = callerBoot.json().node.id;
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_drilldown_cap_sub')).statusCode, 200);
+
+  const ownerBoot = await bootstrap(app, 'boot-drilldown-cap-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('Cap unit', 'cap-drilldown-scope'), category_ids: [600] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const balBefore = await repo.creditBalance(callerNodeId);
+  const res = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/listings/categories/600?budget_credits_max=0`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+  });
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'budget_cap_exceeded');
+  assert.equal(res.json().error.details.needed, config.nodeCategoryDrilldownCost);
+  assert.equal(res.json().error.details.max, 0);
+  const balAfter = await repo.creditBalance(callerNodeId);
+  assert.equal(balAfter, balBefore);
+  await app.close();
+});
+
+test('node category drilldown per-caller-per-node rate limit', async () => {
+  await withConfigOverrides({ rateLimitDrilldownPerNodePerMinute: 1, rateLimitNodeCategoryDrilldownPerMinute: 1000 }, async () => {
+    const app = buildApp();
+    const callerBoot = await bootstrap(app, 'boot-drilldown-pernode-caller');
+    const callerNodeId = callerBoot.json().node.id;
+    const callerApiKey = callerBoot.json().api_key.api_key;
+    assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_drilldown_pernode_sub')).statusCode, 200);
+
+    const ownerABoot = await bootstrap(app, 'boot-drilldown-pernode-a');
+    const ownerANodeId = ownerABoot.json().node.id;
+    const unitA = await repo.createResource('units', ownerANodeId, { ...unitPayload('PerNode A', 'pernode-scope'), category_ids: [701] });
+    await repo.setPublished('units', unitA.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', ownerANodeId, unitA.id));
+
+    const ownerBBoot = await bootstrap(app, 'boot-drilldown-pernode-b');
+    const ownerBNodeId = ownerBBoot.json().node.id;
+    const unitB = await repo.createResource('units', ownerBNodeId, { ...unitPayload('PerNode B', 'pernode-scope'), category_ids: [701] });
+    await repo.setPublished('units', unitB.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', ownerBNodeId, unitB.id));
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerANodeId}/listings/categories/701`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(first.statusCode, 200);
+
+    const secondSameNode = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerANodeId}/listings/categories/701`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(secondSameNode.statusCode, 429, 'per-node limit should block second request to same node');
+    assert.equal(secondSameNode.json().error.code, 'rate_limit_exceeded');
+
+    const diffNode = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerBNodeId}/listings/categories/701`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(diffNode.statusCode, 200, 'different target node should not be blocked');
+    await app.close();
+  });
+});
+
+test('node category drilldown daily cap', async () => {
+  await withConfigOverrides({ drilldownDailyCapBasic: 1, rateLimitNodeCategoryDrilldownPerMinute: 1000, rateLimitDrilldownPerNodePerMinute: 1000 }, async () => {
+    const app = buildApp();
+    const callerBoot = await bootstrap(app, 'boot-drilldown-daily-caller');
+    const callerNodeId = callerBoot.json().node.id;
+    const callerApiKey = callerBoot.json().api_key.api_key;
+    assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_drilldown_daily_sub')).statusCode, 200);
+
+    const ownerBoot = await bootstrap(app, 'boot-drilldown-daily-owner');
+    const ownerNodeId = ownerBoot.json().node.id;
+    const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('Daily item', 'daily-drilldown-scope'), category_ids: [801] });
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerNodeId}/listings/categories/801`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(first.statusCode, 200);
+
+    const second = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${ownerNodeId}/listings/categories/801`,
+      headers: { authorization: `ApiKey ${callerApiKey}` },
+    });
+    assert.equal(second.statusCode, 429, 'daily cap should block second request');
+    assert.equal(second.json().error.code, 'rate_limit_exceeded');
+    await app.close();
+  });
 });
 

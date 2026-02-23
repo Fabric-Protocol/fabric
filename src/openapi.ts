@@ -576,9 +576,9 @@ export const openApiDocument = {
           budget: {
             type: 'object',
             properties: {
-              credits_requested: { type: 'integer', minimum: 0 },
+              credits_max: { type: 'integer', minimum: 0, description: 'Hard credit cap; server returns 402 budget_cap_exceeded if computed cost exceeds this value.' },
             },
-            required: ['credits_requested'],
+            required: ['credits_max'],
           },
           target: { $ref: '#/components/schemas/SearchTarget' },
           limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },

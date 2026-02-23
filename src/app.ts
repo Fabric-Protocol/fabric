@@ -50,7 +50,7 @@ const searchSchema = z.object({
   scope: z.enum(['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER']),
   filters: z.record(z.any()),
   broadening: broadeningSchema,
-  budget: z.object({ credits_requested: z.number().int().min(0) }),
+  budget: z.object({ credits_max: z.number().int().min(0) }),
   target: z.object({
     node_id: z.string().uuid().nullable().optional(),
     username: z.string().trim().min(1).nullable().optional(),
@@ -782,6 +782,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && path === '/v1/recovery/start') return { name: 'recovery_start_ip', limit: config.rateLimitRecoveryStartPerHour, windowSeconds: 3600, subject: 'ip' };
   if (method === 'POST' && path === '/v1/email/start-verify') return { name: 'email_verify_start', limit: config.rateLimitEmailVerifyStartPerHour, windowSeconds: 3600, subject: 'node' };
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && path === '/v1/public/nodes/categories-summary') return { name: 'categories_summary', limit: config.rateLimitCategoriesSummaryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
@@ -855,10 +856,8 @@ function isLikelyBroadSearchRequest(payload: any) {
   const filters = payload?.filters && typeof payload.filters === 'object' ? payload.filters : {};
   const filterKeys = Object.keys(filters);
   const minimalFilters = filterKeys.length === 0;
-  const broadeningLevel = Number(payload?.broadening?.level ?? 0);
-  const broadeningHigh = broadeningLevel >= config.searchBroadeningHighThreshold;
   const limitHigh = Number(payload?.limit ?? 20) >= 50;
-  return qBroad && minimalFilters && (broadeningHigh || limitHigh);
+  return qBroad && minimalFilters && limitHigh;
 }
 
 function repeatedBroadSearchDetected(nodeId: string, isBroadSearch: boolean) {
@@ -876,7 +875,6 @@ function applySearchScrapeGuard(req: FastifyRequest, reply: any, payload: any) {
   if (!nodeId) return true;
 
   const pageIndex = decodeSearchCursorPageIndex(payload?.cursor ?? null);
-  const broadeningLevel = Number(payload?.broadening?.level ?? 0);
   const limit = Number(payload?.limit ?? 20);
   const qPresent = typeof payload?.q === 'string' && payload.q.trim().length > 0;
   const broadQuery = isLikelyBroadSearchRequest(payload);
@@ -897,7 +895,6 @@ function applySearchScrapeGuard(req: FastifyRequest, reply: any, payload: any) {
       page_index: pageIndex,
       scope: payload?.scope ?? null,
       q_present: qPresent,
-      broadening_level: broadeningLevel,
       limit,
       reason,
     },
@@ -1556,6 +1553,7 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
+    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1580,6 +1578,7 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
+    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1597,6 +1596,7 @@ export function buildApp() {
     return out;
   });
   app.get('/v1/public/nodes/:node_id/listings/categories/:category_id', async (req, reply) => {
+    const callerNodeId = (req as AuthedRequest).nodeId!;
     const q = req.query as any;
     const limit = Number(q.limit ?? 20);
     const categoryId = Number((req.params as any).category_id);
@@ -1606,18 +1606,21 @@ export function buildApp() {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
     }
-    const out = await fabricService.nodePublicInventoryByCategory(
-      (req as AuthedRequest).nodeId!,
-      (req.params as any).node_id,
-      'listings',
-      categoryId,
-      limit,
-      q.cursor ?? null,
-    );
+    const targetNodeId = (req.params as any).node_id as string;
+    const perNodeRule: RateLimitRule = { name: 'drilldown_per_node', limit: config.rateLimitDrilldownPerNodePerMinute, windowSeconds: 60, subject: 'node' };
+    if (!applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`)) return reply;
+    const isSubscriber = (req as AuthedRequest).isSubscriber ?? false;
+    const dailyCapLimit = isSubscriber ? config.drilldownDailyCapBasic : config.drilldownDailyCapFree;
+    const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
+    if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
+    const creditsMax = q.budget_credits_max !== undefined ? Number(q.budget_credits_max) : undefined;
+    const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, 'listings', categoryId, limit, q.cursor ?? null, creditsMax);
+    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
   app.get('/v1/public/nodes/:node_id/requests/categories/:category_id', async (req, reply) => {
+    const callerNodeId = (req as AuthedRequest).nodeId!;
     const q = req.query as any;
     const limit = Number(q.limit ?? 20);
     const categoryId = Number((req.params as any).category_id);
@@ -1627,16 +1630,31 @@ export function buildApp() {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
     }
-    const out = await fabricService.nodePublicInventoryByCategory(
-      (req as AuthedRequest).nodeId!,
-      (req.params as any).node_id,
-      'requests',
-      categoryId,
-      limit,
-      q.cursor ?? null,
-    );
+    const targetNodeId = (req.params as any).node_id as string;
+    const perNodeRule: RateLimitRule = { name: 'drilldown_per_node', limit: config.rateLimitDrilldownPerNodePerMinute, windowSeconds: 60, subject: 'node' };
+    if (!applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`)) return reply;
+    const isSubscriber = (req as AuthedRequest).isSubscriber ?? false;
+    const dailyCapLimit = isSubscriber ? config.drilldownDailyCapBasic : config.drilldownDailyCapFree;
+    const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
+    if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
+    const creditsMax = q.budget_credits_max !== undefined ? Number(q.budget_credits_max) : undefined;
+    const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, 'requests', categoryId, limit, q.cursor ?? null, creditsMax);
+    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
+  });
+
+  app.post('/v1/public/nodes/categories-summary', async (req, reply) => {
+    const body = req.body as any;
+    const nodeIds: string[] = Array.isArray(body?.node_ids) ? body.node_ids.filter((id: unknown) => typeof id === 'string') : [];
+    const kind = body?.kind;
+    if (nodeIds.length === 0 || nodeIds.length > 50) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'node_ids must be 1–50 strings', { reason: 'node_ids_invalid' }));
+    }
+    if (kind !== 'listings' && kind !== 'requests' && kind !== 'both') {
+      return reply.status(422).send(errorEnvelope('validation_error', 'kind must be listings, requests, or both', { reason: 'kind_invalid' }));
+    }
+    return fabricService.nodePublicCategoriesSummary((req as AuthedRequest).nodeId!, nodeIds, kind);
   });
 
   app.get('/v1/offers', async (req) => {
