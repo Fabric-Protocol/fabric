@@ -176,7 +176,7 @@ Last updated: 2026-02-20
 - [x] Deprecate `SearchRequest.broadening`; omission defaults to `{ level: 0, allow: false }` and broadening cost is `0`.
 - [ ] Add proper idempotent Supabase migration(s) to align `visibility_events` with `docs/specs/21__db-ddl.sql` (remove schema drift).
   - include backfill, NOT NULL/check constraints, and expected indexes
-- [ ] Add decision-log entry for "Lock go-live matching behavior" (structured eligibility filters + keyword ranking only; no lexical override/expansion; no semantic/vector at go-live).
+- [x] Add decision-log entry for "Lock go-live matching behavior" (structured eligibility filters + keyword ranking only; no lexical override/expansion; no semantic/vector at go-live).
   - include explicit Phase 2 TODO for lexical override/expansion
   - include explicit Phase 3 TODO for semantic/vector infra
 - [x] Keep go-live supply-vs-demand parity:
