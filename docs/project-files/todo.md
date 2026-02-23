@@ -1,6 +1,6 @@
-﻿# Fabric - TODO (thread-active)
+# Fabric - TODO (thread-active)
 
-Last updated: 2026-02-20
+Last updated: 2026-02-22
 
 ## ✅ Completed (P0) — Post-merge decisions and hygiene
 - [x] Decide repo policy for `package-lock.json` and record it in `docs/project-files/decision-log.md`:
@@ -287,6 +287,15 @@ Last updated: 2026-02-20
 - [x] Thread-switch hygiene:
   - include unique changed paths from `docs/spec/**` plus refresh-set files (`AGENTS.md`, `docs/project-files/00__read-first__workflow.md`, `docs/project-files/agent-commerce-fit.md`, `docs/project-files/decision-log.md`, `docs/project-files/todo.md`)
 
+### Phase 0.5 — Pricing + grants + acceptance fee (latest thread notes)
+- [x] Implement deal acceptance fee (1 credit per side) with idempotency + 402 block on insufficient credits; add/confirm test coverage.
+- [x] Update free credits program: signup=100; 20-units=200; 20-requests=200; referrals=100 after first paid, cap=50; add/confirm tests.
+- [x] Set search base cost to 5 credits; reconcile docs/examples and tests to match code truth.
+- [x] Implement new pagination cost schedule (p2..p5 = page number; p6+ = 100/page) with default page size 20; add/confirm tests.
+- [x] Add onboarding warning: fake/placeholder Units/Requests may lead to suspension/takedown and will waste the creator's time by attracting offers from agents who assume listings are real (efficiency framing).
+- [x] Add idempotent Supabase migration for credit-ledger type constraints (includes `deal_accept_fee`) and load it in tests.
+- [ ] Create `supabase_migrations/<date>__verify_<topic>.sql` for the new credit-ledger constraint migration, and run APPLY+VERIFY in Supabase before go-live (manual step).
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
 - [ ] Encrypt webhook secrets at rest (KMS/pgcrypto/vault) with rotation plan and docs update.
@@ -312,7 +321,7 @@ High likelihood:
   - admin override path and audit logging
 Medium likelihood:
 - [ ] Add explicit retry/backoff and failure visibility docs/runbook for webhook delivery (timeouts/5xx behavior, operational signals).
-- [ ] Implement/confirm pagination add-on economics tiers (pages 2-3 / 4-5 / 6+ prohibitive) and ensure returned budget breakdown matches policy.
+- [x] Implement/confirm pagination add-on economics tiers (pages 2-3 / 4-5 / 6+ prohibitive) and ensure returned budget breakdown matches policy.
 - [ ] Cross-language free-text discovery (Phase Next):
   - decide bridging approach (pivot MT fields vs multilingual embeddings vs hybrid) with search budget/credit metering integration
   - add indexing/storage, abuse controls, and diagnostics for cross-language matches

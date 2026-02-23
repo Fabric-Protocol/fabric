@@ -1,6 +1,46 @@
-﻿# Fabric - Decision Log
+# Fabric - Decision Log
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
+
+## 2026-02-22 - Free credits program updated
+Decision:
+- Signup grant: 100 credits.
+- Milestones: 200 credits after 20 Units (one-time); 200 credits after 20 Requests (one-time).
+- Referrals: 100 credits per referral, paid only after the referred node has a paid subscription; cap: 50 referral awards per referrer (max 5000 credits from referrals).
+Rationale:
+- Creates a clear "earn credits by contributing real supply/demand" ladder.
+- Referral rewards remain tied to revenue and capped to limit exposure to fraud/chargeback bursts.
+Scope/impact:
+- Economics, bootstrap/grants logic, Stripe `invoice.paid` award path, onboarding.
+
+## 2026-02-22 - Deal finalization charges a 1-credit acceptance fee to each side
+Decision:
+- On mutual acceptance/finalization, debit 1 credit from each side exactly once.
+- If either side lacks credits, finalization is blocked (no partial debits/state changes).
+Rationale:
+- Adds a small friction/cost to deter low-quality accepts and reduce downstream time-waste.
+- Keeps incentives symmetric across both sides.
+Scope/impact:
+- Economics, offer lifecycle, ledger types, tests.
+
+## 2026-02-22 - Pagination add-ons are page-index priced for pages 2–5; prohibitive for 6+
+Decision:
+- Page size default: 20.
+- Page add-on costs: p2=2, p3=3, p4=4, p5=5; p6+ = 100 credits per page.
+Rationale:
+- Strong anti-scrape posture while keeping modest paging feasible.
+- Simple mental model for agents: "page number = cost" until a hard deterrent tier.
+Scope/impact:
+- Economics, search cursor behavior, onboarding guidance.
+
+## 2026-02-22 - Search base cost is 5 credits
+Decision:
+- Search base cost is 5 credits per query.
+Rationale:
+- Aligns pricing with intended "search is a paid action" economics and reduces spammy broad queries.
+- Makes search spend meaningful while still enabling targeted follow-ups via target-discount lane.
+Scope/impact:
+- Economics, API responses (`credits_*` fields), docs/examples.
 
 ## 2026-02-22 - Search access is credits-only (no subscriber gate)
 Decision:
