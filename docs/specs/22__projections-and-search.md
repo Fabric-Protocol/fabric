@@ -365,12 +365,15 @@ Broadening level MUST be recorded in search logs.
 Pagination add-on policy:
 
 - page 1: page_cost = 0 (included in base search cost)
-- pages 2-3: page_cost = small add-on
-- pages 4-5: page_cost = large add-on
-- pages 6+: page_cost = prohibitive add-on (expected to cap for typical request budgets)
+- page 2: page_cost = 2
+- page 3: page_cost = 3
+- page 4: page_cost = 4
+- page 5: page_cost = 5
+- pages 6+: page_cost = 100 per page
 
 Target-constrained pricing policy:
 
+- default base search cost is `SEARCH_CREDIT_COST` (default `5`).
 - If `target` resolves to a node, search uses low-cost base pricing for this call.
 - `budget.breakdown.base_search_cost` MUST reflect `SEARCH_TARGET_CREDIT_COST` for target-constrained calls and `SEARCH_CREDIT_COST` otherwise.
 

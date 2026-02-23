@@ -16,6 +16,17 @@ delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
 delete process.env.RATE_LIMIT_RECOVERY_START_PER_HOUR;
 delete process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR;
 delete process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR;
+delete process.env.SEARCH_CREDIT_COST;
+delete process.env.SEARCH_TARGET_CREDIT_COST;
+delete process.env.SEARCH_PAGE_PROHIBITIVE_FROM;
+delete process.env.SEARCH_PAGE_PROHIBITIVE_COST;
+delete process.env.SIGNUP_GRANT_CREDITS;
+delete process.env.UPLOAD_TRIAL_THRESHOLD;
+delete process.env.UPLOAD_TRIAL_CREDIT_GRANT;
+delete process.env.REQUEST_MILESTONE_THRESHOLD;
+delete process.env.REQUEST_MILESTONE_CREDIT_GRANT;
+delete process.env.REFERRAL_MAX_GRANTS_PER_REFERRER;
+delete process.env.DEAL_ACCEPTANCE_FEE_CREDITS;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
@@ -33,6 +44,16 @@ process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS = '5';
 process.env.RATE_LIMIT_RECOVERY_START_PER_HOUR = '1000';
 process.env.RATE_LIMIT_RECOVERY_START_PER_NODE_PER_HOUR = '1000';
 process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR = '1000';
+process.env.SEARCH_CREDIT_COST = '5';
+process.env.SEARCH_TARGET_CREDIT_COST = '1';
+process.env.SEARCH_PAGE_PROHIBITIVE_COST = '100';
+process.env.SIGNUP_GRANT_CREDITS = '100';
+process.env.UPLOAD_TRIAL_THRESHOLD = '20';
+process.env.UPLOAD_TRIAL_CREDIT_GRANT = '200';
+process.env.REQUEST_MILESTONE_THRESHOLD = '20';
+process.env.REQUEST_MILESTONE_CREDIT_GRANT = '200';
+process.env.REFERRAL_MAX_GRANTS_PER_REFERRER = '50';
+process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 const TEST_RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -58,6 +79,12 @@ const searchRankingMigrationSql = await fs.readFile(
   'utf8',
 );
 await query(searchRankingMigrationSql);
+
+const creditLedgerTypesMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-23__apply_credit_ledger_types.sql', import.meta.url),
+  'utf8',
+);
+await query(creditLedgerTypesMigrationSql);
 
 async function bootstrap(
   app,
@@ -421,6 +448,17 @@ test('POST /v1/bootstrap with legal assent stores legal fields', async () => {
   assert.ok(me.legal_accepted_at);
   assert.equal(me.legal_ip, '203.0.113.10');
   assert.equal(me.legal_user_agent, 'fabric-test-agent');
+  await app.close();
+});
+
+test('POST /v1/bootstrap grants configured signup credits', async () => {
+  const app = buildApp();
+  const res = await bootstrap(app, 'boot-signup-grant');
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().credits.granted, config.signupGrantCredits);
+  const nodeId = res.json().node.id;
+  const balance = await repo.creditBalance(nodeId);
+  assert.equal(balance, config.signupGrantCredits);
   await app.close();
 });
 
@@ -1271,6 +1309,136 @@ test('buyer offer create cannot lock seller inventory; seller-side accept locks;
   await app.close();
 });
 
+test('mutual acceptance charges one credit per side exactly once', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-deal-fee-seller');
+  const buyerBoot = await bootstrap(app, 'boot-deal-fee-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerKey = sellerBoot.json().api_key.api_key;
+  const buyerKey = buyerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Deal fee unit', 'deal-fee-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'deal-fee' },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerBalanceBefore = await repo.creditBalance(sellerNodeId);
+  const buyerBalanceBefore = await repo.creditBalance(buyerNodeId);
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'deal-fee-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
+
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  const sellerBalanceAfter = await repo.creditBalance(sellerNodeId);
+  const buyerBalanceAfter = await repo.creditBalance(buyerNodeId);
+  assert.equal(sellerBalanceAfter, sellerBalanceBefore - config.dealAcceptanceFeeCredits);
+  assert.equal(buyerBalanceAfter, buyerBalanceBefore - config.dealAcceptanceFeeCredits);
+
+  const sellerFeeRows = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",
+    [sellerNodeId, offerId],
+  );
+  const buyerFeeRows = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",
+    [buyerNodeId, offerId],
+  );
+  assert.equal(Number(sellerFeeRows[0].c), 1);
+  assert.equal(Number(buyerFeeRows[0].c), 1);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-accept-buyer-retry' },
+    payload: {},
+  });
+  assert.equal(replay.statusCode, 409);
+  assert.equal(replay.json().error.code, 'invalid_state_transition');
+
+  const sellerFeeRowsAfterReplay = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",
+    [sellerNodeId, offerId],
+  );
+  const buyerFeeRowsAfterReplay = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",
+    [buyerNodeId, offerId],
+  );
+  assert.equal(Number(sellerFeeRowsAfterReplay[0].c), 1);
+  assert.equal(Number(buyerFeeRowsAfterReplay[0].c), 1);
+  await app.close();
+});
+
+test('mutual acceptance is blocked when either side lacks credits', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-deal-fee-block-seller');
+  const buyerBoot = await bootstrap(app, 'boot-deal-fee-block-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerKey = sellerBoot.json().api_key.api_key;
+  const buyerKey = buyerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Deal fee blocked unit', 'deal-fee-block-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-block-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'deal-fee-block' },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'deal-fee-block-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
+
+  const sellerBalance = await repo.creditBalance(sellerNodeId);
+  await repo.addCredit(sellerNodeId, 'adjustment_manual', -sellerBalance, { reason: 'test_drain_deal_accept_fee' });
+
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-block-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 402);
+  assert.equal(buyerAccept.json().error.code, 'credits_exhausted');
+  assert.equal(buyerAccept.json().error.details.credits_required, config.dealAcceptanceFeeCredits);
+
+  const offerAfter = await repo.getOffer(offerId);
+  assert.equal(offerAfter.status, 'accepted_by_b');
+
+  const feeRows = await query(
+    "select count(*)::text as c from credit_ledger where type='deal_accept_fee' and (meta->>'offer_id')=$1",
+    [offerId],
+  );
+  assert.equal(Number(feeRows[0].c), 0);
+  await app.close();
+});
+
 test('detail GET endpoints persist detail_view visibility events', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-detail-views');
@@ -1988,12 +2156,13 @@ test('unit upload threshold grants one trial entitlement and one credit grant', 
   const b = await bootstrap(app, 'boot-upload-trial-once');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
+  const threshold = config.uploadTrialThreshold;
 
   const beforeTrial = await repo.getTrialEntitlement(nodeId);
   assert.equal(beforeTrial, null);
-  const balanceBeforeTenth = await repo.creditBalance(nodeId);
+  const balanceBeforeThreshold = await repo.creditBalance(nodeId);
 
-  for (let i = 0; i < 9; i += 1) {
+  for (let i = 0; i < threshold - 1; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/units',
@@ -2006,31 +2175,31 @@ test('unit upload threshold grants one trial entitlement and one credit grant', 
   const stillNoTrial = await repo.getTrialEntitlement(nodeId);
   assert.equal(stillNoTrial, null);
 
-  const tenth = await app.inject({
+  const thresholdHit = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-unit-9' },
-    payload: unitPayload('Trial unit 9', 'trial-upload-9'),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${threshold - 1}` },
+    payload: unitPayload(`Trial unit ${threshold - 1}`, `trial-upload-${threshold - 1}`),
   });
-  assert.equal(tenth.statusCode, 200);
+  assert.equal(thresholdHit.statusCode, 200);
 
   const entitlement = await repo.getTrialEntitlement(nodeId);
   assert.equal(Boolean(entitlement), true);
   assert.equal(entitlement.ends_at instanceof Date || typeof entitlement.ends_at === 'string', true);
 
-  const balanceAfterTenth = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterTenth - balanceBeforeTenth, config.uploadTrialCreditGrant);
+  const balanceAfterThreshold = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterThreshold - balanceBeforeThreshold, config.uploadTrialCreditGrant);
 
-  const eleventh = await app.inject({
+  const postThreshold = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-unit-10' },
-    payload: unitPayload('Trial unit 10', 'trial-upload-10'),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${threshold}` },
+    payload: unitPayload(`Trial unit ${threshold}`, `trial-upload-${threshold}`),
   });
-  assert.equal(eleventh.statusCode, 200);
+  assert.equal(postThreshold.statusCode, 200);
 
-  const balanceAfterEleventh = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterEleventh, balanceAfterTenth);
+  const balanceAfterPostThreshold = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterPostThreshold, balanceAfterThreshold);
 
   const trialCount = await query("select count(*)::text as c from trial_entitlements where node_id=$1", [nodeId]);
   const trialEventCount = await query("select count(*)::text as c from trial_entitlement_events where node_id=$1 and event_type='granted'", [nodeId]);
@@ -2041,13 +2210,63 @@ test('unit upload threshold grants one trial entitlement and one credit grant', 
   await app.close();
 });
 
+test('request milestone grants one-time credits at threshold', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-request-milestone');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const threshold = config.requestMilestoneThreshold;
+
+  const balanceBeforeThreshold = await repo.creditBalance(nodeId);
+  for (let i = 0; i < threshold - 1; i += 1) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/requests',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${i}` },
+      payload: unitPayload(`Request milestone ${i}`, `request-milestone-${i}`),
+    });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const balanceBeforeThresholdHit = await repo.creditBalance(nodeId);
+  assert.equal(balanceBeforeThresholdHit, balanceBeforeThreshold);
+
+  const thresholdHit = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${threshold - 1}` },
+    payload: unitPayload(`Request milestone ${threshold - 1}`, `request-milestone-${threshold - 1}`),
+  });
+  assert.equal(thresholdHit.statusCode, 200);
+  const balanceAfterThresholdHit = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterThresholdHit - balanceBeforeThresholdHit, config.requestMilestoneCreditGrant);
+
+  const postThreshold = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${threshold}` },
+    payload: unitPayload(`Request milestone ${threshold}`, `request-milestone-${threshold}`),
+  });
+  assert.equal(postThreshold.statusCode, 200);
+  const balanceAfterPostThreshold = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterPostThreshold, balanceAfterThresholdHit);
+
+  const grantRows = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_milestone_requests'",
+    [nodeId],
+  );
+  assert.equal(Number(grantRows[0].c), 1);
+  await app.close();
+});
+
 test('active upload trial allows metered search, and expiry no longer blocks credits-based search', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-upload-trial-expiry');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
+  const threshold = config.uploadTrialThreshold;
 
-  for (let i = 0; i < 10; i += 1) {
+  for (let i = 0; i < threshold; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/units',
@@ -2127,7 +2346,7 @@ test('GET /v1/credits/quote returns pack and plan quote catalog', async () => {
   assert.equal(res.statusCode, 200);
   const body = res.json();
   assert.equal(body.node_id, nodeId);
-  assert.equal(body.search_quote.estimated_cost, 2);
+  assert.equal(body.search_quote.estimated_cost, 5);
   assert.equal(Array.isArray(body.credit_packs), true);
   assert.equal(body.credit_packs.length, 3);
   assert.equal(body.credit_packs[0].pack_code, 'credits_100');
@@ -2161,7 +2380,7 @@ test('POST /v1/credits/quote is idempotent and does not mutate balance', async (
     payload,
   });
   assert.equal(first.statusCode, 200);
-  assert.equal(first.json().search_quote.estimated_cost, 2);
+  assert.equal(first.json().search_quote.estimated_cost, 5);
   assert.equal(first.json().affordability.can_afford_estimate, true);
 
   const replay = await app.inject({
@@ -2748,6 +2967,62 @@ test('webhook awards referral credits once on first paid invoice and dedupes by 
     [referrerNodeId, referredNodeId],
   );
   assert.match(String(referralGrantMeta[0].idempotency_key ?? ''), new RegExp(`invoice:${invoiceId}`));
+  await app.close();
+});
+
+test('webhook referral awards stop after per-referrer cap', async () => {
+  const app = buildApp();
+  const referrer = await bootstrap(app, 'boot-referrer-cap', { display_name: 'Referrer Cap', email: null, referral_code: null });
+  const referrerNodeId = referrer.json().node.id;
+  const refCode = `REF-CAP-${referrerNodeId.slice(0, 8)}`;
+  await repo.ensureReferralCode(refCode, referrerNodeId);
+
+  const referred = await bootstrap(app, 'boot-referred-cap', { display_name: 'Referred Cap', email: null, referral_code: refCode });
+  const referredNodeId = referred.json().node.id;
+
+  await query(
+    `insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+     select
+       $1::uuid,
+       'grant_referral',
+       100,
+       jsonb_build_object('seed', gs::text),
+       ('seed_referral_cap:' || gs::text)
+     from generate_series(1, $2::int) as gs`,
+    [referrerNodeId, config.referralMaxGrantsPerReferrer],
+  );
+  const balanceBefore = await repo.creditBalance(referrerNodeId);
+
+  const nowUnix = Math.floor(Date.now() / 1000);
+  const invoiceId = `in_ref_cap_${referredNodeId.slice(0, 8)}`;
+  const invoiceEvent = {
+    id: `evt_ref_cap_${referredNodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: {
+      object: {
+        id: invoiceId,
+        metadata: { node_id: referredNodeId },
+        customer: `cus_ref_cap_${referredNodeId.slice(0, 8)}`,
+        subscription: `sub_ref_cap_${referredNodeId.slice(0, 8)}`,
+        billing_reason: 'subscription_create',
+        period_start: nowUnix,
+        period_end: nowUnix + (30 * 24 * 3600),
+        lines: { data: [{ price: { id: 'price_basic_test' } }] },
+      },
+    },
+  };
+  const sig = sign(invoiceEvent);
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(res.statusCode, 200);
+
+  const balanceAfter = await repo.creditBalance(referrerNodeId);
+  assert.equal(balanceAfter, balanceBefore);
+
+  const grantRows = await query(
+    "select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_referral' and (meta->>'claimer_node_id')=$2",
+    [referrerNodeId, referredNodeId],
+  );
+  assert.equal(Number(grantRows[0].c), 0);
   await app.close();
 });
 
@@ -3503,10 +3778,12 @@ test('search rejects unresolved target', async () => {
 
 test('search pagination applies tiered page add-ons and caps page 6 under modest budget', async () => {
   const app = buildApp();
+  await withConfigOverrides({ rateLimitSearchScrapePerMinute: 1000, searchBroadQueryThreshold: 1000 }, async () => {
   const searcherBoot = await bootstrap(app, 'boot-search-page-tier-searcher');
   const searcherNodeId = searcherBoot.json().node.id;
   const searcherApiKey = searcherBoot.json().api_key.api_key;
   assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_page_tier')).statusCode, 200);
+  await repo.addCredit(searcherNodeId, 'adjustment_manual', 300, { reason: 'test_page_cost_headroom' });
 
   const targetBoot = await bootstrap(app, 'boot-search-page-tier-target');
   const targetNodeId = targetBoot.json().node.id;
@@ -3552,8 +3829,8 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   });
   assert.equal(page2.statusCode, 200);
   assert.equal(page2.json().budget.breakdown.page_index, 2);
-  assert.equal(page2.json().budget.breakdown.page_cost, config.searchPageAddOnSmall);
-  assert.equal(page2.json().budget.credits_charged, config.searchTargetCreditCost + config.searchPageAddOnSmall);
+  assert.equal(page2.json().budget.breakdown.page_cost, 2);
+  assert.equal(page2.json().budget.credits_charged, config.searchTargetCreditCost + 2);
 
   const page3 = await app.inject({
     method: 'POST',
@@ -3562,6 +3839,9 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     payload: searchPayload(page2.json().cursor, fullBudget),
   });
   assert.equal(page3.statusCode, 200);
+  assert.equal(page3.json().budget.breakdown.page_index, 3);
+  assert.equal(page3.json().budget.breakdown.page_cost, 3);
+  assert.equal(page3.json().budget.credits_charged, config.searchTargetCreditCost + 3);
 
   const page4 = await app.inject({
     method: 'POST',
@@ -3571,8 +3851,8 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   });
   assert.equal(page4.statusCode, 200);
   assert.equal(page4.json().budget.breakdown.page_index, 4);
-  assert.equal(page4.json().budget.breakdown.page_cost, config.searchPageAddOnLarge);
-  assert.equal(page4.json().budget.credits_charged, config.searchTargetCreditCost + config.searchPageAddOnLarge);
+  assert.equal(page4.json().budget.breakdown.page_cost, 4);
+  assert.equal(page4.json().budget.credits_charged, config.searchTargetCreditCost + 4);
 
   const page5 = await app.inject({
     method: 'POST',
@@ -3581,6 +3861,9 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     payload: searchPayload(page4.json().cursor, fullBudget),
   });
   assert.equal(page5.statusCode, 200);
+  assert.equal(page5.json().budget.breakdown.page_index, 5);
+  assert.equal(page5.json().budget.breakdown.page_cost, 5);
+  assert.equal(page5.json().budget.credits_charged, config.searchTargetCreditCost + 5);
 
   const beforePage6Balance = await repo.creditBalance(searcherNodeId);
   const modestBudget = config.searchTargetCreditCost;
@@ -3592,13 +3875,36 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
   });
   assert.equal(page6.statusCode, 200);
   assert.equal(page6.json().budget.breakdown.page_index, 6);
-  assert.equal(page6.json().budget.breakdown.page_cost, config.searchPageProhibitiveCost);
+  assert.equal(page6.json().budget.breakdown.page_cost, 100);
   assert.equal(page6.json().budget.was_capped, true);
   assert.equal(page6.json().budget.credits_charged <= page6.json().budget.credits_requested, true);
   assert.equal(typeof page6.json().budget.guidance, 'string');
   assert.match(page6.json().budget.guidance, /pages/i);
   const afterPage6Balance = await repo.creditBalance(searcherNodeId);
   assert.equal(afterPage6Balance, beforePage6Balance);
+
+  const page6FullBudget = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-tier-page-6-full-budget' },
+    payload: searchPayload(page5.json().cursor, 300),
+  });
+  assert.equal(page6FullBudget.statusCode, 200);
+  assert.equal(page6FullBudget.json().budget.breakdown.page_index, 6);
+  assert.equal(page6FullBudget.json().budget.breakdown.page_cost, 100);
+  assert.equal(page6FullBudget.json().budget.was_capped, false);
+
+  const page7 = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-tier-page-7-full-budget' },
+    payload: searchPayload(page6FullBudget.json().cursor, 300),
+  });
+  assert.equal(page7.statusCode, 200);
+  assert.equal(page7.json().budget.breakdown.page_index, 7);
+  assert.equal(page7.json().budget.breakdown.page_cost, 100);
+  assert.equal(page7.json().budget.was_capped, false);
+  });
   await app.close();
 });
 

@@ -36,7 +36,7 @@ Primary enum (canonical):
 `local_in_person | remote_online_service | ship_to | digital_delivery | OTHER`
 
 ### Credits
-Search and certain reads are entitled-spender-only (`active subscription` OR `active trial`) and credit-metered (charged only on HTTP 200).
+Search and certain reads are available to ACTIVE, not-suspended nodes and are credit-metered (charged only on HTTP 200).
 
 ---
 
@@ -83,7 +83,7 @@ Units: POST /v1/units/{unit_id}/publish
 
 Requests: POST /v1/requests/{request_id}/publish
 
-Search (entitled-spender-only, metered)
+Search (ACTIVE, not-suspended + metered)
 
 Listings: POST /v1/search/listings
 
@@ -166,11 +166,11 @@ Failure handling:
 4.2 Buyer/Acquirer: Search listings → expand node inventory
 Intent: find a listing, then browse more from the same node.
 
-POST /v1/search/listings (entitled-spender-only, metered)
+POST /v1/search/listings (ACTIVE, not-suspended + metered)
 
 On a hit, optionally:
 
-GET /v1/public/nodes/{node_id}/listings (entitled-spender-only, metered)
+GET /v1/public/nodes/{node_id}/listings (ACTIVE, not-suspended + metered)
 
 Success:
 
@@ -178,7 +178,7 @@ You get SearchListingsResponse items with allowlist-only PublicListing plus rank
 
 Failure handling:
 
-403 subscriber_required: activate subscription or trial entitlement before retrying.
+403 forbidden: check node status (ACTIVE + not suspended) and API key validity.
 
 402 credits_exhausted: add credits/renew; do not spam retries.
 
@@ -449,7 +449,7 @@ POST /v1/search/listings
 
 POST /v1/search/requests
 
-Entitled-spender-only (`active subscription` OR `active trial`) + credit-metered; charged only on HTTP 200.
+Search is for ACTIVE, not-suspended nodes and is credit-metered; charged only on HTTP 200.
 
 Budget behavior is explicit and machine-readable:
 
@@ -463,11 +463,13 @@ Budget behavior is explicit and machine-readable:
 
 Filters are scope-validated; unknown keys must be rejected with 422.
 
-Broadening is explicit (broadening.allow/level), paid, and auditable.
+Broadening is explicit (broadening.allow/level), deprecated, and auditable. It currently adds `0` credits.
 
 Anti-scrape economics are intentional:
 
 - Page 1 is included in base cost.
+- Base search cost is 5 credits (`1` for target-constrained follow-up).
+- Pagination add-ons are numeric and explicit: page2=2, page3=3, page4=4, page5=5, page6+=100 per page.
 - Later pages have escalating add-ons; deep paging is restrictive and can trigger stricter rate limiting.
 - Prefer targeted follow-up (`target`) and per-node category drilldown over broad deep pagination.
 
@@ -504,6 +506,9 @@ no fine-grained API key permissions in MVP (keys are equivalent)
 hold endpoints may not exist (use offer hold summary instead)
 
 10) Operational guidance (how to behave well)
+
+> **Warning — fake or placeholder listings:** Creating Units or Requests that do not represent real, allocatable resources violates the Acceptable Use Policy and may result in suspension or takedown. Fake/placeholder listings also waste your own time: agents searching the marketplace assume all published listings are genuine and will make real offers against them.
+
 Retries
 For non-GET endpoints, retry only if you can safely reuse the same Idempotency-Key and the payload is identical.
 

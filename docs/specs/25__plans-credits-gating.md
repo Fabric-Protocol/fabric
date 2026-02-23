@@ -1,4 +1,4 @@
-# Plans, Credits, and Gating (MVP)
+﻿# Plans, Credits, and Gating (MVP)
 
 This document defines commercial and access-control behavior enforced by the API.
 If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-contracts.md`, those documents win.
@@ -6,7 +6,7 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 ## 0) Definitions
 - Subscriber: Node with active paid subscription status.
 - Trial-entitled: Node with an active upload trial entitlement window.
-- Entitled spender: `subscriber OR active trial`.
+- Search-eligible node: ACTIVE, not-suspended node with sufficient credits.
 - Credits: balance computed from `credit_ledger` deltas.
 - Metered endpoint: decrements credits only on HTTP 200.
 - Free node: node without active paid subscription.
@@ -18,7 +18,7 @@ If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-con
 - View own resources and own offers.
 - Reject inbound offers.
 
-### 1.2 Entitled-spend actions (subscriber OR active trial)
+### 1.2 Credit-metered actions (ACTIVE, not-suspended + sufficient credits)
 - `POST /v1/search/listings`
 - `POST /v1/search/requests`
 - `GET /v1/public/nodes/{node_id}/listings`
@@ -49,11 +49,11 @@ Rules:
 - Do not double-charge idempotent replays.
 
 ### 2.2 Base costs
-- `SEARCH_CREDIT_COST = 2`
+- `SEARCH_CREDIT_COST = 5`
 - `SEARCH_TARGET_CREDIT_COST = 1` (target-constrained follow-up)
-- Search listing/request call base (page 1): 2 credits.
+- Search listing/request call base (page 1): 5 credits.
 - Target-constrained search (`target` resolves by `node_id`/`username`) uses the lower target base cost for page 1.
-- Public node inventory expansion call base: 2 credits.
+- Public node inventory expansion call base: 5 credits.
 - Node per-category drilldown call base: cheap fixed cost (see 2.5).
 
 ### 2.3 Search budget ceiling (request-level)
@@ -65,14 +65,16 @@ Rules:
   - actionable `budget.guidance`
 
 ### 2.4 Broadening costs (search)
-- Broadening add-on cost equals requested level.
-- Broadening cost is reflected in `budget.breakdown.broadening_cost`.
+- Broadening is deprecated and optional.
+- Broadening does not increase credit cost in MVP (`budget.breakdown.broadening_cost = 0`).
 
 ### 2.5 Pagination add-on economics (search)
 - Page 1: included in base search cost (no page add-on).
-- Pages 2–3: small add-on.
-- Pages 4–5: large add-on.
-- Pages 6+: prohibitive (intended to cap via request budget for typical budgets).
+- Page 2: +2 credits.
+- Page 3: +3 credits.
+- Page 4: +4 credits.
+- Page 5: +5 credits.
+- Pages 6+: +100 credits per page.
 - Prohibitive pages are additionally protected via server-side detection/rate limiting (see 3).
 
 Implementation note:
@@ -80,8 +82,14 @@ Implementation note:
 
 ### 2.6 Ledger behavior
 - Search/expand writes negative entries (`debit_search`, `debit_search_page`).
-- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
+- Deal finalization fee writes negative entries (`deal_accept_fee`).
+- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_milestone_requests`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
 - Balance is authoritative `SUM(amount)` per node.
+
+### 2.7 Offer mutual-acceptance fee
+- When an offer transitions to `mutually_accepted`, charge `1` credit to each side.
+- Finalization is blocked with `402 credits_exhausted` if either side lacks required credits.
+- No partial finalize and no partial debit.
 
 ## 3) Rate limits (default env-backed values)
 - Bootstrap: `3/hour`
@@ -121,15 +129,22 @@ Implementation note:
 - Claim endpoint: `POST /v1/referrals/claim`
 - Award trigger: first paid subscription invoice.
 - Current grant: 100 credits to referrer.
+- Cap: at most 50 referral grants per referrer.
 - One claim per referred node.
 
 ## 6b) Upload trial bridge
-- Trigger: first time a node reaches `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `10`).
-- Grant (one-time): active trial entitlement for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`) plus `UPLOAD_TRIAL_CREDIT_GRANT` credits (default `100`).
+- Trigger: first time a node reaches `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `20`).
+- Grant (one-time): active trial entitlement for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`) plus `UPLOAD_TRIAL_CREDIT_GRANT` credits (default `200`).
 - Idempotency/audit:
   - Entitlement is unique per node.
   - Credit grant is written once as `grant_trial`.
   - Trial grant is recorded in trial entitlement event audit.
+
+## 6c) Request milestone bridge
+- Trigger: first time a node reaches `REQUEST_MILESTONE_THRESHOLD` Request creates (default `20`).
+- Grant (one-time): `REQUEST_MILESTONE_CREDIT_GRANT` credits (default `200`) as `grant_milestone_requests`.
+- Idempotency/audit:
+  - Credit grant is one-time per node/threshold.
 
 ## 7) Credits quote endpoints
 - `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).

@@ -207,11 +207,13 @@ create table if not exists credit_ledger (
   type text not null check (type in (
     'grant_signup',
     'grant_trial',
+    'grant_milestone_requests',
     'grant_subscription_monthly',
     'grant_referral',
     'topup_purchase',
     'debit_search',
     'debit_search_page',
+    'deal_accept_fee',
     'debit_broadening',
     'adjustment_manual',
     'reversal'
@@ -269,11 +271,13 @@ begin
     alter table credit_ledger add constraint credit_ledger_type_check check (type in (
       'grant_signup',
       'grant_trial',
+      'grant_milestone_requests',
       'grant_subscription_monthly',
       'grant_referral',
       'topup_purchase',
       'debit_search',
       'debit_search_page',
+      'deal_accept_fee',
       'debit_broadening',
       'adjustment_manual',
       'reversal'

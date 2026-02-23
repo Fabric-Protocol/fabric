@@ -381,7 +381,14 @@ export const fabricService = {
   getUnit(nodeId: string, id: string) { return repo.getResource('units', nodeId, id); },
   patchUnit(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('units', nodeId, id, version, payload); },
   deleteUnit(nodeId: string, id: string) { return repo.deleteResource('units', nodeId, id); },
-  createRequest(nodeId: string, payload: any) { return repo.createResource('requests', nodeId, payload).then((request) => ({ request })); },
+  async createRequest(nodeId: string, payload: any) {
+    const request = await repo.createResource('requests', nodeId, payload);
+    await repo.grantRequestMilestoneIfEligible(nodeId, {
+      threshold: config.requestMilestoneThreshold,
+      creditGrant: config.requestMilestoneCreditGrant,
+    });
+    return { request };
+  },
   listRequests(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('requests', nodeId, limit, cursor); },
   getRequest(nodeId: string, id: string) { return repo.getResource('requests', nodeId, id); },
   patchRequest(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('requests', nodeId, id, version, payload); },
@@ -679,8 +686,15 @@ export async function offerSummary(offer: any) {
   const byFrom = offer.from_node_id === nodeId;
   if (byFrom) {
     if (offer.accepted_by_to_at) {
-      const updated = await repo.setOfferStatus(offerId, 'mutually_accepted', { accepted_by_from_at: new Date().toISOString(), mutually_accepted_at: new Date().toISOString() });
-      await repo.commitHolds(offerId);
+      const finalized = await repo.finalizeOfferMutualAcceptanceWithFees(
+        offerId,
+        'from',
+        config.dealAcceptanceFeeCredits,
+      );
+      if ((finalized as any).notFound) return { notFound: true };
+      if ((finalized as any).conflict) return { conflict: true };
+      if ((finalized as any).creditsExhausted) return { creditsExhausted: (finalized as any).creditsExhausted };
+      const updated = (finalized as any).offer;
       await emitOfferLifecycleEvents({
         offerId: updated.id,
         eventType: 'offer_accepted',
@@ -703,8 +717,15 @@ export async function offerSummary(offer: any) {
     return { offer: await offerSummary(updated) };
   }
   if (offer.accepted_by_from_at) {
-    const updated = await repo.setOfferStatus(offerId, 'mutually_accepted', { accepted_by_to_at: new Date().toISOString(), mutually_accepted_at: new Date().toISOString() });
-    await repo.commitHolds(offerId);
+    const finalized = await repo.finalizeOfferMutualAcceptanceWithFees(
+      offerId,
+      'to',
+      config.dealAcceptanceFeeCredits,
+    );
+    if ((finalized as any).notFound) return { notFound: true };
+    if ((finalized as any).conflict) return { conflict: true };
+    if ((finalized as any).creditsExhausted) return { creditsExhausted: (finalized as any).creditsExhausted };
+    const updated = (finalized as any).offer;
     await emitOfferLifecycleEvents({
       offerId: updated.id,
       eventType: 'offer_accepted',
@@ -988,9 +1009,8 @@ function encodeSearchCursor(
 
 function pageAddOnCost(pageIndex: number) {
   if (pageIndex <= 1) return 0;
-  if (pageIndex >= config.searchPageProhibitiveFrom) return config.searchPageProhibitiveCost;
-  if (pageIndex <= 3) return config.searchPageAddOnSmall;
-  return config.searchPageAddOnLarge;
+  if (pageIndex >= 6) return 100;
+  return pageIndex;
 }
 
 async function resolveSearchTargetNode(rawTarget: any): Promise<{ targetNodeId: string | null; validationError?: 'target_mismatch' | 'target_not_found' }> {
@@ -1870,7 +1890,7 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     const referralPaymentReference = invoiceId
       ? `invoice:${invoiceId}`
       : (stripeSubscriptionId ? `subscription:${stripeSubscriptionId}` : `event:${String(event.id ?? 'unknown')}`);
-    await repo.awardReferralFirstPaid(nodeId, 100, referralPaymentReference, {
+    await repo.awardReferralFirstPaid(nodeId, 100, referralPaymentReference, config.referralMaxGrantsPerReferrer, {
       invoice_id: invoiceId ?? null,
       stripe_subscription_id: stripeSubscriptionId ?? null,
     });

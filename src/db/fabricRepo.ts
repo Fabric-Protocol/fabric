@@ -556,6 +556,30 @@ export async function createUnitWithUploadTrial(
   return rows[0];
 }
 
+export async function grantRequestMilestoneIfEligible(
+  nodeId: string,
+  options: { threshold: number; creditGrant: number },
+) {
+  const counts = await query<{ c: string }>(
+    'select count(*)::text as c from requests where node_id=$1',
+    [nodeId],
+  );
+  const requestCount = Number(counts[0]?.c ?? 0);
+  if (requestCount < options.threshold) return { granted: false, request_count: requestCount };
+  const granted = await addCreditIdempotent(
+    nodeId,
+    'grant_milestone_requests',
+    options.creditGrant,
+    {
+      reason: 'request_threshold_grant',
+      threshold: options.threshold,
+      request_count: requestCount,
+    },
+    `request_milestone_threshold:${options.threshold}`,
+  );
+  return { granted, request_count: requestCount };
+}
+
 export async function listResources(kind:'units'|'requests', nodeId:string, limit:number, cursor:string|null) {
   const table = tableFor(kind);
   if (cursor) return query<any>(`select * from ${table} where node_id=$1 and deleted_at is null and created_at < $3::timestamptz order by created_at desc limit $2`, [nodeId, limit, cursor]);
@@ -1068,6 +1092,120 @@ export async function setOfferStatus(offerId: string, status: string, fields: Re
   return rows[0] ?? null;
 }
 
+export async function finalizeOfferMutualAcceptanceWithFees(
+  offerId: string,
+  acceptedBy: 'from' | 'to',
+  feeCredits: number,
+) {
+  const fee = Math.max(0, Math.trunc(feeCredits));
+  const acceptedField = acceptedBy === 'from' ? 'accepted_by_from_at' : 'accepted_by_to_at';
+  const counterpartField = acceptedBy === 'from' ? 'accepted_by_to_at' : 'accepted_by_from_at';
+  const rows = await query<{
+    missing_offer: boolean;
+    conflict: boolean;
+    from_balance: string;
+    to_balance: string;
+    offer: any | null;
+  }>(
+    `with locked_offer as (
+       select *
+       from offers
+       where id=$1
+         and deleted_at is null
+       limit 1
+       for update
+     ),
+     checks as (
+       select
+         (count(*) = 0) as missing_offer,
+         coalesce(bool_or((${counterpartField} is null) or status not in ('pending', 'accepted_by_a', 'accepted_by_b')), false) as conflict
+       from locked_offer
+     ),
+     balances as (
+       select
+         lo.from_node_id,
+         lo.to_node_id,
+         coalesce((select sum(amount) from credit_ledger where node_id=lo.from_node_id), 0)::int as from_balance,
+         coalesce((select sum(amount) from credit_ledger where node_id=lo.to_node_id), 0)::int as to_balance
+       from locked_offer lo
+     ),
+     can_finalize as (
+       select
+         not checks.missing_offer
+         and not checks.conflict
+         and balances.from_balance >= $2
+         and balances.to_balance >= $2 as ok
+       from checks
+       left join balances on true
+     ),
+     updated_offer as (
+       update offers o
+       set status='mutually_accepted',
+           mutually_accepted_at=coalesce(mutually_accepted_at, now()),
+           ${acceptedField}=coalesce(${acceptedField}, now())
+       where o.id in (select id from locked_offer)
+         and exists(select 1 from can_finalize where ok)
+       returning *
+     ),
+     commit_holds as (
+       update holds
+       set status='committed',
+           committed_at=now()
+       where offer_id in (select id from updated_offer)
+         and status='active'
+       returning id
+     ),
+     charge_from as (
+       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+       select
+         balances.from_node_id,
+         'deal_accept_fee',
+         -$2,
+         jsonb_build_object('offer_id', $1::text, 'side', 'from'),
+         ('deal_accept_fee:' || $1::text || ':' || balances.from_node_id::text)
+       from balances
+       where $2 > 0
+         and exists(select 1 from updated_offer)
+       on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
+       returning id
+     ),
+     charge_to as (
+       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+       select
+         balances.to_node_id,
+         'deal_accept_fee',
+         -$2,
+         jsonb_build_object('offer_id', $1::text, 'side', 'to'),
+         ('deal_accept_fee:' || $1::text || ':' || balances.to_node_id::text)
+       from balances
+       where $2 > 0
+         and exists(select 1 from updated_offer)
+       on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
+       returning id
+     )
+     select
+       checks.missing_offer,
+       checks.conflict,
+       coalesce(balances.from_balance, 0)::text as from_balance,
+       coalesce(balances.to_balance, 0)::text as to_balance,
+       (select row_to_json(updated_offer) from updated_offer limit 1) as offer
+     from checks
+     left join balances on true`,
+    [offerId, fee],
+  );
+  const row = rows[0] ?? null;
+  if (!row || row.missing_offer) return { notFound: true as const };
+  if (row.conflict) return { conflict: true as const };
+  if (!row.offer) {
+    const fromBalance = Number(row.from_balance ?? 0);
+    const toBalance = Number(row.to_balance ?? 0);
+    if (fromBalance < fee) return { creditsExhausted: { credits_required: fee, credits_balance: fromBalance } };
+    if (toBalance < fee) return { creditsExhausted: { credits_required: fee, credits_balance: toBalance } };
+    return { conflict: true as const };
+  }
+  return { offer: row.offer };
+}
+
 export async function releaseHolds(offerId: string) {
   await query("update holds set status='released', released_at=now() where offer_id=$1 and status='active'", [offerId]);
 }
@@ -1293,6 +1431,7 @@ export async function awardReferralFirstPaid(
   claimerNodeId: string,
   awardCredits: number,
   paymentReference: string,
+  maxGrantsPerReferrer: number,
   meta: { invoice_id: string | null; stripe_subscription_id: string | null } = { invoice_id: null, stripe_subscription_id: null },
 ) {
   const idempotencyKey = `referral:first_paid:${claimerNodeId}:${paymentReference}`;
@@ -1309,6 +1448,12 @@ export async function awardReferralFirstPaid(
          and status='claimed'
        returning id, issuer_node_id, claimer_node_id
      ),
+     issuer_lock as (
+       select n.id
+       from nodes n
+       join claim on claim.issuer_node_id = n.id
+       for update
+     ),
      credit as (
        insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
        select
@@ -1324,6 +1469,14 @@ export async function awardReferralFirstPaid(
          ),
          $6::text
        from claim
+       join issuer_lock on issuer_lock.id = claim.issuer_node_id
+       where (
+         select count(*)::int
+         from credit_ledger cl
+         where cl.node_id = claim.issuer_node_id
+           and cl.type = 'grant_referral'
+           and cl.amount > 0
+       ) < $7
        on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
        returning id
      )
@@ -1332,7 +1485,7 @@ export async function awardReferralFirstPaid(
        exists(select 1 from credit) as credit_granted,
        (select id from claim limit 1) as claim_id,
        (select issuer_node_id from claim limit 1) as issuer_node_id`,
-    [claimerNodeId, awardCredits, paymentReference, meta.invoice_id, meta.stripe_subscription_id, idempotencyKey],
+    [claimerNodeId, awardCredits, paymentReference, meta.invoice_id, meta.stripe_subscription_id, idempotencyKey, maxGrantsPerReferrer],
   );
   return rows[0] ?? {
     claim_marked_awarded: false,

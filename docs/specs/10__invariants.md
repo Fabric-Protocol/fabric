@@ -89,9 +89,9 @@ MVP note:
 - Search **MUST** be authenticated and credit-metered; credits meter:
   - query execution
   - pagination
-  - broadening
   - node inventory expansion
-- Search **MUST** require spend entitlement (`active subscription` OR `active trial`) and credits.
+- Broadening is deprecated/optional in MVP and **MUST NOT** increase credit cost.
+- Search **MUST** require ACTIVE, not-suspended node state and sufficient credits.
 - Search **MUST** be split by intent (no combined search):
   - `POST /v1/search/listings` (buyer/acquirer intent)
   - `POST /v1/search/requests` (seller/provider intent)
@@ -99,8 +99,9 @@ MVP note:
 
 ---
 
-## 13) Broadening is explicit, paid, and auditable
-- Broadening **MUST** be an explicit paid action with deterministic rules and clear user controls.
+## 13) Broadening is explicit (deprecated) and auditable
+- Broadening **MUST** remain an explicit action with deterministic rules and clear user controls.
+- Broadening **MUST** default to level `0` when omitted and currently has `0` additional credit cost.
 - Every broadening dimension **MUST** expand results from narrow defaults.
 
 ---
@@ -159,12 +160,16 @@ Subscriptions:
 - Business: $49.99 / 5,000 credits
 
 Top-ups (worse than Basic):
-- 100 credits = $3.99
-- 300 credits = $11.99
-- 1,000 credits = $39.99
+- 100 credits = $4.00
+- 300 credits = $12.00
+- 1,000 credits = $38.00
 
 Acquisition:
-- Signup grant: 200 credits one-time
+- Signup grant: 100 credits one-time
+- Unit milestone grant: 200 credits one-time after 20 Units
+- Request milestone grant: 200 credits one-time after 20 Requests
+- Referral grant: 100 credits, paid on referred node first paid invoice, capped at 50 grants per referrer
+- Offer mutual-acceptance fee: 1 credit charged to each side when an offer becomes `mutually_accepted`
 
 ---
 

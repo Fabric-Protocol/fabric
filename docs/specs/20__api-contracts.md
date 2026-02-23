@@ -177,14 +177,14 @@ Response 200
     "created_at": "iso"
   },
   "credits": {
-    "granted": 200,
+    "granted": 100,
     "reason": "SIGNUP_GRANT"
   }
 }
 
 Rules / side effects
 
-Signup grant (200 credits) applies once per Node.
+Signup grant (100 credits) applies once per Node.
 
 If referral_code is provided, it is recorded as a referral claim (subject to the referral rules in section 13).
 
@@ -588,7 +588,7 @@ Response 200
     {
       "id": "uuid",
       "node_id": "uuid",
-      "type": "grant_signup|grant_trial|grant_subscription_monthly|grant_referral|topup_purchase|debit_search|debit_search_page|debit_broadening|adjustment_manual|reversal",
+      "type": "grant_signup|grant_trial|grant_milestone_requests|grant_subscription_monthly|grant_referral|topup_purchase|debit_search|debit_search_page|deal_accept_fee|debit_broadening|adjustment_manual|reversal",
       "amount": -2,
       "created_at": "iso",
       "meta": {}
@@ -619,9 +619,9 @@ Response 200
   },
   "credits_balance": 123,
   "search_quote": {
-    "estimated_cost": 2,
+    "estimated_cost": 5,
     "breakdown": {
-      "base_search_cost": 2,
+      "base_search_cost": 5,
       "broadening_level": 0,
       "broadening_cost": 0
     }
@@ -1482,9 +1482,15 @@ If other side already accepted → mutually_accepted.
 
 On mutually_accepted, holds become committed (units remain unavailable).
 
+When the second acceptance finalizes `mutually_accepted`, debit `deal_accept_fee` (1 credit) from each side exactly once.
+
+If either side lacks required credits, finalization fails with `402 credits_exhausted` and no partial debit/finalize occurs.
+
 Errors
 
 403 forbidden
+
+402 credits_exhausted
 
 404 not_found
 
@@ -1692,7 +1698,7 @@ Required
 
 Metering
 
-None
+Conditional
 
 Purpose
 
@@ -1749,6 +1755,8 @@ Associate current node to a referrer via code.
 Rule
 
 Allowed only if the node has no prior paid Stripe event (first paid event locks referral).
+
+Referral grants are awarded only on first paid subscription invoice and capped at 50 grants per referrer.
 
 Request
 { "referral_code": "string" }
@@ -1897,6 +1905,8 @@ Updates subscriber status.
 Grants monthly credits once per billing period (unique on (node_id, period_start) in ledger).
 
 Applies referral award on first paid subscription invoice.
+
+Referral award is capped at 50 paid grants per referrer.
 
 Top-up grants:
 

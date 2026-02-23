@@ -409,6 +409,7 @@ export const openApiDocument = {
           '401': { description: 'Unauthorized' },
           '403': { description: 'Forbidden' },
           '404': { description: 'Offer not found' },
+          '402': { description: 'Not enough credits' },
           '409': { description: 'Invalid state transition' },
           '422': { description: 'Legal assent required' },
         },

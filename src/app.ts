@@ -1667,6 +1667,7 @@ export function buildApp() {
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
     const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', out.creditsExhausted));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
