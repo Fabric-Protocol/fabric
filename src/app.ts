@@ -29,6 +29,22 @@ const searchBroadQueryState = new Map<string, number[]>();
 const SEARCH_CURSOR_PREFIX = 'pg1:';
 const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
 
+const CONTACT_EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
+const CONTACT_PHONE_RE = /(?:\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
+const CONTACT_HANDLE_RE = /(?:telegram|whatsapp|signal|wechat|discord|skype)\s*[:\-]\s*\S+/i;
+const CONTACT_INFO_CHECKED_FIELDS = ['title', 'description', 'scope_notes', 'public_summary'] as const;
+
+function detectContactInfo(data: Record<string, unknown>): string | null {
+  for (const field of CONTACT_INFO_CHECKED_FIELDS) {
+    const val = data[field];
+    if (typeof val !== 'string' || val.length === 0) continue;
+    if (CONTACT_EMAIL_RE.test(val)) return field;
+    if (CONTACT_PHONE_RE.test(val)) return field;
+    if (CONTACT_HANDLE_RE.test(val)) return field;
+  }
+  return null;
+}
+
 const resourceSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
   quantity: z.number().nullable().optional(), estimated_value: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
@@ -59,6 +75,12 @@ const searchSchema = z.object({
   cursor: z.string().nullable(),
 });
 const searchQuoteSchema = searchSchema.omit({ budget: true, target: true });
+
+const drilldownPostSchema = z.object({
+  budget: z.object({ credits_max: z.number().int().min(0) }),
+  cursor: z.string().nullable().optional().default(null),
+  limit: z.number().int().min(1).max(100).optional().default(20),
+});
 
 const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 <html lang="en">
@@ -598,7 +620,7 @@ SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
   -H "Authorization: ApiKey $API_KEY" \\
   -H "Idempotency-Key: $SEARCH_IDEM" \\
   -H "Content-Type: application/json" \\
-  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_requested":2},"limit":20,"cursor":null}')
+  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_max":5},"limit":20,"cursor":null}')
 FOUND_UNIT_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')</code></pre>
 
     <pre><code>OFFER_IDEM=$(uuidgen)
@@ -669,16 +691,27 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
 
 # Cadence: poll every 2-5s while active; back off exponentially on empty pages/429/5xx.</code></pre>
 
+    <h2>Trust &amp; Safety (Implemented)</h2>
+    <ul>
+      <li><strong>Privacy-by-default:</strong> canonical objects are private; public projections use an allowlist of fields (no contact info, no precise geo).</li>
+      <li><strong>Contact reveal requires mutual acceptance:</strong> <code>POST /v1/offers/{offer_id}/reveal-contact</code> returns contact data only when offer status is <code>mutually_accepted</code> and caller is a party.</li>
+      <li><strong>No contact info in descriptions/notes:</strong> Unit and Request text fields (<code>title</code>, <code>description</code>, <code>scope_notes</code>, <code>public_summary</code>) are validated at create and update time. Emails, phone numbers, and labeled messaging handles are rejected with <code>422 content_contact_info_disallowed</code>. Repeated or egregious violations may result in takedown (<code>POST /v1/admin/takedown</code>) and/or suspension.</li>
+      <li><strong>Suspension/revocation:</strong> suspended nodes receive <code>403 forbidden</code> on all authenticated endpoints.</li>
+      <li><strong>Rate limits:</strong> per-IP, per-node, and per-endpoint limits with <code>429</code> responses.</li>
+      <li><strong>Search log redaction:</strong> raw queries are not stored; retention windows apply (hot/archive/delete).</li>
+      <li><strong>Webhook signing:</strong> optional HMAC-SHA256 via <code>event_webhook_secret</code>; rotation is immediate.</li>
+      <li><strong>Recovery:</strong> challenges are TTL-bound and attempt-limited; success revokes all prior keys.</li>
+    </ul>
+    <p>Machine-readable trust rules are available in <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code>.</p>
+
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
-      <li>Search includes a budget contract: send <code>budget.credits_requested</code>; server guarantees <code>credits_charged &lt;= credits_requested</code>.</li>
-      <li>When capped, inspect <code>budget.was_capped</code>, <code>budget.guidance</code>, and <code>budget.coverage</code> to adjust broadening/paging.</li>
+      <li>Search includes a budget contract: send <code>budget.credits_max</code>; server returns 402 <code>budget_cap_exceeded</code> if computed cost exceeds this cap.</li>
       <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
       <li>Delivery/Transport example: publish with <code>scope_primary=ship_to</code>, then run a targeted follow-up search with a small budget.</li>
       <li>Anti-scrape policy: deep pagination is intentionally costly/restricted; use target + category drilldown for second-order exploration.</li>
       <li>If you need missing categories, submit suggestions through <code>/support</code>.</li>
-      <li>Saved searches/alerts are planned future work; no timeline is committed in MVP.</li>
       <li>Default page limit is 20 unless an endpoint accepts a custom limit.</li>
       <li>Search retention windows: hot up to 30 days, archive-eligible up to 365 days, then deletion-eligible.</li>
       <li>Not supported in MVP: escrow/payment intermediation, in-app chat, combined search endpoint, background matching.</li>
@@ -723,6 +756,12 @@ function isAnonIdempotentRoute(url: string) {
     || path === '/v1/recovery/complete';
 }
 
+function isNoIdemWriteRoute(req: FastifyRequest) {
+  const path = routePath(req.url);
+  return path === '/v1/public/nodes/categories-summary'
+    || /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path);
+}
+
 function firstHeaderValue(value: string | string[] | undefined) {
   if (Array.isArray(value)) return value[0] ?? '';
   return value ?? '';
@@ -763,6 +802,35 @@ function buildMetaPayload(req: FastifyRequest) {
     docs_urls: {
       agents_url: absoluteUrl(req, '/docs/agents'),
     },
+    agent_toc: {
+      start_here: [
+        'GET /v1/meta',
+        'POST /v1/bootstrap',
+        'GET /v1/me',
+      ],
+      capabilities: [
+        'publish_units_requests',
+        'search_listings_requests',
+        'offers_negotiation',
+        'contact_reveal',
+        'events_webhooks',
+        'credits_billing',
+      ],
+      invariants: [
+        'idempotency_key_required_on_non_get',
+        'if_match_required_on_patch',
+        'error_envelope_on_all_non_2xx',
+        'credits_charged_only_on_200',
+        'events_at_least_once_delivery',
+      ],
+      trust_safety_rules: [
+        'no_contact_info_in_descriptions_or_notes',
+        'contact_reveal_only_after_mutual_acceptance',
+        'public_projections_allowlist_only',
+        'search_logs_redacted_and_retention_limited',
+        'suspension_and_takedown_enforced',
+      ],
+    },
   };
 }
 
@@ -786,7 +854,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
-  if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
+  if ((method === 'GET' || method === 'POST') && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (/^\/v1\/offers\/[^/]+\/(accept|reject|cancel)$/.test(path))) return { name: 'offer_decision', limit: config.rateLimitOfferDecisionPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && /^\/v1\/offers\/[^/]+\/reveal-contact$/.test(path)) return { name: 'reveal_contact', limit: config.rateLimitRevealContactPerHour, windowSeconds: 3600, subject: 'node' };
@@ -1101,7 +1169,7 @@ export function buildApp() {
   });
 
   app.addHook('preHandler', async (req, reply) => {
-    if (!nonGet.has(req.method) || req.url === '/v1/webhooks/stripe') return;
+    if (!nonGet.has(req.method) || req.url === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return;
     const idemKey = req.headers['idempotency-key'];
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
     const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
@@ -1129,7 +1197,7 @@ export function buildApp() {
   });
 
   app.addHook('onSend', async (req, reply, payload) => {
-    if (!nonGet.has(req.method) || req.url === '/v1/webhooks/stripe') return payload;
+    if (!nonGet.has(req.method) || req.url === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return payload;
     const idem = (req as AuthedRequest).idem;
     if (!idem) return payload;
     let responseJson: unknown;
@@ -1458,6 +1526,8 @@ export function buildApp() {
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const contactField = detectContactInfo(parsed.data);
+    if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     return fabricService.createUnit((req as AuthedRequest).nodeId!, parsed.data);
   });
   app.get('/v1/units', async (req) => {
@@ -1475,6 +1545,8 @@ export function buildApp() {
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
     const parsed = resourceSchema.partial().safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const contactField = detectContactInfo(parsed.data);
+    if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     const unit = await fabricService.patchUnit((req as AuthedRequest).nodeId!, (req.params as any).unit_id, Number(ifMatch), parsed.data);
     if (!unit) return reply.status(409).send(errorEnvelope('stale_write_conflict', 'Version conflict'));
     return unit;
@@ -1488,6 +1560,8 @@ export function buildApp() {
   app.post('/v1/requests', async (req, reply) => {
     const parsed = resourceSchema.extend({ need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const contactField = detectContactInfo(parsed.data);
+    if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     return fabricService.createRequest((req as AuthedRequest).nodeId!, parsed.data);
   });
   app.get('/v1/requests', async (req) => {
@@ -1505,6 +1579,8 @@ export function buildApp() {
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
     const parsed = resourceSchema.partial().safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const contactField = detectContactInfo(parsed.data);
+    if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     const item = await fabricService.patchRequest((req as AuthedRequest).nodeId!, (req.params as any).request_id, Number(ifMatch), parsed.data);
     if (!item) return reply.status(409).send(errorEnvelope('stale_write_conflict', 'Version conflict'));
     return item;
@@ -1595,53 +1671,64 @@ export function buildApp() {
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
-  app.get('/v1/public/nodes/:node_id/listings/categories/:category_id', async (req, reply) => {
+  async function handleDrilldown(
+    req: FastifyRequest,
+    reply: any,
+    kind: 'listings' | 'requests',
+    targetNodeId: string,
+    categoryId: number,
+    limit: number,
+    cursor: string | null,
+    creditsMax: number | undefined,
+  ) {
     const callerNodeId = (req as AuthedRequest).nodeId!;
-    const q = req.query as any;
-    const limit = Number(q.limit ?? 20);
-    const categoryId = Number((req.params as any).category_id);
     if (!Number.isInteger(categoryId) || categoryId < 0) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid category filter', { reason: 'category_id_invalid' }));
     }
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
     }
-    const targetNodeId = (req.params as any).node_id as string;
     const perNodeRule: RateLimitRule = { name: 'drilldown_per_node', limit: config.rateLimitDrilldownPerNodePerMinute, windowSeconds: 60, subject: 'node' };
     if (!applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`)) return reply;
     const isSubscriber = (req as AuthedRequest).isSubscriber ?? false;
     const dailyCapLimit = isSubscriber ? config.drilldownDailyCapBasic : config.drilldownDailyCapFree;
     const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
     if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
-    const creditsMax = q.budget_credits_max !== undefined ? Number(q.budget_credits_max) : undefined;
-    const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, 'listings', categoryId, limit, q.cursor ?? null, creditsMax);
+    const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, kind, categoryId, limit, cursor, creditsMax);
     if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
+  }
+
+  app.get('/v1/public/nodes/:node_id/listings/categories/:category_id', async (req, reply) => {
+    const q = req.query as any;
+    const limit = Number(q.limit ?? 20);
+    const categoryId = Number((req.params as any).category_id);
+    const targetNodeId = (req.params as any).node_id as string;
+    const creditsMax = q.budget_credits_max !== undefined ? Number(q.budget_credits_max) : undefined;
+    return handleDrilldown(req, reply, 'listings', targetNodeId, categoryId, limit, q.cursor ?? null, creditsMax);
   });
   app.get('/v1/public/nodes/:node_id/requests/categories/:category_id', async (req, reply) => {
-    const callerNodeId = (req as AuthedRequest).nodeId!;
     const q = req.query as any;
     const limit = Number(q.limit ?? 20);
     const categoryId = Number((req.params as any).category_id);
-    if (!Number.isInteger(categoryId) || categoryId < 0) {
-      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid category filter', { reason: 'category_id_invalid' }));
-    }
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
-    }
     const targetNodeId = (req.params as any).node_id as string;
-    const perNodeRule: RateLimitRule = { name: 'drilldown_per_node', limit: config.rateLimitDrilldownPerNodePerMinute, windowSeconds: 60, subject: 'node' };
-    if (!applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`)) return reply;
-    const isSubscriber = (req as AuthedRequest).isSubscriber ?? false;
-    const dailyCapLimit = isSubscriber ? config.drilldownDailyCapBasic : config.drilldownDailyCapFree;
-    const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
-    if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
     const creditsMax = q.budget_credits_max !== undefined ? Number(q.budget_credits_max) : undefined;
-    const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, 'requests', categoryId, limit, q.cursor ?? null, creditsMax);
-    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
-    return out;
+    return handleDrilldown(req, reply, 'requests', targetNodeId, categoryId, limit, q.cursor ?? null, creditsMax);
+  });
+  app.post('/v1/public/nodes/:node_id/listings/categories/:category_id', async (req, reply) => {
+    const parsed = drilldownPostSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'body_invalid' }));
+    const categoryId = Number((req.params as any).category_id);
+    const targetNodeId = (req.params as any).node_id as string;
+    return handleDrilldown(req, reply, 'listings', targetNodeId, categoryId, parsed.data.limit, parsed.data.cursor ?? null, parsed.data.budget.credits_max);
+  });
+  app.post('/v1/public/nodes/:node_id/requests/categories/:category_id', async (req, reply) => {
+    const parsed = drilldownPostSchema.safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'body_invalid' }));
+    const categoryId = Number((req.params as any).category_id);
+    const targetNodeId = (req.params as any).node_id as string;
+    return handleDrilldown(req, reply, 'requests', targetNodeId, categoryId, parsed.data.limit, parsed.data.cursor ?? null, parsed.data.budget.credits_max);
   });
 
   app.post('/v1/public/nodes/categories-summary', async (req, reply) => {

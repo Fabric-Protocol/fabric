@@ -230,6 +230,21 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   assert.match(body.categories_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /\/docs\/agents$/);
+
+  const toc = body.agent_toc;
+  assert.ok(toc, 'agent_toc must be present');
+  assert.ok(Array.isArray(toc.start_here), 'start_here must be an array');
+  assert.ok(toc.start_here.includes('GET /v1/meta'), 'start_here must include GET /v1/meta');
+  assert.ok(toc.start_here.includes('POST /v1/bootstrap'), 'start_here must include POST /v1/bootstrap');
+  assert.ok(Array.isArray(toc.capabilities), 'capabilities must be an array');
+  assert.ok(toc.capabilities.length >= 3, 'capabilities must list at least 3 items');
+  assert.ok(Array.isArray(toc.invariants), 'invariants must be an array');
+  assert.ok(toc.invariants.includes('error_envelope_on_all_non_2xx'));
+  assert.ok(toc.invariants.includes('credits_charged_only_on_200'));
+  assert.ok(Array.isArray(toc.trust_safety_rules), 'trust_safety_rules must be an array');
+  assert.ok(toc.trust_safety_rules.includes('no_contact_info_in_descriptions_or_notes'));
+  assert.ok(toc.trust_safety_rules.includes('contact_reveal_only_after_mutual_acceptance'));
+  assert.ok(toc.trust_safety_rules.includes('public_projections_allowlist_only'));
   await app.close();
 });
 
@@ -337,6 +352,12 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
+  assert.equal(metaRequired.includes('agent_toc'), true);
+  const agentTocSchema = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.properties?.agent_toc ?? {};
+  assert.equal(agentTocSchema.type, 'object');
+  assert.ok(Array.isArray(agentTocSchema.required));
+  assert.ok(agentTocSchema.required.includes('start_here'));
+  assert.ok(agentTocSchema.required.includes('trust_safety_rules'));
   await app.close();
 });
 
@@ -980,6 +1001,80 @@ test('publish endpoint rejects suspended node before projection write', async ()
   assert.equal(res.statusCode, 403);
   assert.equal(res.json().error.code, 'forbidden');
   assert.equal(res.json().error.message, 'Node is suspended');
+  await app.close();
+});
+
+test('unit create rejects description containing email with content_contact_info_disallowed', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-email-unit');
+  const apiKey = b.json().api_key.api_key;
+  const payload = { ...unitPayload('Email test'), description: 'Contact me at seller@example.com for details' };
+  const res = await app.inject({ method: 'POST', url: '/v1/units', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-email-unit' }, payload });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(res.json().error.details.field, 'description');
+  await app.close();
+});
+
+test('unit create rejects description containing phone number', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-phone-unit');
+  const apiKey = b.json().api_key.api_key;
+  const payload = { ...unitPayload('Phone test'), description: 'Call me at 555-123-4567' };
+  const res = await app.inject({ method: 'POST', url: '/v1/units', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-phone-unit' }, payload });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(res.json().error.details.field, 'description');
+  await app.close();
+});
+
+test('unit create rejects description containing labeled messaging handle', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-handle-unit');
+  const apiKey = b.json().api_key.api_key;
+  const payload = { ...unitPayload('Handle test'), description: 'Telegram: @myhandle for offers' };
+  const res = await app.inject({ method: 'POST', url: '/v1/units', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-handle-unit' }, payload });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(res.json().error.details.field, 'description');
+  await app.close();
+});
+
+test('unit create accepts clean description without contact info', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-clean-unit');
+  const apiKey = b.json().api_key.api_key;
+  const payload = { ...unitPayload('Clean unit'), description: 'Professional CAD design services for mechanical enclosures' };
+  const res = await app.inject({ method: 'POST', url: '/v1/units', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-clean-unit' }, payload });
+  assert.equal(res.statusCode, 200);
+  await app.close();
+});
+
+test('request create rejects scope_notes containing email', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-email-req');
+  const apiKey = b.json().api_key.api_key;
+  const payload = { ...unitPayload('Req email test'), scope_notes: 'Email me at buyer@domain.org' };
+  const res = await app.inject({ method: 'POST', url: '/v1/requests', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-email-req' }, payload });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(res.json().error.details.field, 'scope_notes');
+  await app.close();
+});
+
+test('unit patch rejects public_summary containing phone number', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-contact-patch-unit');
+  const apiKey = b.json().api_key.api_key;
+  const createPayload = unitPayload('Patch contact test');
+  const created = await app.inject({ method: 'POST', url: '/v1/units', headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-patch-create' }, payload: createPayload });
+  assert.equal(created.statusCode, 200);
+  const unitId = created.json().unit.id;
+  const version = created.json().unit.version;
+  const patch = await app.inject({ method: 'PATCH', url: `/v1/units/${unitId}`, headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ci-patch-phone', 'if-match': String(version) }, payload: { public_summary: 'Call +1-800-555-1234 for pricing' } });
+  assert.equal(patch.statusCode, 422);
+  assert.equal(patch.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(patch.json().error.details.field, 'public_summary');
   await app.close();
 });
 
@@ -5137,7 +5232,7 @@ test('POST /v1/public/nodes/categories-summary returns counts by category', asyn
   const res = await app.inject({
     method: 'POST',
     url: '/v1/public/nodes/categories-summary',
-    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-basic' },
+    headers: { authorization: `ApiKey ${callerApiKey}` },
     payload: { node_ids: [ownerNodeId], kind: 'listings' },
   });
   assert.equal(res.statusCode, 200);
@@ -5179,7 +5274,7 @@ test('POST /v1/public/nodes/categories-summary respects kind flag', async () => 
   const listingsOnly = await app.inject({
     method: 'POST',
     url: '/v1/public/nodes/categories-summary',
-    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-listings' },
+    headers: { authorization: `ApiKey ${callerApiKey}` },
     payload: { node_ids: [ownerNodeId], kind: 'listings' },
   });
   assert.equal(listingsOnly.statusCode, 200);
@@ -5189,7 +5284,7 @@ test('POST /v1/public/nodes/categories-summary respects kind flag', async () => 
   const requestsOnly = await app.inject({
     method: 'POST',
     url: '/v1/public/nodes/categories-summary',
-    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-requests' },
+    headers: { authorization: `ApiKey ${callerApiKey}` },
     payload: { node_ids: [ownerNodeId], kind: 'requests' },
   });
   assert.equal(requestsOnly.statusCode, 200);
@@ -5199,7 +5294,7 @@ test('POST /v1/public/nodes/categories-summary respects kind flag', async () => 
   const both = await app.inject({
     method: 'POST',
     url: '/v1/public/nodes/categories-summary',
-    headers: { authorization: `ApiKey ${callerApiKey}`, 'idempotency-key': 'catsum-kind-both' },
+    headers: { authorization: `ApiKey ${callerApiKey}` },
     payload: { node_ids: [ownerNodeId], kind: 'both' },
   });
   assert.equal(both.statusCode, 200);
@@ -5320,6 +5415,66 @@ test('node category drilldown per-caller-per-node rate limit', async () => {
     assert.equal(diffNode.statusCode, 200, 'different target node should not be blocked');
     await app.close();
   });
+});
+
+test('POST drilldown charges credits and returns correct shape', async () => {
+  const app = buildApp();
+  const callerBoot = await bootstrap(app, 'boot-post-drilldown-caller');
+  const callerNodeId = callerBoot.json().node.id;
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_post_drilldown_sub')).statusCode, 200);
+
+  const ownerBoot = await bootstrap(app, 'boot-post-drilldown-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('PostDrill item', 'post-drilldown-scope'), category_ids: [901] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const balBefore = await repo.creditBalance(callerNodeId);
+  const res = await app.inject({
+    method: 'POST',
+    url: `/v1/public/nodes/${ownerNodeId}/listings/categories/901`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+    payload: { budget: { credits_max: 100 } },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(Array.isArray(body.items), 'items array missing');
+  assert.equal(typeof body.budget, 'object', 'budget missing');
+  assert.equal(body.budget.credits_charged, config.nodeCategoryDrilldownCost);
+  assert.ok(typeof body.budget.breakdown === 'object', 'breakdown missing');
+  const balAfter = await repo.creditBalance(callerNodeId);
+  assert.equal(balBefore - balAfter, config.nodeCategoryDrilldownCost);
+  await app.close();
+});
+
+test('POST drilldown budget cap too low returns 402', async () => {
+  const app = buildApp();
+  const callerBoot = await bootstrap(app, 'boot-post-drilldown-cap-caller');
+  const callerNodeId = callerBoot.json().node.id;
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_post_drilldown_cap_sub')).statusCode, 200);
+
+  const ownerBoot = await bootstrap(app, 'boot-post-drilldown-cap-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('PostCap item', 'post-cap-drilldown-scope'), category_ids: [902] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const balBefore = await repo.creditBalance(callerNodeId);
+  const res = await app.inject({
+    method: 'POST',
+    url: `/v1/public/nodes/${ownerNodeId}/listings/categories/902`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+    payload: { budget: { credits_max: 0 } },
+  });
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'budget_cap_exceeded');
+  assert.equal(res.json().error.details.needed, config.nodeCategoryDrilldownCost);
+  assert.equal(res.json().error.details.max, 0);
+  const balAfter = await repo.creditBalance(callerNodeId);
+  assert.equal(balAfter, balBefore, 'no credits should be charged on 402');
+  await app.close();
 });
 
 test('node category drilldown daily cap', async () => {

@@ -60,56 +60,66 @@ PATCH on mutable resources requires `If-Match: <version>` and rejects stale writ
 ### Error envelope (all non-2xx)
 ```json
 { "error": { "code": "STRING_CODE", "message": "human readable", "details": {} } }
-3) Quickstart checklist (30 minutes)
-Discover required legal version + capabilities
+```
 
-GET /v1/meta → read `required_legal_version`; use it in the bootstrap payload below.
+---
 
-Create your Node + first API key
+## 3) Start here (2 calls + first authenticated request)
 
-POST /v1/bootstrap (supply `legal.version` from `GET /v1/meta`; never hardcode a date)
+1. `GET /v1/meta` → read `required_legal_version` and `agent_toc`; use the legal version in the bootstrap payload below. The `agent_toc` field provides machine-readable onboarding steps, capabilities, invariants, and trust/safety rules.
+2. `POST /v1/bootstrap` (supply `legal.version` from meta; **never hardcode a date**)
+3. `GET /v1/me` — confirm your node identity and credit balance.
 
-Verify node profile + credits
+---
 
-GET /v1/me
+## 3a) Trust & safety posture (implemented)
 
-GET /v1/credits/balance
+- **Privacy-by-default:** canonical objects are private; public projections use an allowlist (no contact info, no precise geo).
+- **Contact reveal only after mutual acceptance:** `POST /v1/offers/{offer_id}/reveal-contact` returns contact data only when offer status is `mutually_accepted` and caller is a party.
+- **Rate limits + suspension/revocation:** per-IP, per-node, and per-endpoint rate limits; suspended nodes receive `403 forbidden` on all authenticated endpoints.
+- **Search log redaction + retention limits:** raw queries are not stored; retention tiers apply (hot/archive/delete).
+- **Webhook signing:** optional HMAC-SHA256 via `event_webhook_secret`; rotation is immediate.
+- **Recovery:** challenges are TTL-bound and attempt-limited; success revokes all prior keys.
+
+---
+
+## 3b) Content rules
+
+- **No contact info in descriptions/notes:** freeform text fields (`title`, `description`, `scope_notes`, `public_summary`) are validated at write time. Emails, phone numbers, and labeled messaging handles are rejected with `422 content_contact_info_disallowed` (with `details.field` indicating the offending field). Repeated or egregious violations may result in admin takedown (`POST /v1/admin/takedown`) and/or suspension — both mechanisms exist and are enforced.
+- **No PII in projections:** public projections never include contact info, addresses, or precise geo. Location hints are coarse only.
+
+---
+
+## 3c) Full quickstart checklist
 
 Create canonical objects
 
-Units: POST /v1/units
-
-Requests: POST /v1/requests
+- Units: `POST /v1/units`
+- Requests: `POST /v1/requests`
 
 Publish to appear in public marketplace
 
-Units: POST /v1/units/{unit_id}/publish
+- Units: `POST /v1/units/{unit_id}/publish`
+- Requests: `POST /v1/requests/{request_id}/publish`
 
-Requests: POST /v1/requests/{request_id}/publish
+Search (ACTIVE, not-suspended + credit-metered; no subscription required)
 
-Search (ACTIVE, not-suspended + metered)
+- Listings: `POST /v1/search/listings`
+- Requests: `POST /v1/search/requests`
 
-Listings: POST /v1/search/listings
+Make and manage offers
 
-Requests: POST /v1/search/requests
-
-Make and manage offers (not subscriber-only)
-
-Create: POST /v1/offers
-
-Counter: POST /v1/offers/{offer_id}/counter
-
-Accept: POST /v1/offers/{offer_id}/accept
-
-Reject: POST /v1/offers/{offer_id}/reject (allowed for authenticated non-subscribers)
-
-Cancel: POST /v1/offers/{offer_id}/cancel
+- Create: `POST /v1/offers`
+- Counter: `POST /v1/offers/{offer_id}/counter`
+- Accept: `POST /v1/offers/{offer_id}/accept`
+- Reject: `POST /v1/offers/{offer_id}/reject`
+- Cancel: `POST /v1/offers/{offer_id}/cancel`
 
 Reveal contact (only after mutual acceptance)
 
-POST /v1/offers/{offer_id}/reveal-contact
+- `POST /v1/offers/{offer_id}/reveal-contact`
 
-(Exact request/response bodies are defined in 20__api-contracts.md.)
+(Exact request/response bodies are defined in `20__api-contracts.md`.)
 
 3b) Recovery setup + lost-key flow
 Recovery setup (while you still have a working API key):
@@ -453,17 +463,13 @@ POST /v1/search/listings
 
 POST /v1/search/requests
 
-Search is for ACTIVE, not-suspended nodes and is credit-metered; charged only on HTTP 200.
+Search is credit-metered (no subscription required); requires ACTIVE, not-suspended node with sufficient credits. Credits are charged only on HTTP 200.
 
 Budget behavior is explicit and machine-readable:
 
-- Send `budget.credits_requested` on each search call.
-- Server guarantees `budget.credits_charged <= budget.credits_requested`.
-- When requested work exceeds budget, response is still 200 with:
-  - `budget.was_capped=true`
-  - `budget.cap_reason="insufficient_budget"`
-  - actionable `budget.guidance`
-- Use `budget.coverage.*` to decide whether to raise budget or narrow query.
+- Send `budget.credits_max` on each search call.
+- If computed cost exceeds `credits_max`, server returns `402 budget_cap_exceeded` with `needed`, `max`, and `breakdown` in the error details.
+- If credit balance is insufficient, server returns `402 credits_exhausted`.
 
 Filters are scope-validated; unknown keys must be rejected with 422.
 
