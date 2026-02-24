@@ -364,6 +364,8 @@ remote_online_service: service_region.country_code
 
 digital_delivery: delivery_format
 
+Region allowlist (MVP): only `US` and `US-<STATE>` region IDs are supported for filters and structured region objects (`origin_region`, `dest_region`, `service_region`). Additional regions will be added later.
+
 6a) Categories
 Categories are first-class labels for Units/Requests (`category_ids`) and for search filtering (`filters.category_ids_any`).
 

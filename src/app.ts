@@ -10,6 +10,7 @@ import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
 import { CATEGORIES_RESPONSE, CATEGORIES_VERSION } from './categories.js';
 import { registerMcpRoute } from './mcp.js';
+import { isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -52,6 +53,38 @@ function detectContactInfo(data: Record<string, unknown>): string | null {
 
 function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
+}
+
+const REGION_OBJECT_FIELDS = ['origin_region', 'dest_region', 'service_region'] as const;
+
+function normalizeAndValidateRegionObject(value: unknown): { ok: boolean; value: unknown } {
+  if (value == null) return { ok: true, value };
+  if (typeof value !== 'object' || Array.isArray(value)) return { ok: false, value };
+  const region = { ...(value as Record<string, unknown>) };
+  if (typeof region.country_code !== 'string' || region.country_code.trim().length === 0) return { ok: false, value };
+  const normalizedCountryCode = normalizeRegionCode(region.country_code);
+  let normalizedAdmin1: string | null = null;
+  if (region.admin1 === undefined || region.admin1 === null) {
+    normalizedAdmin1 = null;
+  } else if (typeof region.admin1 === 'string') {
+    normalizedAdmin1 = normalizeRegionCode(region.admin1);
+    region.admin1 = normalizedAdmin1;
+  } else {
+    return { ok: false, value };
+  }
+  if (!isAllowedCountryAdmin1(normalizedCountryCode, normalizedAdmin1)) return { ok: false, value };
+  region.country_code = normalizedCountryCode;
+  return { ok: true, value: region };
+}
+
+function normalizeAndValidateResourceRegions(payload: Record<string, unknown>) {
+  for (const field of REGION_OBJECT_FIELDS) {
+    if (!(field in payload)) continue;
+    const validated = normalizeAndValidateRegionObject(payload[field]);
+    if (!validated.ok) return false;
+    payload[field] = validated.value;
+  }
+  return true;
 }
 
 const resourceSchema = z.object({
@@ -1054,7 +1087,12 @@ function detectDisabledSearchFeatures(payload: any) {
 function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   const invalidRegionId = (values: unknown) => {
     if (!Array.isArray(values)) return false;
-    return values.some((value) => typeof value !== 'string' || !REGION_ID_REGEX.test(value.trim()));
+    return values.some((value) => {
+      if (typeof value !== 'string') return true;
+      const normalized = value.trim();
+      if (!REGION_ID_REGEX.test(normalized)) return true;
+      return !isAllowedRegionId(normalized);
+    });
   };
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
@@ -1583,6 +1621,9 @@ export function buildApp() {
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (!normalizeAndValidateResourceRegions(parsed.data)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
+    }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     return fabricService.createUnit((req as AuthedRequest).nodeId!, parsed.data);
@@ -1602,6 +1643,9 @@ export function buildApp() {
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
     const parsed = resourceSchema.partial().safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (!normalizeAndValidateResourceRegions(parsed.data)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
+    }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     const unit = await fabricService.patchUnit((req as AuthedRequest).nodeId!, (req.params as any).unit_id, Number(ifMatch), parsed.data);
@@ -1617,6 +1661,9 @@ export function buildApp() {
   app.post('/v1/requests', async (req, reply) => {
     const parsed = resourceSchema.extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (!normalizeAndValidateResourceRegions(parsed.data)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
+    }
     if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, REQUEST_TTL_MINUTES_MIN, REQUEST_TTL_MINUTES_MAX)) {
       return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
         reason: 'ttl_minutes_out_of_range',
@@ -1643,6 +1690,9 @@ export function buildApp() {
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
     const parsed = resourceSchema.partial().extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (!normalizeAndValidateResourceRegions(parsed.data)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
+    }
     if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, REQUEST_TTL_MINUTES_MIN, REQUEST_TTL_MINUTES_MAX)) {
       return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
         reason: 'ttl_minutes_out_of_range',

@@ -1085,6 +1085,59 @@ test('request create rejects scope_notes containing email', async () => {
   await app.close();
 });
 
+test('resource region objects enforce US-only allowlist on create and patch', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-region-object-allowlist');
+  const apiKey = b.json().api_key.api_key;
+
+  const validUnit = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'region-object-valid-unit' },
+    payload: {
+      ...unitPayload('Valid region object unit'),
+      service_region: { country_code: 'US', admin1: 'CA' },
+    },
+  });
+  assert.equal(validUnit.statusCode, 200);
+
+  const invalidCountry = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'region-object-invalid-country' },
+    payload: {
+      ...unitPayload('Invalid region country unit'),
+      service_region: { country_code: 'CA', admin1: 'BC' },
+    },
+  });
+  assert.equal(invalidCountry.statusCode, 422);
+  assert.equal(invalidCountry.json().error.code, 'validation_error');
+  assert.equal(invalidCountry.json().error.details.reason, 'region_id_invalid');
+
+  const requestCreated = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'region-object-request-create' },
+    payload: unitPayload('Region object request'),
+  });
+  assert.equal(requestCreated.statusCode, 200);
+
+  const invalidAdmin1Patch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${requestCreated.json().request.id}`,
+    headers: {
+      authorization: `ApiKey ${apiKey}`,
+      'idempotency-key': 'region-object-invalid-admin1-patch',
+      'if-match': String(requestCreated.json().request.version),
+    },
+    payload: { service_region: { country_code: 'US', admin1: 'BC' } },
+  });
+  assert.equal(invalidAdmin1Patch.statusCode, 422);
+  assert.equal(invalidAdmin1Patch.json().error.code, 'validation_error');
+  assert.equal(invalidAdmin1Patch.json().error.details.reason, 'region_id_invalid');
+  await app.close();
+});
+
 test('unit patch rejects public_summary containing phone number', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-contact-patch-unit');
@@ -3971,7 +4024,7 @@ test('metering only charges on HTTP 200 for search', async () => {
   await app.close();
 });
 
-test('search validates region IDs using canonical CC or CC-AA format', async () => {
+test('search validates region IDs using canonical CC or CC-AA format and US allowlist', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-region-format');
   const nodeId = b.json().node.id;
@@ -3994,6 +4047,38 @@ test('search validates region IDs using canonical CC or CC-AA format', async () 
   });
   assert.equal(valid.statusCode, 200);
 
+  const validShipTo = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-format-shipto-valid' },
+    payload: {
+      q: null,
+      scope: 'ship_to',
+      filters: { ship_to_regions: ['US-NY'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(validShipTo.statusCode, 200);
+
+  const validRequestsSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-format-requests-valid' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['US-CA'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(validRequestsSearch.statusCode, 200);
+
   const invalid = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
@@ -4011,6 +4096,78 @@ test('search validates region IDs using canonical CC or CC-AA format', async () 
   assert.equal(invalid.statusCode, 422);
   assert.equal(invalid.json().error.code, 'validation_error');
   assert.equal(invalid.json().error.details.reason, 'region_id_invalid');
+
+  const invalidCountry = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-allowlist-invalid-country' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['CA'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(invalidCountry.statusCode, 422);
+  assert.equal(invalidCountry.json().error.code, 'validation_error');
+  assert.equal(invalidCountry.json().error.details.reason, 'region_id_invalid');
+
+  const invalidProvince = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-allowlist-invalid-province' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['US-BC'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(invalidProvince.statusCode, 422);
+  assert.equal(invalidProvince.json().error.code, 'validation_error');
+  assert.equal(invalidProvince.json().error.details.reason, 'region_id_invalid');
+
+  const invalidState = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-allowlist-invalid-state' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['US-XX'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(invalidState.statusCode, 422);
+  assert.equal(invalidState.json().error.code, 'validation_error');
+  assert.equal(invalidState.json().error.details.reason, 'region_id_invalid');
+
+  const invalidRequestsRegion = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-region-allowlist-requests-invalid' },
+    payload: {
+      q: null,
+      scope: 'local_in_person',
+      filters: { regions: ['CA'] },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(invalidRequestsRegion.statusCode, 422);
+  assert.equal(invalidRequestsRegion.json().error.code, 'validation_error');
+  assert.equal(invalidRequestsRegion.json().error.details.reason, 'region_id_invalid');
   await app.close();
 });
 
