@@ -10,6 +10,9 @@ delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.STRIPE_TOPUP_PRICE_500;
 delete process.env.STRIPE_TOPUP_PRICE_1500;
 delete process.env.STRIPE_TOPUP_PRICE_4500;
+delete process.env.BCON_API_BASE;
+delete process.env.BCON_STORE_API_KEY;
+delete process.env.BCON_CALLBACK_SECRET;
 delete process.env.EMAIL_PROVIDER;
 delete process.env.RECOVERY_CHALLENGE_TTL_MINUTES;
 delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
@@ -85,6 +88,12 @@ const requestExpiryMigrationSql = await fs.readFile(
   'utf8',
 );
 await query(requestExpiryMigrationSql);
+
+const bconIntegrationMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-24__apply_bcon_integration.sql', import.meta.url),
+  'utf8',
+);
+await query(bconIntegrationMigrationSql);
 
 const creditLedgerTypesMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-23__apply_credit_ledger_types.sql', import.meta.url),
@@ -3169,6 +3178,215 @@ test('billing topups checkout-session creates payment mode session and respects 
   });
 
   assert.equal(fetchCalls, 1);
+  await app.close();
+});
+
+test('billing topups bcon invoice creates DB invoice and returns address details', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-bcon-invoice-create');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  await withConfigOverrides(
+    {
+      bconApiBase: 'https://external-api.bcon.global',
+      bconStoreApiKey: 'bcon_store_key_test',
+    },
+    async () => {
+      await withMockFetch(async (url, init = {}) => {
+        assert.equal(String(url), 'https://external-api.bcon.global/api/v2/address');
+        const headers = new Headers(init.headers);
+        assert.equal(headers.get('Authorization'), 'Bearer bcon_store_key_test');
+        const body = JSON.parse(String(init.body ?? '{}'));
+        assert.equal(body.payment_currency, 'usdc');
+        assert.equal(body.chain, 'polygon');
+        assert.equal(typeof body.external_id, 'string');
+        assert.equal(body.origin_currency, 'usd');
+        assert.equal(body.origin_amount, 9.99);
+
+        return jsonResponse(200, {
+          address: '0xabc123',
+          payment_amount: 27.5,
+          payment_currency: 'usdc',
+          chain: 'polygon',
+        });
+      }, async () => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/v1/billing/topups/bcon/invoice',
+          headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bcon-invoice-create-1' },
+          payload: {
+            node_id: nodeId,
+            pack_code: 'credits_500',
+            chain: 'polygon',
+            payment_currency: 'usdc',
+          },
+        });
+        assert.equal(res.statusCode, 200);
+        assert.equal(typeof res.json().invoice_id, 'string');
+        assert.equal(res.json().address, '0xabc123');
+        assert.equal(res.json().amount, 27.5);
+        assert.equal(res.json().currency, 'usdc');
+        assert.equal(res.json().chain, 'polygon');
+
+        const rows = await query(
+          `select node_id, pack_code, credits, address, status, chain, payment_currency, expected_amount::text as expected_amount
+           from bcon_invoices
+           where id=$1`,
+          [res.json().invoice_id],
+        );
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].node_id, nodeId);
+        assert.equal(rows[0].pack_code, 'credits_500');
+        assert.equal(Number(rows[0].credits), 500);
+        assert.equal(rows[0].address, '0xabc123');
+        assert.equal(rows[0].status, 'pending');
+        assert.equal(rows[0].chain, 'polygon');
+        assert.equal(rows[0].payment_currency, 'usdc');
+        assert.equal(Number(rows[0].expected_amount), 27.5);
+      });
+    },
+  );
+
+  await app.close();
+});
+
+test('billing topups bcon invoice requires auth', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/billing/topups/bcon/invoice',
+    headers: { 'idempotency-key': 'bcon-invoice-unauth' },
+    payload: {
+      node_id: crypto.randomUUID(),
+      pack_code: 'credits_500',
+      chain: 'polygon',
+      payment_currency: 'usdc',
+    },
+  });
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.json().error.code, 'unauthorized');
+  await app.close();
+});
+
+test('bcon webhook secret mismatch is rejected', async () => {
+  const app = buildApp();
+  await withConfigOverrides({ bconCallbackSecret: 'bcon_secret_expected' }, async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/bcon?secret=wrong_secret',
+      payload: { status: 'confirmed', external_id: crypto.randomUUID(), txid: 'tx_bad', value: 1 },
+    });
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.json().error.code, 'unauthorized');
+  });
+  await app.close();
+});
+
+test('bcon webhook confirmed grants credits once per txid', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-bcon-webhook-confirmed');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  let invoiceId = '';
+  await withConfigOverrides(
+    {
+      bconApiBase: 'https://external-api.bcon.global',
+      bconStoreApiKey: 'bcon_store_key_test',
+      bconCallbackSecret: 'bcon_callback_secret_test',
+    },
+    async () => {
+      await withMockFetch(async () => jsonResponse(200, {
+        address: '0xfeedbeef',
+        payment_amount: 19.25,
+        payment_currency: 'usdc',
+        chain: 'base',
+      }), async () => {
+        const invoiceRes = await app.inject({
+          method: 'POST',
+          url: '/v1/billing/topups/bcon/invoice',
+          headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bcon-webhook-invoice-create-1' },
+          payload: {
+            node_id: nodeId,
+            pack_code: 'credits_1500',
+            chain: 'base',
+            payment_currency: 'usdc',
+          },
+        });
+        assert.equal(invoiceRes.statusCode, 200);
+        invoiceId = invoiceRes.json().invoice_id;
+      });
+
+      const txid = `tx_bcon_${nodeId.slice(0, 8)}`;
+      const first = await app.inject({
+        method: 'POST',
+        url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
+        payload: {
+          status: 'confirmed',
+          external_id: invoiceId,
+          txid,
+          value: 19.25,
+          addr: '0xfeedbeef',
+        },
+      });
+      const second = await app.inject({
+        method: 'POST',
+        url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
+        payload: {
+          status: 'confirmed',
+          external_id: invoiceId,
+          txid,
+          value: 19.25,
+          addr: '0xfeedbeef',
+        },
+      });
+
+      assert.equal(first.statusCode, 200);
+      assert.equal(second.statusCode, 200);
+
+      const txnRows = await query('select txid from bcon_txns where txid=$1', [txid]);
+      assert.equal(txnRows.length, 1);
+      const creditRows = await query(
+        `select id from credit_ledger
+         where node_id=$1 and type='topup_purchase' and idempotency_key=$2`,
+        [nodeId, `bcon:${txid}`],
+      );
+      assert.equal(creditRows.length, 1);
+
+      const invoiceRows = await query(
+        `select status, txid, paid_at is not null as paid
+         from bcon_invoices
+         where id=$1`,
+        [invoiceId],
+      );
+      assert.equal(invoiceRows.length, 1);
+      assert.equal(invoiceRows[0].status, 'confirmed');
+      assert.equal(invoiceRows[0].txid, txid);
+      assert.equal(invoiceRows[0].paid, true);
+    },
+  );
+
+  await app.close();
+});
+
+test('bcon webhook unknown external_id returns 200', async () => {
+  const app = buildApp();
+  await withConfigOverrides({ bconCallbackSecret: 'bcon_callback_secret_test' }, async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
+      payload: {
+        status: 'confirmed',
+        external_id: crypto.randomUUID(),
+        txid: 'tx_unknown_external',
+        value: 10,
+        addr: '0xunknown',
+      },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().ok, true);
+  });
   await app.close();
 });
 

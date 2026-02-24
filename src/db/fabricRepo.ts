@@ -1513,6 +1513,165 @@ export async function countTopupPurchasesSince(nodeId: string, sinceIso: string)
   return Number(rows[0]?.c ?? 0);
 }
 
+export async function createBconInvoice(input: {
+  node_id: string;
+  pack_code: string;
+  credits: number;
+  chain: string;
+  payment_currency: string;
+  expected_amount: number;
+  origin_currency: string | null;
+  origin_amount: number | null;
+}) {
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    pack_code: string;
+    credits: number;
+    chain: string;
+    payment_currency: string;
+    expected_amount: string;
+    origin_currency: string | null;
+    origin_amount: string | null;
+    address: string | null;
+    status: string;
+    txid: string | null;
+    paid_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `insert into bcon_invoices(node_id,pack_code,credits,chain,payment_currency,expected_amount,origin_currency,origin_amount,status)
+     values($1,$2,$3,$4,$5,$6,$7,$8,'pending')
+     returning id,node_id,pack_code,credits,chain,payment_currency,expected_amount::text,origin_currency,origin_amount::text,address,status,txid,paid_at,created_at,updated_at`,
+    [
+      input.node_id,
+      input.pack_code,
+      input.credits,
+      input.chain,
+      input.payment_currency,
+      input.expected_amount,
+      input.origin_currency,
+      input.origin_amount,
+    ],
+  );
+  return rows[0] ?? null;
+}
+
+export async function getBconInvoiceById(invoiceId: string) {
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    pack_code: string;
+    credits: number;
+    chain: string;
+    payment_currency: string;
+    expected_amount: string;
+    origin_currency: string | null;
+    origin_amount: string | null;
+    address: string | null;
+    status: string;
+    txid: string | null;
+    paid_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `select id,node_id,pack_code,credits,chain,payment_currency,expected_amount::text,origin_currency,origin_amount::text,address,status,txid,paid_at,created_at,updated_at
+     from bcon_invoices
+     where id=$1
+     limit 1`,
+    [invoiceId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function findBconInvoiceByExternalId(externalId: string) {
+  return getBconInvoiceById(externalId);
+}
+
+export async function updateBconInvoiceAddress(invoiceId: string, patch: {
+  address: string | null;
+  expected_amount?: number | null;
+  payment_currency?: string | null;
+  chain?: string | null;
+}) {
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    pack_code: string;
+    credits: number;
+    chain: string;
+    payment_currency: string;
+    expected_amount: string;
+    origin_currency: string | null;
+    origin_amount: string | null;
+    address: string | null;
+    status: string;
+    txid: string | null;
+    paid_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `update bcon_invoices
+     set address=$2,
+         expected_amount=coalesce($3, expected_amount),
+         payment_currency=coalesce($4, payment_currency),
+         chain=coalesce($5, chain)
+     where id=$1
+     returning id,node_id,pack_code,credits,chain,payment_currency,expected_amount::text,origin_currency,origin_amount::text,address,status,txid,paid_at,created_at,updated_at`,
+    [invoiceId, patch.address, patch.expected_amount ?? null, patch.payment_currency ?? null, patch.chain ?? null],
+  );
+  return rows[0] ?? null;
+}
+
+export async function updateBconInvoiceStatus(invoiceId: string, patch: {
+  status: 'pending' | 'confirmed' | 'failed' | 'expired';
+  txid?: string | null;
+  paid_at?: string | null;
+}) {
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    pack_code: string;
+    credits: number;
+    chain: string;
+    payment_currency: string;
+    expected_amount: string;
+    origin_currency: string | null;
+    origin_amount: string | null;
+    address: string | null;
+    status: string;
+    txid: string | null;
+    paid_at: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `update bcon_invoices
+     set status=$2,
+         txid=coalesce($3, txid),
+         paid_at=coalesce($4::timestamptz, paid_at)
+     where id=$1
+     returning id,node_id,pack_code,credits,chain,payment_currency,expected_amount::text,origin_currency,origin_amount::text,address,status,txid,paid_at,created_at,updated_at`,
+    [invoiceId, patch.status, patch.txid ?? null, patch.paid_at ?? null],
+  );
+  return rows[0] ?? null;
+}
+
+export async function insertBconTxn(input: {
+  txid: string;
+  invoice_id: string;
+  value: number | null;
+  status: string | null;
+}) {
+  const rows = await query<{ txid: string }>(
+    `insert into bcon_txns(txid,invoice_id,value,status,seen_at)
+     values($1,$2,$3,$4,now())
+     on conflict (txid) do nothing
+     returning txid`,
+    [input.txid, input.invoice_id, input.value, input.status],
+  );
+  return rows.length > 0;
+}
+
 export async function getPrepurchaseOfferCreateUsage(nodeId: string) {
   const rows = await query<{ has_purchased: boolean; usage_today: string }>(
     `select

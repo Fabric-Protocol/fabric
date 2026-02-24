@@ -607,6 +607,49 @@ create table if not exists stripe_events (
 );
 
 -- =========================
+-- Bcon invoices + processed transactions
+-- =========================
+create table if not exists bcon_invoices (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+
+  pack_code text not null,
+  credits int not null check (credits > 0),
+
+  chain text not null,
+  payment_currency text not null,
+  expected_amount numeric not null,
+  origin_currency text null,
+  origin_amount numeric null,
+  address text null,
+
+  status text not null default 'pending' check (status in ('pending','confirmed','failed','expired')),
+  txid text null,
+  paid_at timestamptz null,
+
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists bcon_invoices_node_idx on bcon_invoices(node_id);
+create index if not exists bcon_invoices_status_idx on bcon_invoices(status);
+
+drop trigger if exists bcon_invoices_set_updated_at on bcon_invoices;
+create trigger bcon_invoices_set_updated_at
+before update on bcon_invoices
+for each row execute function set_updated_at();
+
+create table if not exists bcon_txns (
+  txid text primary key,
+  invoice_id uuid not null references bcon_invoices(id) on delete cascade,
+  value numeric null,
+  status text null,
+  seen_at timestamptz not null default now()
+);
+
+create index if not exists bcon_txns_invoice_idx on bcon_txns(invoice_id);
+
+-- =========================
 -- Search logs (redacted)
 -- =========================
 create table if not exists search_logs (
