@@ -428,14 +428,14 @@ export const fabricService = {
     const pageIndex = parsedCursor.pageIndex;
     const pageCost = pageAddOnCost(pageIndex);
     const totalCost = baseSearchCost + broadeningCost + pageCost;
-    const creditsMax = Number(body?.budget?.credits_max ?? 0);
+    const creditsRequested = Number(body?.budget?.credits_requested ?? 0);
     const limit = body.limit ?? 20;
 
-    if (totalCost > creditsMax) {
+    if (totalCost > creditsRequested) {
       return {
         budgetCapExceeded: {
           needed: totalCost,
-          max: creditsMax,
+          max: creditsRequested,
           breakdown: {
             base_search_cost: baseSearchCost,
             broadening_cost: broadeningCost,

@@ -372,6 +372,9 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const searchQuoteRequestRequired = body.components?.schemas?.SearchQuoteRequest?.required ?? [];
   assert.equal(searchRequestRequired.includes('broadening'), false);
   assert.equal(searchQuoteRequestRequired.includes('broadening'), false);
+  const searchBudgetSchema = body.components?.schemas?.SearchRequest?.properties?.budget ?? {};
+  assert.equal(searchBudgetSchema.properties?.credits_requested?.type, 'integer');
+  assert.equal(searchBudgetSchema.properties?.credits_max?.deprecated, true);
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
@@ -4223,7 +4226,7 @@ test('search returns 402 credits_exhausted for non-subscriber node with zero cre
   await app.close();
 });
 
-test('search requires budget.credits_max', async () => {
+test('search requires budget.credits_requested or budget.credits_max', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-budget-required');
   const nodeId = b.json().node.id;
@@ -4238,6 +4241,56 @@ test('search requires budget.credits_max', async () => {
   });
   assert.equal(res.statusCode, 422);
   assert.equal(res.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('search accepts canonical budget.credits_requested', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-budget-canonical');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_subscriber_budget_canonical')).statusCode, 200);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-budget-canonical' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'canonical-budget' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  await app.close();
+});
+
+test('search accepts deprecated budget.credits_max alias', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-budget-alias');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_subscriber_budget_alias')).statusCode, 200);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-budget-alias' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: 'alias-budget' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
   await app.close();
 });
 

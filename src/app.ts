@@ -103,12 +103,19 @@ const broadeningSchema = z.object({ level: z.number().int().min(0), allow: z.boo
   .nullish()
   .transform((value) => value ?? { level: 0, allow: false });
 
+const searchBudgetSchema = z.object({
+  credits_requested: z.number().int().min(0).optional(),
+  credits_max: z.number().int().min(0).optional(),
+}).refine((value) => value.credits_requested !== undefined || value.credits_max !== undefined, {
+  message: 'credits_requested_or_credits_max_required',
+});
+
 const searchSchema = z.object({
   q: z.string().nullable(),
   scope: z.enum(['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER']),
   filters: z.record(z.any()),
   broadening: broadeningSchema,
-  budget: z.object({ credits_max: z.number().int().min(0) }),
+  budget: searchBudgetSchema,
   target: z.object({
     node_id: z.string().uuid().nullable().optional(),
     username: z.string().trim().min(1).nullable().optional(),
@@ -117,6 +124,17 @@ const searchSchema = z.object({
   cursor: z.string().nullable(),
 });
 const searchQuoteSchema = searchSchema.omit({ budget: true, target: true });
+
+function normalizeSearchBudget<T extends { budget: { credits_requested?: number; credits_max?: number } }>(
+  payload: T,
+): T & { budget: { credits_requested: number } } {
+  return {
+    ...payload,
+    budget: {
+      credits_requested: payload.budget.credits_requested ?? payload.budget.credits_max ?? 0,
+    },
+  } as T & { budget: { credits_requested: number } };
+}
 
 const drilldownPostSchema = z.object({
   budget: z.object({ credits_max: z.number().int().min(0) }),
@@ -662,7 +680,7 @@ SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
   -H "Authorization: ApiKey $API_KEY" \\
   -H "Idempotency-Key: $SEARCH_IDEM" \\
   -H "Content-Type: application/json" \\
-  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_max":5},"limit":20,"cursor":null}')
+  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_requested":5},"limit":20,"cursor":null}')
 FOUND_UNIT_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')</code></pre>
 
     <pre><code>OFFER_IDEM=$(uuidgen)
@@ -787,7 +805,7 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
-      <li>Search includes a budget contract: send <code>budget.credits_max</code>; server returns 402 <code>budget_cap_exceeded</code> if computed cost exceeds this cap.</li>
+      <li>Search includes a budget contract: send <code>budget.credits_requested</code> (deprecated alias <code>budget.credits_max</code> also accepted); server returns 402 <code>budget_cap_exceeded</code> if computed cost exceeds this cap.</li>
       <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
       <li>Payment can be currency or swap; <code>unit</code> stays intentionally open-ended so either model can be negotiated.</li>
       <li>Pre-purchase daily limits apply until first purchase: max 3 offer creates/day and max 1 offer accept/day.</li>
@@ -1739,10 +1757,11 @@ export function buildApp() {
     }
     const parsed = searchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
+    const normalized = normalizeSearchBudget(parsed.data);
+    const vf = validateScopeFilters(normalized.scope, normalized.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', parsed.data, (req as AuthedRequest).idem!.key);
+    if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', normalized, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1764,10 +1783,11 @@ export function buildApp() {
     }
     const parsed = searchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
+    const normalized = normalizeSearchBudget(parsed.data);
+    const vf = validateScopeFilters(normalized.scope, normalized.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    if (!applySearchScrapeGuard(req, reply, parsed.data)) return reply;
-    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', parsed.data, (req as AuthedRequest).idem!.key);
+    if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
+    const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', normalized, (req as AuthedRequest).idem!.key);
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
