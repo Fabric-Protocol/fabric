@@ -2,6 +2,94 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-24 - Remove subscriber gate; credits-only search with pre-purchase daily limits
+Decision:
+- Search no longer requires active subscription or trial. Credits are sufficient for access.
+- Pre-purchase daily limits (until first purchase of any kind — subscription or credit pack):
+  - 3 combined search requests/day (listings + requests counted together)
+  - 3 offer creates/day
+  - 1 offer accept/day
+- Purchasing anything permanently removes these daily limits (lifetime "has ever purchased" flag).
+Rationale:
+- Reduces friction for new users while keeping anti-abuse controls.
+- Subscription is a grant mechanism, not a gate.
+Scope/impact:
+- Code: removed `isEntitledSpenderRoute` and `subscriber_required` gate from `app.ts`; added `prePurchaseSearchLimit` and `getPrepurchaseSearchUsage` to service/repo.
+- Specs: updated `10__invariants.md`, `20__api-contracts.md`, `26__enforcement-coverage.md`.
+
+## 2026-02-24 - Move /events to /v1/events
+Decision:
+- Event polling endpoint moved from `GET /events` to `GET /v1/events` for path consistency.
+Rationale:
+- All authenticated endpoints should live under the `/v1/` prefix.
+Scope/impact:
+- Code: `app.ts` route registration. Docs: `20__api-contracts.md`, `02__agent-onboarding.md`, `26__enforcement-coverage.md`.
+
+## 2026-02-24 - Add max_ship_days to units and requests DDL
+Decision:
+- Added `max_ship_days int null` column to both `units` and `requests` tables.
+Rationale:
+- Supports shipping timeline filtering for `ship_to` scope items.
+Scope/impact:
+- DDL: `21__db-ddl.sql` (column + migration alter).
+
+## 2026-02-24 - Deprecate credits_max; credits_requested is canonical
+Decision:
+- `budget.credits_requested` is the canonical field name for search budget cap.
+- `budget.credits_max` remains accepted as a deprecated alias (auto-mapped to `credits_requested`).
+Rationale:
+- Reduces naming ambiguity; single canonical field simplifies agent integration.
+Scope/impact:
+- Docs: onboarding guidance updated. Code: `normalizeSearchBudget` already maps the alias.
+
+## 2026-02-24 - Document Bcon billing endpoints and categories-summary
+Decision:
+- Added sections 15b (Bcon credit-pack invoice), 15c (Bcon webhook callback), and 15d (categories-summary) to `20__api-contracts.md`.
+Rationale:
+- These endpoints existed in code but were undocumented in the normative spec.
+Scope/impact:
+- Docs: `20__api-contracts.md`.
+
+## 2026-02-24 - Add display_name_taken error to bootstrap
+Decision:
+- Document `409 display_name_taken` as a possible error on `POST /v1/bootstrap`.
+Rationale:
+- Code already returns this error but it was missing from the spec.
+Scope/impact:
+- Docs: `20__api-contracts.md`.
+
+## 2026-02-24 - Spec-audit: signup grant is 100 credits (invariants win)
+Decision:
+- Signup grant is 100 credits one-time, per `10__invariants.md` ss17.
+- `30__mvp-scope.md` previously said 200; updated to 100 to match.
+- Code (`SIGNUP_GRANT_CREDITS` default 100) is already correct.
+Rationale:
+- `10__invariants.md` has higher precedence (rank 2) than `30__mvp-scope.md` (rank 7).
+Scope/impact:
+- Docs only; code unchanged.
+
+## 2026-02-24 - Spec-audit: plan monthly credits are 1000/3000/10000 (25__plans wins)
+Decision:
+- Monthly subscription credits: Basic=1000, Pro=3000, Business=10000 per `25__plans-credits-gating.md`.
+- `10__invariants.md` ss17 previously said Basic=500, Pro=1500, Business=5000; updated to match.
+- Code already uses 1000/3000/10000.
+Rationale:
+- Decision log entry from 2026-02-24 "Update plan monthly credits" explicitly decided on new amounts.
+- `10__invariants.md` must be updated to reflect this product decision.
+Scope/impact:
+- `10__invariants.md` ss17 pricing section updated.
+
+## 2026-02-24 - Spec-audit: top-up packs are 500/1500/4500 (25__plans wins)
+Decision:
+- Credit packs: 500cr/$9.99, 1500cr/$19.99, 4500cr/$49.99 per `25__plans-credits-gating.md`.
+- `10__invariants.md` ss17 previously listed 100/300/1000 top-ups; updated to match.
+- Code already uses 500/1500/4500.
+Rationale:
+- Decision log entry from 2026-02-24 "Replace top up with Credit Packs" explicitly decided on new SKUs.
+- `10__invariants.md` must be updated to reflect this product decision.
+Scope/impact:
+- `10__invariants.md` ss17 top-up section updated.
+
 ## 2026-02-24 - Cloud Run production env var migration for credit packs
 Decision:
 - Live service `fabric-api` (project `fabric-487608`, region `us-west1`) uses `STRIPE_TOPUP_PRICE_500`, `STRIPE_TOPUP_PRICE_1500`, and `STRIPE_TOPUP_PRICE_4500`.

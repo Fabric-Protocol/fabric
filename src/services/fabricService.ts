@@ -480,6 +480,8 @@ export const fabricService = {
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
   async search(nodeId: string, kind: 'listings' | 'requests', body: any, idemKey: string) {
     if (kind === 'requests') await repo.expireStaleRequests();
+    const searchDailyLimit = await prePurchaseSearchLimit(nodeId);
+    if (searchDailyLimit) return { prepurchaseDailyLimit: searchDailyLimit };
     const targetResolution = await resolveSearchTargetNode(body.target ?? null);
     if (targetResolution.validationError) return { validationError: targetResolution.validationError };
     const targetNodeId = targetResolution.targetNodeId;
@@ -496,17 +498,40 @@ export const fabricService = {
 
     if (totalCost > creditsRequested) {
       return {
-        budgetCapExceeded: {
-          needed: totalCost,
-          max: creditsRequested,
+        search_id: crypto.randomUUID(),
+        scope: body.scope,
+        limit,
+        cursor: null,
+        broadening: { level: 0, allow: false },
+        applied_filters: body.filters ?? {},
+        budget: {
+          credits_requested: creditsRequested,
+          credits_charged: 0,
           breakdown: {
             base_search_cost: baseSearchCost,
+            broadening_level: 0,
             broadening_cost: broadeningCost,
             page_index: pageIndex,
             page_cost: pageCost,
+            base_cost: baseSearchCost,
+            pagination_addons: pageCost,
             geo_addon: 0,
           },
+          coverage: {
+            page_index_executed: 0,
+            broadening_level_executed: 0,
+            items_returned: 0,
+            executed_page_index: 0,
+            executed_broadening_level: 0,
+            returned_count: 0,
+          },
+          was_capped: true,
+          cap_reason: `Needed ${totalCost} credits but budget cap is ${creditsRequested}`,
+          guidance: `Increase budget.credits_requested to at least ${totalCost} to execute this search page.`,
         },
+        items: [],
+        nodes: [],
+        has_more: false,
       };
     }
 
@@ -581,16 +606,32 @@ export const fabricService = {
       scope: body.scope,
       limit,
       cursor: nextCursor,
+      broadening: { level: 0, allow: false },
       applied_filters: body.filters ?? {},
       budget: {
+        credits_requested: creditsRequested,
         credits_charged: creditsCharged,
         breakdown: {
           base_search_cost: baseSearchCost,
+          broadening_level: 0,
           broadening_cost: broadeningCost,
           page_index: pageIndex,
           page_cost: pageCost,
+          base_cost: baseSearchCost,
+          pagination_addons: pageCost,
           geo_addon: 0,
         },
+        coverage: {
+          page_index_executed: pageIndex,
+          broadening_level_executed: 0,
+          items_returned: items.length,
+          executed_page_index: pageIndex,
+          executed_broadening_level: 0,
+          returned_count: items.length,
+        },
+        was_capped: false,
+        cap_reason: null,
+        guidance: null,
       },
       items,
       nodes: summarizeSearchNodes(rows),
@@ -729,6 +770,7 @@ const REQUEST_TTL_MINUTES_DEFAULT = 7 * 24 * 60;
 const REQUEST_TTL_MINUTES_MIN = 60;
 const REQUEST_TTL_MINUTES_MAX = 30 * 24 * 60;
 
+const PREPURCHASE_DAILY_SEARCH_LIMIT = 3;
 const PREPURCHASE_DAILY_OFFER_CREATE_LIMIT = 3;
 const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
 
@@ -2246,6 +2288,18 @@ async function hasCurrentLegalAssent(nodeId: string) {
   const me = await repo.getMe(nodeId);
   if (!me) return false;
   return Boolean(me.legal_accepted_at) && String(me.legal_version ?? '') === config.requiredLegalVersion;
+}
+
+async function prePurchaseSearchLimit(nodeId: string) {
+  const usage = await repo.getPrepurchaseSearchUsage(nodeId);
+  if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_SEARCH_LIMIT) return null;
+  return {
+    action: 'search',
+    window: 'utc_day',
+    limit: PREPURCHASE_DAILY_SEARCH_LIMIT,
+    used: usage.usageToday,
+    until: 'first_purchase',
+  };
 }
 
 async function prePurchaseOfferCreateLimit(nodeId: string) {

@@ -91,7 +91,8 @@ MVP note:
   - pagination
   - node inventory expansion
 - Broadening is deprecated/optional in MVP and **MUST NOT** increase credit cost.
-- Search **MUST** require ACTIVE, not-suspended node state and sufficient credits.
+- Search **MUST** require ACTIVE, not-suspended node state and sufficient credits. No subscriber gate — credits are sufficient.
+- Pre-purchase daily limits: 3 combined search requests/day, 3 offer creates/day, 1 offer accept/day. Purchasing anything (subscription or credit pack) permanently removes these limits.
 - Search **MUST** be split by intent (no combined search):
   - `POST /v1/search/listings` (buyer/acquirer intent)
   - `POST /v1/search/requests` (seller/provider intent)
@@ -155,14 +156,14 @@ Write safety (concurrency/idempotency):
 
 ## 17) Pricing + credits (MVP locked)
 Subscriptions:
-- Basic: $9.99 / 500 credits
-- Pro: $19.99 / 1,500 credits
-- Business: $49.99 / 5,000 credits
+- Basic: $9.99 / 1,000 credits
+- Pro: $19.99 / 3,000 credits
+- Business: $49.99 / 10,000 credits
 
-Top-ups (worse than Basic):
-- 100 credits = $4.00
-- 300 credits = $12.00
-- 1,000 credits = $38.00
+Credit Packs (one-time top-ups, worse value than subscriptions):
+- 500 credits = $9.99
+- 1,500 credits = $19.99
+- 4,500 credits = $49.99
 
 Acquisition:
 - Signup grant: 100 credits one-time

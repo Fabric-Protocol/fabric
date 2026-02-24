@@ -582,8 +582,8 @@ Payment setup guidance
 - Delivery model is at-least-once for both webhook and polling consumers.
   - Deduplicate by `event.id` in your consumer state.
 - Poll fallback:
-  - `GET /events?limit=<n>` for initial page.
-  - Persist `next_cursor` and request `GET /events?since=<next_cursor>&limit=<n>` for strictly-later events.
+  - `GET /v1/events?limit=<n>` for initial page.
+  - Persist `next_cursor` and request `GET /v1/events?since=<next_cursor>&limit=<n>` for strictly-later events.
   - Recommended cadence: every 2-5s when active; exponential backoff on empty pages, 429, or 5xx.
 - Event types:
   - `offer_created`
@@ -706,7 +706,7 @@ POST /v1/offers/{offer_id}/reveal-contact
 
 Offer events:
 
-GET /events
+GET /v1/events
 
 Referrals:
 

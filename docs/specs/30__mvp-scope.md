@@ -214,17 +214,17 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 ## Pricing + credits (MVP) — LOCKED
 
 ### Subscriptions
-- **Basic:** $9.99 / 500 credits (≈ $0.01998/credit)
-- **Pro:** $19.99 / 1,500 credits (≈ $0.01333/credit)
-- **Business:** $49.99 / 5,000 credits (≈ $0.01000/credit)
+- **Basic:** $9.99 / 1,000 credits (≈ $0.01000/credit)
+- **Pro:** $19.99 / 3,000 credits (≈ $0.00667/credit)
+- **Business:** $49.99 / 10,000 credits (≈ $0.00500/credit)
 
-### Top-ups (worse than Basic)
-- 100 credits = $4 (=$0.040/credit)
-- 300 credits = $12 (=$0.040/credit)
-- 1,000 credits = $38 (≈$0.038/credit)
+### Credit Packs (one-time top-ups, worse value than subscriptions)
+- 500 credits = $9.99 (≈ $0.02000/credit)
+- 1,500 credits = $19.99 (≈ $0.01333/credit)
+- 4,500 credits = $49.99 (≈ $0.01111/credit)
 
 ### Acquisition
-- Signup grant: **200 credits one-time**
+- Signup grant: **100 credits one-time**
 
 ---
 
@@ -272,7 +272,7 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 
 ### Happy path (must work end-to-end)
 
-1. Node A bootstraps (Node created, API key issued, 200 credits granted once).
+1. Node A bootstraps (Node created, API key issued, 100 credits granted once).
 2. Node A creates a Request and publishes it (projection created). (Free allowed.)
 3. Node B (active subscriber or active trial) runs a paid search and receives results (credits deducted per-page with current broadenings and pagination add-ons).
    - This is done via `POST /v1/search/requests` when Node B is looking to fulfill requests,

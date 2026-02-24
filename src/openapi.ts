@@ -587,7 +587,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/events': {
+    '/v1/events': {
       get: {
         summary: 'List offer lifecycle events for the authenticated node',
         description: 'Polling fallback for offer lifecycle events. Use next_cursor as the next since value. Delivery is at-least-once; dedupe by event id.',

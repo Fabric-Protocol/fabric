@@ -99,6 +99,13 @@ Low likelihood:
   - grant credits idempotently on confirmed payment
 
 ## Phase 2 — Agent adoption acceleration
+
+### Phase 2 options (from audit 2026-02-24)
+- [ ] Request-targeted offers: allow offers to target published requests (not just units), enabling richer demand-side negotiation
+- [ ] Compound/hybrid offers: structured multi-sided deal terms beyond freeform `note` (offered units + requested units + monetary terms, enforced atomically)
+- [ ] Photos on units: accept photos via API with Cloudflare R2 (or similar) storage; add `unit_media` references
+- [ ] "Has ever purchased" flag refinement: evaluate whether lifetime flag needs time-bounding, expiry, or abuse controls
+
 - [ ] SDKs (full): TS + Python, versioned, CI publish, examples
 - [ ] MCP server (official): hosted on Cloud Run; discoverable via `/v1/meta`
 - [ ] Docs portal expansion: `/docs/api`, `/docs/errors`, `/docs/security`, `/docs/credits`, `/docs/webhooks`

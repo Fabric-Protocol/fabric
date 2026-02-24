@@ -140,6 +140,15 @@ async function activateBasicSubscriber(app, nodeId, eventIdPrefix = 'evt_subscri
   return app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
 }
 
+async function grantTrialEntitlement(nodeId) {
+  await query(
+    `insert into trial_entitlements(node_id, source, threshold_count, upload_count_at_grant, starts_at, ends_at)
+     values($1, 'unit_upload_count', 0, 0, now(), now() + interval '7 days')
+     on conflict (node_id) do update set starts_at=now(), ends_at=now() + interval '7 days'`,
+    [nodeId],
+  );
+}
+
 function unitPayload(title, scopeNotes = 'unit-scope') {
   return {
     title,
@@ -335,7 +344,7 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/accept']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/reveal-contact']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/me']?.patch), true);
-  assert.equal(Boolean(body.paths?.['/events']?.get), true);
+  assert.equal(Boolean(body.paths?.['/v1/events']?.get), true);
   const offerCreateParams = body.paths?.['/v1/offers']?.post?.parameters ?? [];
   const idemParamRef = offerCreateParams.find((p) => p && p.$ref === '#/components/parameters/IdempotencyKeyHeader');
   assert.equal(Boolean(idemParamRef), true);
@@ -354,7 +363,7 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const offerSchema = body.components?.schemas?.Offer ?? {};
   assert.equal(Array.isArray(offerSchema.required), true);
   assert.equal(offerSchema.required.includes('expires_at'), true);
-  const eventsParams = body.paths?.['/events']?.get?.parameters ?? [];
+  const eventsParams = body.paths?.['/v1/events']?.get?.parameters ?? [];
   const sinceParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsSinceQuery');
   const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
   assert.equal(Boolean(sinceParam), true);
@@ -424,7 +433,7 @@ test('GET /docs/agents returns quickstart HTML content', async () => {
   assert.match(res.body, /\/v1\/offers/);
   assert.match(res.body, /event_webhook_secret/);
   assert.match(res.body, /x-fabric-signature/);
-  assert.match(res.body, /GET \/events/);
+  assert.match(res.body, /GET \/v1\/events/);
   await app.close();
 });
 
@@ -1168,7 +1177,7 @@ test('unit patch rejects public_summary containing phone number', async () => {
   await app.close();
 });
 
-test('search is credits-gated (not subscriber-gated) while offer progression (create/counter/accept/reveal) is available without subscriber status', async () => {
+test('search requires entitled spender (subscriber or trial) while offer progression is available without subscriber status', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-no-sub-seller', {
     display_name: 'Offer No Sub Seller',
@@ -1601,6 +1610,7 @@ test('request ttl_minutes defaults/overrides are enforced and expired requests a
   const ownerApiKey = ownerBoot.json().api_key.api_key;
   const seekerApiKey = seekerBoot.json().api_key.api_key;
   const ownerNodeId = ownerBoot.json().node.id;
+  const seekerNodeId = seekerBoot.json().node.id;
   const uniqueToken = `reqexpiry${crypto.randomBytes(6).toString('hex').replace(/[0-9]/g, 'a')}`;
 
   const created = await app.inject({
@@ -1712,6 +1722,7 @@ test('mutual acceptance auto-unpublishes involved units from projections/search'
   const buyerBoot = await bootstrap(app, 'boot-mutual-unpublish-buyer');
   const sellerNodeId = sellerBoot.json().node.id;
   const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerNodeId = buyerBoot.json().node.id;
   const buyerApiKey = buyerBoot.json().api_key.api_key;
   const marker = `mutualunpub${Date.now()}`;
 
@@ -2319,7 +2330,7 @@ test('reveal-contact returns empty messaging_handles array when none configured'
   await app.close();
 });
 
-test('offer lifecycle events emit webhooks and /events supports cursor polling', async () => {
+test('offer lifecycle events emit webhooks and /v1/events supports cursor polling', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-event-seller', {
     display_name: 'Event Seller',
@@ -2473,7 +2484,7 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   const page1 = await app.inject({
     method: 'GET',
-    url: '/events?limit=2',
+    url: '/v1/events?limit=2',
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(page1.statusCode, 200);
@@ -2483,7 +2494,7 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   const page2 = await app.inject({
     method: 'GET',
-    url: `/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=100`,
+    url: `/v1/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=100`,
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(page2.statusCode, 200);
@@ -2499,7 +2510,7 @@ test('offer lifecycle events emit webhooks and /events supports cursor polling',
 
   const invalidCursor = await app.inject({
     method: 'GET',
-    url: '/events?since=not-a-cursor',
+    url: '/v1/events?since=not-a-cursor',
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(invalidCursor.statusCode, 422);
@@ -2593,7 +2604,7 @@ test('clearing event_webhook_secret omits webhook signing headers on subsequent 
   await app.close();
 });
 
-test('/events cursor pagination with limit=1 returns strictly later events after since cursor', async () => {
+test('/v1/events cursor pagination with limit=1 returns strictly later events after since cursor', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-event-cursor-seller', {
     display_name: 'Event Cursor Seller',
@@ -2626,7 +2637,7 @@ test('/events cursor pagination with limit=1 returns strictly later events after
 
   const page1 = await app.inject({
     method: 'GET',
-    url: '/events?limit=1',
+    url: '/v1/events?limit=1',
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(page1.statusCode, 200);
@@ -2636,7 +2647,7 @@ test('/events cursor pagination with limit=1 returns strictly later events after
 
   const page2 = await app.inject({
     method: 'GET',
-    url: `/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=10`,
+    url: `/v1/events?since=${encodeURIComponent(page1.json().next_cursor)}&limit=10`,
     headers: { authorization: `ApiKey ${buyerApiKey}` },
   });
   assert.equal(page2.statusCode, 200);
@@ -2720,7 +2731,7 @@ test('event webhook retries are bounded and polling remains available when deliv
 
   const eventsPoll = await app.inject({
     method: 'GET',
-    url: '/events?limit=10',
+    url: '/v1/events?limit=10',
     headers: { authorization: `ApiKey ${sellerApiKey}` },
   });
   assert.equal(eventsPoll.statusCode, 200);
@@ -2893,49 +2904,18 @@ test('request milestones grant credits at 10 and 20 only', async () => {
   await app.close();
 });
 
-test('active upload trial allows metered search, and expiry no longer blocks credits-based search', async () => {
+test('search works with credits only (no subscriber gate required)', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-upload-trial-expiry');
-  const nodeId = b.json().node.id;
+  const b = await bootstrap(app, 'boot-search-credits-only');
   const apiKey = b.json().api_key.api_key;
-  const threshold = config.uploadTrialThreshold;
 
-  for (let i = 0; i < threshold; i += 1) {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/units',
-      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-exp-unit-${i}` },
-      payload: unitPayload(`Trial expiry unit ${i}`, `trial-exp-${i}`),
-    });
-    assert.equal(res.statusCode, 200);
-  }
-
-  const entitlement = await repo.getTrialEntitlement(nodeId);
-  assert.equal(Boolean(entitlement), true);
-
-  const trialSearch = await app.inject({
+  const search = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-active' },
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'credits-only-search-1' },
     payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
-  assert.equal(trialSearch.statusCode, 200);
-
-  await query(
-    "update trial_entitlements set starts_at = now() - interval '8 days', ends_at = now() - interval '1 second' where node_id=$1",
-    [nodeId],
-  );
-
-  const balanceBeforeExpiredSearch = await repo.creditBalance(nodeId);
-  const expiredSearch = await app.inject({
-    method: 'POST',
-    url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'trial-search-expired' },
-    payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'no-match-ok' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
-  });
-  assert.equal(expiredSearch.statusCode, 200);
-  const balanceAfterExpiredSearch = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterExpiredSearch < balanceBeforeExpiredSearch, true);
+  assert.equal(search.statusCode, 200);
   await app.close();
 });
 
@@ -4423,26 +4403,18 @@ test('search returns credits_exhausted for subscriber with insufficient credits'
   await app.close();
 });
 
-test('search returns 402 credits_exhausted for non-subscriber node with zero credits', async () => {
+test('search succeeds for non-subscriber node with credits (no subscriber gate)', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-search-no-sub-no-credits');
-  const nodeId = b.json().node.id;
+  const b = await bootstrap(app, 'boot-search-no-sub-has-credits');
   const apiKey = b.json().api_key.api_key;
-
-  // Drain all credits without activating any subscription
-  const current = await repo.creditBalance(nodeId);
-  if (current > 0) {
-    await repo.addCredit(nodeId, 'adjustment_manual', -(current + 1), { reason: 'test_drain' }, `drain-nosub-${nodeId}`);
-  }
 
   const res = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-no-sub-no-credits' },
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-no-sub-has-credits' },
     payload: { q: null, scope: 'OTHER', filters: { scope_notes: 'x' }, broadening: { level: 0, allow: false }, budget: { credits_max: config.searchCreditCost }, limit: 20, cursor: null },
   });
-  assert.equal(res.statusCode, 402);
-  assert.equal(res.json().error.code, 'credits_exhausted');
+  assert.equal(res.statusCode, 200);
   await app.close();
 });
 
@@ -4514,7 +4486,7 @@ test('search accepts deprecated budget.credits_max alias', async () => {
   await app.close();
 });
 
-test('search budget cap exceeded returns 402 with needed/max/breakdown', async () => {
+test('search budget cap exceeded returns 200 with was_capped=true and zero items', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-budget-cap');
   const nodeId = b.json().node.id;
@@ -4536,13 +4508,14 @@ test('search budget cap exceeded returns 402 with needed/max/breakdown', async (
       cursor: null,
     },
   });
-  assert.equal(res.statusCode, 402);
-  assert.equal(res.json().error.code, 'budget_cap_exceeded');
-  assert.equal(res.json().error.details.needed, config.searchCreditCost);
-  assert.equal(res.json().error.details.max, 0);
-  assert.equal(typeof res.json().error.details.breakdown, 'object');
-  assert.equal(res.json().error.details.breakdown.base_search_cost, config.searchCreditCost);
-  assert.equal(res.json().error.details.breakdown.broadening_cost, 0);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().budget.was_capped, true);
+  assert.equal(typeof res.json().budget.cap_reason, 'string');
+  assert.equal(typeof res.json().budget.guidance, 'string');
+  assert.equal(res.json().budget.credits_charged, 0);
+  assert.equal(res.json().budget.breakdown.base_search_cost, config.searchCreditCost);
+  assert.equal(res.json().budget.breakdown.broadening_cost, 0);
+  assert.equal(res.json().items.length, 0);
   const balanceAfter = await repo.creditBalance(nodeId);
   assert.equal(balanceAfter, balanceBefore);
   await app.close();
@@ -4892,12 +4865,14 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-tier-page-6' },
     payload: searchPayload(page5.json().cursor, modestBudget),
   });
-  assert.equal(page6.statusCode, 402);
-  assert.equal(page6.json().error.code, 'budget_cap_exceeded');
-  assert.equal(page6.json().error.details.needed, config.searchTargetCreditCost + 100);
-  assert.equal(page6.json().error.details.max, modestBudget);
-  assert.equal(page6.json().error.details.breakdown.page_index, 6);
-  assert.equal(page6.json().error.details.breakdown.page_cost, 100);
+  assert.equal(page6.statusCode, 200);
+  assert.equal(page6.json().budget.was_capped, true);
+  assert.equal(typeof page6.json().budget.cap_reason, 'string');
+  assert.equal(typeof page6.json().budget.guidance, 'string');
+  assert.equal(page6.json().budget.credits_charged, 0);
+  assert.equal(page6.json().budget.breakdown.page_index, 6);
+  assert.equal(page6.json().budget.breakdown.page_cost, 100);
+  assert.equal(page6.json().items.length, 0);
   const afterPage6Balance = await repo.creditBalance(searcherNodeId);
   assert.equal(afterPage6Balance, beforePage6Balance);
 
@@ -5057,6 +5032,7 @@ test('ship_to search applies route specificity scoring and max_ship_days filteri
 test('ship_to search matches projection dest_region for ship_to_regions filters', async () => {
   const app = buildApp();
   const searcherBoot = await bootstrap(app, 'boot-search-shipto-projection-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
   const searcherApiKey = searcherBoot.json().api_key.api_key;
 
   const targetBoot = await bootstrap(app, 'boot-search-shipto-projection-target');

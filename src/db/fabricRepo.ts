@@ -1788,6 +1788,54 @@ export async function getPrepurchaseOfferAcceptUsage(nodeId: string) {
   };
 }
 
+export async function getPrepurchaseSearchUsage(nodeId: string) {
+  const rows = await query<{ has_purchased: boolean; usage_today: string }>(
+    `select
+       (
+         exists (
+           select 1
+           from credit_ledger cl
+           where cl.node_id = $1::uuid
+             and cl.type = 'topup_purchase'
+             and cl.amount > 0
+         )
+         or exists (
+           select 1
+           from stripe_events e
+           where e.type = 'invoice.paid'
+             and (
+               coalesce(e.payload->'data'->'object'->'metadata'->>'node_id', e.payload->'data'->'object'->>'node_id', e.payload->>'node_id') = $1::text
+               or exists (
+                 select 1
+                 from subscriptions s
+                 where s.node_id::text = $1::text
+                   and s.stripe_customer_id is not null
+                   and s.stripe_customer_id = coalesce(e.payload->'data'->'object'->>'customer', e.payload->>'customer')
+               )
+             )
+         )
+         or exists (
+           select 1
+           from subscriptions s
+           where s.node_id = $1::uuid
+             and s.plan_code in ('basic', 'pro', 'business')
+             and s.status in ('active', 'past_due', 'canceled')
+         )
+       ) as has_purchased,
+       (
+         select count(*)::text
+         from search_logs sl
+         where sl.node_id = $1::uuid
+           and sl.created_at >= date_trunc('day', now())
+       ) as usage_today`,
+    [nodeId],
+  );
+  return {
+    hasPurchased: Boolean(rows[0]?.has_purchased),
+    usageToday: Number(rows[0]?.usage_today ?? 0),
+  };
+}
+
 export async function getReferralClaim(nodeId: string) {
   const rows = await query<any>("select * from referral_claims where claimer_node_id=$1 and status='claimed' order by claimed_at asc limit 1", [nodeId]);
   return rows[0] ?? null;

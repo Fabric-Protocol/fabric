@@ -17,7 +17,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits; offer lifecycle endpoints require legal assent + auth + rate-limit controls (not subscriber-only).
+- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 3 searches/day, 3 offer creates/day, 1 offer accept/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
 
 ---
 
@@ -193,6 +193,8 @@ If referral_code is provided, it is recorded as a referral claim (subject to the
 Email is account identity/recovery contact data and is not used as a runtime auth factor.
 
 Errors
+
+409 display_name_taken (display_name already in use by another Node)
 
 422 legal_required
 
@@ -1729,7 +1731,7 @@ Webhook payload and signing
 - `v1` is computed as `hex(HMAC_SHA256(event_webhook_secret, signed_payload))`.
 - Receiver replay guidance: reject signatures where `X-Fabric-Timestamp` differs from current time by more than 300 seconds.
 
-`GET /events`
+`GET /v1/events`
 
 Auth
 
@@ -1750,7 +1752,7 @@ Query
 Cursor semantics
 
 - `since` is server-issued and opaque to clients.
-- Polling is strictly-after semantics: `GET /events?since=X` returns only events that occurred after cursor `X`.
+- Polling is strictly-after semantics: `GET /v1/events?since=X` returns only events that occurred after cursor `X`.
 - `next_cursor` is server-issued from the last returned event and can be used directly as the next `since` value.
 
 Response 200
@@ -1964,6 +1966,137 @@ Signature verification with 5-minute tolerance.
 
 Response 200
 { "ok": true }
+
+15b) Bcon credit-pack invoice (crypto top-ups)
+POST /v1/billing/topups/bcon/invoice
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Create a Bcon invoice for a one-time credit pack purchase via cryptocurrency.
+
+Request
+{
+  "node_id": "uuid",
+  "pack_code": "credits_500|credits_1500|credits_4500",
+  "chain": "string",
+  "payment_currency": "string"
+}
+
+Rules / side effects
+
+- `node_id` must match the authenticated Node.
+- Server creates a Bcon invoice via the Bcon API.
+- `chain` and `payment_currency` are normalized to lowercase.
+- Requires `BCON_API_BASE`, `BCON_STORE_API_KEY`, and `BCON_CALLBACK_SECRET` to be configured; returns `422 validation_error` with `reason: bcon_not_configured` otherwise.
+- Returns the Bcon invoice details including `payment_url` for the buyer.
+
+Response 200
+{
+  "node_id": "uuid",
+  "pack_code": "credits_500|credits_1500|credits_4500",
+  "credits": 500,
+  "invoice_id": "string",
+  "payment_url": "string"
+}
+
+Errors
+
+403 forbidden (node_id mismatch)
+
+422 validation_error (invalid payload, bcon_not_configured, or bcon_api_error)
+
+15c) Bcon webhook callback
+POST /v1/webhooks/bcon
+Auth
+
+Shared secret via `X-Bcon-Callback-Secret` header (or `?secret=` query param)
+
+Idempotency-Key
+
+N/A (idempotency by invoice external_id)
+
+Metering
+
+None
+
+Purpose
+
+Handle Bcon payment confirmation callbacks; grant credit pack credits on successful payment.
+
+Request (from Bcon)
+{
+  "external_id": "string",
+  "status": "string",
+  "txid": "string|null",
+  "value": "string|null",
+  "addr": "string|null"
+}
+
+Rules / side effects
+
+- Validates callback secret via timing-safe comparison.
+- Looks up the Bcon invoice by `external_id`.
+- If status indicates payment success: grants the configured pack credits as `topup_purchase` in the credit ledger.
+- Unknown `external_id` values are logged and return 200 (no error).
+
+Response 200
+{ "ok": true }
+
+---
+
+15d) POST /v1/public/nodes/categories-summary
+Auth
+
+Required
+
+Idempotency-Key
+
+Not required (read-only aggregation)
+
+Metering
+
+None (zero cost)
+
+Purpose
+
+Batch-fetch per-node category counts for listings and/or requests. Enables agents to determine which categories a node has inventory in before deciding whether to drill down.
+
+Request
+{
+  "node_ids": ["uuid"],
+  "kind": "listings|requests|both"
+}
+
+- `node_ids` must contain 1–50 UUIDs.
+- `kind` must be one of `listings`, `requests`, or `both`.
+
+Response 200
+{
+  "summaries": [
+    {
+      "node_id": "uuid",
+      "listings_categories": { "1": 5, "3": 2 },
+      "requests_categories": { "1": 3 }
+    }
+  ]
+}
+
+Errors
+
+422 validation_error (invalid node_ids or kind)
+
+---
 
 16) Admin (minimal)
 POST /v1/admin/takedown

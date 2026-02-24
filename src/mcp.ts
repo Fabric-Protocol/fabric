@@ -196,7 +196,7 @@ async function executeTool(
     const qs = params.toString();
     const res = await app.inject({
       method: 'GET',
-      url: `/events${qs ? `?${qs}` : ''}`,
+      url: `/v1/events${qs ? `?${qs}` : ''}`,
       headers: { authorization: authHeader },
     });
     return { status: res.statusCode, body: res.json() };

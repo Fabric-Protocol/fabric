@@ -317,6 +317,7 @@ create table if not exists units (
   dest_region jsonb null,
   service_region jsonb null,
   delivery_format text null,
+  max_ship_days int null,
 
   tags text[] null,
   category_ids int[] null,
@@ -334,6 +335,7 @@ create index if not exists units_node_idx on units(node_id) where deleted_at is 
 create index if not exists units_published_idx on units(published_at desc) where deleted_at is null;
 create index if not exists units_scope_idx on units(scope_primary) where deleted_at is null;
 alter table units add column if not exists estimated_value numeric null;
+alter table units add column if not exists max_ship_days int null;
 
 drop trigger if exists units_set_updated_at on units;
 create trigger units_set_updated_at
@@ -370,6 +372,7 @@ create table if not exists requests (
   dest_region jsonb null,
   service_region jsonb null,
   delivery_format text null,
+  max_ship_days int null,
 
   need_by timestamptz null,
   accept_substitutions boolean not null default true,
@@ -387,6 +390,7 @@ create table if not exists requests (
 );
 
 alter table requests add column if not exists expires_at timestamptz not null default (now() + interval '7 days');
+alter table requests add column if not exists max_ship_days int null;
 
 create index if not exists requests_node_idx on requests(node_id) where deleted_at is null;
 create index if not exists requests_published_idx on requests(published_at desc) where deleted_at is null;
@@ -411,22 +415,74 @@ create table if not exists public_listings (
   node_id uuid not null references nodes(id),
 
   doc jsonb not null, -- allowlisted PublicListing payload
+  search_tsv tsvector not null default ''::tsvector,
   published_at timestamptz not null,
   updated_at timestamptz not null default now()
 );
 
+alter table public_listings add column if not exists search_tsv tsvector not null default ''::tsvector;
+
 create index if not exists public_listings_published_idx on public_listings(published_at desc);
+create index if not exists public_listings_search_tsv_idx on public_listings using gin(search_tsv);
+
+create or replace function public_listings_tsv_trigger() returns trigger language plpgsql as $$
+begin
+  new.search_tsv := to_tsvector('english',
+    coalesce(new.doc->>'title','') || ' ' ||
+    coalesce(new.doc->>'public_summary','') || ' ' ||
+    coalesce(new.doc->>'description','') || ' ' ||
+    coalesce(
+      (select string_agg(elem, ' ') from jsonb_array_elements_text(
+        case when jsonb_typeof(coalesce(new.doc->'tags','[]'::jsonb)) = 'array'
+             then new.doc->'tags' else '[]'::jsonb end
+      ) as elem),
+      ''
+    )
+  );
+  return new;
+end; $$;
+
+drop trigger if exists public_listings_search_tsv_update on public_listings;
+create trigger public_listings_search_tsv_update
+before insert or update on public_listings
+for each row execute function public_listings_tsv_trigger();
 
 create table if not exists public_requests (
   request_id uuid primary key references requests(id) on delete cascade,
   node_id uuid not null references nodes(id),
 
   doc jsonb not null, -- allowlisted PublicRequest payload
+  search_tsv tsvector not null default ''::tsvector,
   published_at timestamptz not null,
   updated_at timestamptz not null default now()
 );
 
+alter table public_requests add column if not exists search_tsv tsvector not null default ''::tsvector;
+
 create index if not exists public_requests_published_idx on public_requests(published_at desc);
+create index if not exists public_requests_search_tsv_idx on public_requests using gin(search_tsv);
+
+create or replace function public_requests_tsv_trigger() returns trigger language plpgsql as $$
+begin
+  new.search_tsv := to_tsvector('english',
+    coalesce(new.doc->>'title','') || ' ' ||
+    coalesce(new.doc->>'public_summary','') || ' ' ||
+    coalesce(new.doc->>'description','') || ' ' ||
+    coalesce(
+      (select string_agg(elem, ' ') from jsonb_array_elements_text(
+        case when jsonb_typeof(coalesce(new.doc->'tags','[]'::jsonb)) = 'array'
+             then new.doc->'tags' else '[]'::jsonb end
+      ) as elem),
+      ''
+    )
+  );
+  return new;
+end; $$;
+
+drop trigger if exists public_requests_search_tsv_update on public_requests;
+create trigger public_requests_search_tsv_update
+before insert or update on public_requests
+for each row execute function public_requests_tsv_trigger();
 
 -- =========================
 -- Offers + holds

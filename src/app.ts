@@ -767,7 +767,7 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
     </ul>
 
     <h2>Offer Eventing (Webhook + Polling)</h2>
-    <p>Offer lifecycle events are delivered best-effort by webhook and are always available via <code>GET /events</code> as polling fallback.</p>
+    <p>Offer lifecycle events are delivered best-effort by webhook and are always available via <code>GET /v1/events</code> as polling fallback.</p>
     <pre><code>WEBHOOK_IDEM=$(uuidgen)
 curl -sS -X PATCH "$BASE/v1/me" \\
   -H "Authorization: ApiKey $API_KEY" \\
@@ -790,9 +790,9 @@ curl -sS -X PATCH "$BASE/v1/me" \\
       <li>Event payloads are metadata-only; on <code>offer_contact_revealed</code>, call <code>POST /v1/offers/{offer_id}/reveal-contact</code> for contact data.</li>
     </ul>
     <pre><code># Polling fallback (strictly-after cursor semantics)
-PAGE1=$(curl -sS "$BASE/events?limit=50" -H "Authorization: ApiKey $API_KEY")
+PAGE1=$(curl -sS "$BASE/v1/events?limit=50" -H "Authorization: ApiKey $API_KEY")
 CURSOR=$(printf '%s' "$PAGE1" | jq -r '.next_cursor')
-PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey $API_KEY")
+PAGE2=$(curl -sS "$BASE/v1/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey $API_KEY")
 
 # Cadence: poll every 2-5s while active; back off exponentially on empty pages/429/5xx.</code></pre>
 
@@ -825,10 +825,11 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
-      <li>Search includes a budget contract: send <code>budget.credits_requested</code> (deprecated alias <code>budget.credits_max</code> also accepted); server returns 402 <code>budget_cap_exceeded</code> if computed cost exceeds this cap.</li>
+      <li>Search includes a budget contract: send <code>budget.credits_requested</code> (deprecated alias <code>budget.credits_max</code> also accepted); if computed cost exceeds this cap, response returns <code>was_capped=true</code> with zero items and guidance.</li>
+      <li>Pre-purchase daily limits apply until first purchase: max 3 search requests/day (combined listings+requests), max 3 offer creates/day, and max 1 offer accept/day.</li>
       <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
       <li>Payment can be currency or swap; <code>unit</code> stays intentionally open-ended so either model can be negotiated.</li>
-      <li>Pre-purchase daily limits apply until first purchase: max 3 offer creates/day and max 1 offer accept/day.</li>
+      <li>Pre-purchase daily limits for offers: max 3 offer creates/day and max 1 offer accept/day (unlimited rejects).</li>
       <li>On the second acceptance that finalizes <code>mutually_accepted</code>, each side is charged the configured deal acceptance fee (currently 1 credit per side).</li>
       <li>Mutual acceptance auto-completes by unpublishing/removing all involved units from public listings/search.</li>
       <li>Use <code>POST /v1/offers/{offer_id}/cancel</code> when the offer creator needs to withdraw before mutual acceptance.</li>
@@ -1873,6 +1874,7 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', normalized, (req as AuthedRequest).idem!.key);
+    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1880,7 +1882,6 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -1899,6 +1900,7 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', normalized, (req as AuthedRequest).idem!.key);
+    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1906,7 +1908,6 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
     if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
     return out;
   });
@@ -2068,7 +2069,7 @@ export function buildApp() {
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     return out;
   });
-  app.get('/events', async (req, reply) => {
+  app.get('/v1/events', async (req, reply) => {
     const q = req.query as any;
     const limit = Number(q.limit ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -2292,7 +2293,7 @@ export function buildApp() {
     if (kind === 'all' || kind === 'listings') {
       await query('truncate table public_listings');
       await query(`insert into public_listings(unit_id,node_id,doc,published_at)
-        select u.id,u.node_id,jsonb_build_object('id',u.id,'node_id',u.node_id,'scope_primary',u.scope_primary,'scope_secondary',u.scope_secondary,'title',u.title,'description',u.description,'public_summary',u.public_summary,'quantity',u.quantity,'measure',u.measure,'custom_measure',u.custom_measure,'category_ids',u.category_ids,'tags',u.tags,'type',u.type,'condition',u.condition,'location_text_public',u.location_text_public,'origin_region',u.origin_region,'dest_region',u.dest_region,'service_region',u.service_region,'delivery_format',u.delivery_format,'max_ship_days',u.max_ship_days,'photos',u.photos,'published_at',u.published_at,'updated_at',u.updated_at),u.published_at
+        select u.id,u.node_id,jsonb_build_object('id',u.id,'node_id',u.node_id,'scope_primary',u.scope_primary,'scope_secondary',u.scope_secondary,'title',u.title,'description',u.description,'public_summary',u.public_summary,'quantity',u.quantity,'estimated_value',u.estimated_value,'measure',u.measure,'custom_measure',u.custom_measure,'category_ids',u.category_ids,'tags',u.tags,'type',u.type,'condition',u.condition,'location_text_public',u.location_text_public,'origin_region',u.origin_region,'dest_region',u.dest_region,'service_region',u.service_region,'delivery_format',u.delivery_format,'max_ship_days',u.max_ship_days,'photos',u.photos,'published_at',u.published_at,'updated_at',u.updated_at),u.published_at
         from units u join nodes n on n.id=u.node_id where u.published_at is not null and u.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='listing' and t.target_id=u.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=u.node_id and t.reversed_at is null)`);
     }
     if (kind === 'all' || kind === 'requests') {
