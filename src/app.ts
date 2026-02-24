@@ -9,6 +9,7 @@ import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
 import { CATEGORIES_RESPONSE, CATEGORIES_VERSION } from './categories.js';
+import { registerMcpRoute } from './mcp.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -120,9 +121,9 @@ const legalPages = {
     <p>You must comply with the Acceptable Use Policy. Violations may result in rate limiting, suspension, API key revocation, removal of projections, and/or termination, including immediate action for suspected abuse, fraud, security threats, or illegal activity.</p>
 
     <h2>6. Billing, subscriptions, and credits</h2>
-    <p><strong>Billing platform.</strong> Subscriptions and top-ups are billed through Stripe or another payment processor designated by the Operator.</p>
+    <p><strong>Billing platform.</strong> Subscriptions and Credit Pack purchases are billed through Stripe or another payment processor designated by the Operator.</p>
     <p><strong>Credits.</strong> Credits are a metering mechanism for consumption of Service capabilities. Credits are not legal tender, are not redeemable for cash, have no cash value, and are non-transferable unless expressly permitted by the Operator in writing.</p>
-    <p><strong>Top-ups.</strong> Credit top-ups are <strong>non-refundable</strong> except where required by law.</p>
+    <p><strong>Credit Packs.</strong> Credit Pack purchases are <strong>non-refundable</strong> except where required by law.</p>
     <p><strong>Subscription credits; rollover cap.</strong> Subscription plans may include periodic credit grants. Unused subscription credits roll over up to a maximum balance equal to <strong>two months</strong> of that plan's periodic credit amount (i.e., rollover is capped at one additional month beyond the current month's grant).</p>
     <p><strong>Plan changes.</strong> Plan upgrades/downgrades and credit-grant semantics follow the Service's published billing policy and API documentation as in effect at the time of change.</p>
     <p><strong>Taxes.</strong> You are responsible for all applicable taxes related to your use.</p>
@@ -200,7 +201,7 @@ const legalPages = {
     <p>We use information to:</p>
     <ul>
       <li>Provide, operate, maintain, and secure the Service (including authenticating requests and enforcing access controls).</li>
-      <li>Process billing-related events and reconcile subscriptions and top-ups.</li>
+      <li>Process billing-related events and reconcile subscriptions and Credit Pack purchases.</li>
       <li>Measure usage, apply metering and rate limits, and prevent fraud and abuse.</li>
       <li>Monitor reliability, debug issues, and improve the Service.</li>
       <li>Comply with legal obligations and enforce our policies (including the Terms of Service and Acceptable Use Policy).</li>
@@ -377,7 +378,7 @@ const legalPages = {
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>1. Overview</h2>
-    <p>This policy explains cancellation, refunds, and credit handling for subscriptions and credit top-ups purchased through the Fabric Protocol (the "Service").</p>
+    <p>This policy explains cancellation, refunds, and credit handling for subscriptions and Credit Pack purchases through the Fabric Protocol (the "Service").</p>
 
     <h2>2. Subscription cancellation</h2>
     <ul>
@@ -391,17 +392,17 @@ const legalPages = {
       <li>If we suspend or terminate access for policy violations or abuse, refunds may be denied to the extent permitted by law.</li>
     </ul>
 
-    <h2>4. Top-ups (one-time credit purchases)</h2>
+    <h2>4. Credit Packs (one-time credit purchases)</h2>
     <ul>
-      <li><strong>Top-ups are non-refundable</strong> except where required by law.</li>
-      <li>Top-up credits are <strong>not redeemable for cash</strong> and have no cash value.</li>
+      <li><strong>Credit Pack purchases are non-refundable</strong> except where required by law.</li>
+      <li>Credit Pack credits are <strong>not redeemable for cash</strong> and have no cash value.</li>
     </ul>
 
     <h2>5. Credits: rollover, caps, and expiration</h2>
     <ul>
       <li><strong>Subscription credits:</strong> Subscription plans may include periodic credit grants. Unused subscription credits roll over, but the balance of subscription-granted credits is capped at <strong>two months</strong> of the plan's periodic credit amount (i.e., rollover is capped at one additional month beyond the current month's grant). We apply this as a <strong>grant-up-to-cap</strong> rule at renewal.</li>
-      <li><strong>Top-up credits:</strong> Top-up credits <strong>do not expire</strong> (subject to suspension/termination and enforcement actions described in the Terms/AUP).</li>
-      <li>Subscription credits and top-up credits may be tracked as separate sources for accounting and enforcement. Any cap described above applies to <strong>subscription-granted credits</strong>, not purchased top-up credits.</li>
+      <li><strong>Credit Pack credits:</strong> Credit Pack credits <strong>do not expire</strong> (subject to suspension/termination and enforcement actions described in the Terms/AUP).</li>
+      <li>Subscription credits and Credit Pack credits may be tracked as separate sources for accounting and enforcement. Any cap described above applies to <strong>subscription-granted credits</strong>, not purchased Credit Pack credits.</li>
     </ul>
 
     <h2>6. Failed payments and subscription lapse</h2>
@@ -704,6 +705,17 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
     </ul>
     <p>Machine-readable trust rules are available in <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code>.</p>
 
+    <h2>MCP (Read-Only)</h2>
+    <p>Fabric exposes a read-only <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for agent tool-use integration.</p>
+    <ul>
+      <li><strong>Discovery:</strong> <code>GET /v1/meta</code> returns <code>mcp_url</code> pointing to the MCP endpoint.</li>
+      <li><strong>Transport:</strong> JSON-RPC 2.0 over HTTP POST.</li>
+      <li><strong>Auth:</strong> same <code>Authorization: ApiKey &lt;api_key&gt;</code> header as the REST API.</li>
+      <li><strong>Available tools:</strong> <code>fabric_search_listings</code>, <code>fabric_search_requests</code>, <code>fabric_get_unit</code>, <code>fabric_get_request</code>, <code>fabric_get_offer</code>, <code>fabric_get_events</code>, <code>fabric_get_credits</code>.</li>
+      <li><strong>Mutations:</strong> not exposed via MCP. Use the REST API directly for writes.</li>
+      <li><strong>Rate limits:</strong> per-node limit applies to the MCP endpoint; underlying route limits also apply.</li>
+    </ul>
+
     <h2>Capabilities and MVP Limits</h2>
     <ul>
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
@@ -759,6 +771,7 @@ function isAnonIdempotentRoute(url: string) {
 function isNoIdemWriteRoute(req: FastifyRequest) {
   const path = routePath(req.url);
   return path === '/v1/public/nodes/categories-summary'
+    || path === '/mcp'
     || /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path);
 }
 
@@ -791,12 +804,14 @@ function legalUrls(req: FastifyRequest) {
 }
 
 function buildMetaPayload(req: FastifyRequest) {
+  const mcpUrl = config.mcpUrl || absoluteUrl(req, '/mcp');
   return {
     api_version: config.apiVersion,
     required_legal_version: config.requiredLegalVersion,
     openapi_url: absoluteUrl(req, '/openapi.json'),
     categories_url: absoluteUrl(req, '/v1/categories'),
     categories_version: CATEGORIES_VERSION,
+    mcp_url: mcpUrl || undefined,
     legal_urls: legalUrls(req),
     support_url: absoluteUrl(req, '/support'),
     docs_urls: {
@@ -860,6 +875,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && /^\/v1\/offers\/[^/]+\/reveal-contact$/.test(path)) return { name: 'reveal_contact', limit: config.rateLimitRevealContactPerHour, windowSeconds: 3600, subject: 'node' };
   if (method === 'PATCH' && path === '/v1/me') return { name: 'profile_patch', limit: config.rateLimitMePatchPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/auth/keys') return { name: 'auth_key_issue', limit: config.rateLimitApiKeyIssuePerDay, windowSeconds: 86400, subject: 'node' };
+  if (method === 'POST' && path === '/mcp') return { name: 'mcp', limit: config.rateLimitMcpPerMinute, windowSeconds: 60, subject: 'node' };
   return null;
 }
 
@@ -1488,7 +1504,7 @@ export function buildApp() {
   app.post('/v1/billing/topups/checkout-session', async (req, reply) => {
     const parsed = z.object({
       node_id: z.string().uuid(),
-      pack_code: z.enum(['credits_100', 'credits_300', 'credits_1000']),
+      pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
       success_url: z.string().url(),
       cancel_url: z.string().url(),
     }).safeParse(req.body);
@@ -1499,7 +1515,7 @@ export function buildApp() {
       (req as AuthedRequest).idem?.key ?? null,
     );
     if ((out as any).forbidden) {
-      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create topup checkout session for another node'));
+      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create Credit Pack checkout session for another node'));
     }
     if ((out as any).validationError) {
       const missing = Array.isArray((out as any).missing) ? (out as any).missing : undefined;
@@ -1513,7 +1529,7 @@ export function buildApp() {
           'Stripe checkout blocked by configuration',
         );
       }
-      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create topup checkout session', {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create Credit Pack checkout session', {
         reason: (out as any).validationError,
         stripe_status: (out as any).stripe_status ?? undefined,
         pack_code: (out as any).pack_code ?? parsed.data.pack_code,
@@ -1986,6 +2002,8 @@ export function buildApp() {
   });
 
   app.get('/healthz', async () => ({ ok: true }));
+
+  registerMcpRoute(app);
 
   return app;
 }

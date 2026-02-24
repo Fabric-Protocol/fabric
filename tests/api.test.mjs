@@ -7,9 +7,9 @@ delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
-delete process.env.STRIPE_TOPUP_PRICE_100;
-delete process.env.STRIPE_TOPUP_PRICE_300;
-delete process.env.STRIPE_TOPUP_PRICE_1000;
+delete process.env.STRIPE_TOPUP_PRICE_500;
+delete process.env.STRIPE_TOPUP_PRICE_1500;
+delete process.env.STRIPE_TOPUP_PRICE_4500;
 delete process.env.EMAIL_PROVIDER;
 delete process.env.RECOVERY_CHALLENGE_TTL_MINUTES;
 delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
@@ -34,9 +34,9 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
 process.env.STRIPE_PRICE_PRO = 'price_pro_test';
 process.env.STRIPE_PRICE_BUSINESS = 'price_business_test';
-process.env.STRIPE_TOPUP_PRICE_100 = 'price_topup_100_test';
-process.env.STRIPE_TOPUP_PRICE_300 = 'price_topup_300_test';
-process.env.STRIPE_TOPUP_PRICE_1000 = 'price_topup_1000_test';
+process.env.STRIPE_TOPUP_PRICE_500 = 'price_topup_500_test';
+process.env.STRIPE_TOPUP_PRICE_1500 = 'price_topup_1500_test';
+process.env.STRIPE_TOPUP_PRICE_4500 = 'price_topup_4500_test';
 process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 process.env.EMAIL_PROVIDER = 'stub';
 process.env.RECOVERY_CHALLENGE_TTL_MINUTES = '10';
@@ -61,9 +61,9 @@ const LIVE_PRICE_IDS = {
   basic: 'price_1T1tO2K3gJAgZl81QzBXfPIf',
   pro: 'price_1T1wL1K3gJAgZl81IYKvjCsD',
   business: 'price_1T1wLgK3gJAgZl81450PfCc3',
-  topup100: 'price_1T1wMGK3gJAgZl817t4OWdnM',
-  topup300: 'price_1T1wMbK3gJAgZl81uWQJtoqH',
-  topup1000: 'price_1T1wNBK3gJAgZl81ixDfggz3',
+  topup500: 'price_1T3tJlK3gJAgZl81iZzGyRaj',
+  topup1500: 'price_1T3tQ2K3gJAgZl81JGlIYaSy',
+  topup4500: 'price_1T3tKlK3gJAgZl81HBKJ5a8U',
 };
 
 const { buildApp } = await import('../dist/src/app.js');
@@ -2442,10 +2442,11 @@ test('GET /v1/credits/quote returns pack and plan quote catalog', async () => {
   assert.equal(body.search_quote.estimated_cost, 5);
   assert.equal(Array.isArray(body.credit_packs), true);
   assert.equal(body.credit_packs.length, 3);
-  assert.equal(body.credit_packs[0].pack_code, 'credits_100');
-  assert.equal(body.credit_packs[0].credits, 100);
-  assert.equal(body.credit_packs[0].price_cents, 399);
-  assert.equal(body.credit_packs[0].stripe_price_id, 'price_topup_100_test');
+  assert.equal(body.credit_packs[0].pack_code, 'credits_500');
+  assert.equal(body.credit_packs[0].name, '500 Credit Pack');
+  assert.equal(body.credit_packs[0].credits, 500);
+  assert.equal(body.credit_packs[0].price_cents, 999);
+  assert.equal(body.credit_packs[0].stripe_price_id, 'price_topup_500_test');
   await app.close();
 });
 
@@ -2587,10 +2588,10 @@ test('billing topups checkout-session creates payment mode session and respects 
 
     const form = new URLSearchParams(String(init.body ?? ''));
     assert.equal(form.get('mode'), 'payment');
-    assert.equal(form.get('line_items[0][price]'), 'price_topup_300_test');
+    assert.equal(form.get('line_items[0][price]'), 'price_topup_1500_test');
     assert.equal(form.get('metadata[node_id]'), nodeId);
-    assert.equal(form.get('metadata[topup_pack_code]'), 'credits_300');
-    assert.equal(form.get('metadata[topup_credits]'), '300');
+    assert.equal(form.get('metadata[topup_pack_code]'), 'credits_1500');
+    assert.equal(form.get('metadata[topup_credits]'), '1500');
 
     return jsonResponse(200, {
       id: 'cs_topup_test_123',
@@ -2600,7 +2601,7 @@ test('billing topups checkout-session creates payment mode session and respects 
   }, async () => {
     const payload = {
       node_id: nodeId,
-      pack_code: 'credits_300',
+      pack_code: 'credits_1500',
       success_url: 'https://example.com/success',
       cancel_url: 'https://example.com/cancel',
     };
@@ -2613,8 +2614,8 @@ test('billing topups checkout-session creates payment mode session and respects 
     });
     assert.equal(first.statusCode, 200);
     assert.equal(first.json().node_id, nodeId);
-    assert.equal(first.json().pack_code, 'credits_300');
-    assert.equal(first.json().credits, 300);
+    assert.equal(first.json().pack_code, 'credits_1500');
+    assert.equal(first.json().credits, 1500);
     assert.equal(first.json().checkout_session_id, 'cs_topup_test_123');
     assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_topup_test_123');
 
@@ -2631,7 +2632,7 @@ test('billing topups checkout-session creates payment mode session and respects 
       method: 'POST',
       url: '/v1/billing/topups/checkout-session',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
-      payload: { ...payload, pack_code: 'credits_100' },
+      payload: { ...payload, pack_code: 'credits_500' },
     });
     assert.equal(conflict.statusCode, 409);
     assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
@@ -2749,7 +2750,7 @@ test('webhook checkout.session.completed grants topup credits once by payment re
         id: `cs_topup_a_${nodeId.slice(0, 8)}`,
         payment_status: 'paid',
         payment_intent: `pi_topup_${nodeId.slice(0, 8)}`,
-        metadata: { node_id: nodeId, topup_pack_code: 'credits_300' },
+        metadata: { node_id: nodeId, topup_pack_code: 'credits_1500' },
       },
     },
   };
@@ -2766,7 +2767,7 @@ test('webhook checkout.session.completed grants topup credits once by payment re
   assert.equal(resB.statusCode, 200);
 
   const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter - balBefore, 300);
+  assert.equal(balAfter - balBefore, 1500);
   await app.close();
 });
 
@@ -2785,7 +2786,7 @@ test('topup grants enforce daily velocity limit per node', async () => {
           id: `cs_topup_vel_${nodeId.slice(0, 8)}_${i}`,
           payment_status: 'paid',
           payment_intent: `pi_topup_vel_${nodeId.slice(0, 8)}_${i}`,
-          metadata: { node_id: nodeId, topup_pack_code: 'credits_100' },
+          metadata: { node_id: nodeId, topup_pack_code: 'credits_500' },
         },
       },
     };
@@ -2795,7 +2796,7 @@ test('topup grants enforce daily velocity limit per node', async () => {
   }
 
   const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter - balBefore, 300);
+  assert.equal(balAfter - balBefore, 1500);
   await app.close();
 });
 
@@ -2930,7 +2931,7 @@ test('webhook maps invoice.paid by stored stripe_customer_id and grants monthly 
   assert.equal(invoiceRes.statusCode, 200);
 
   const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter - balBefore, 1500);
+  assert.equal(balAfter - balBefore, 3000);
   await app.close();
 });
 
@@ -3184,7 +3185,7 @@ test('webhook maps invoice.paid price id to pro plan', async () => {
   assert.equal(me.statusCode, 200);
   assert.equal(me.json().subscription.plan, 'pro');
   const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter - balBefore, 1500);
+  assert.equal(balAfter - balBefore, 3000);
   await app.close();
 });
 
@@ -3236,7 +3237,7 @@ test('invoice.paid credits grant ignores prior zero-credit grant for same period
   assert.equal(me.statusCode, 200);
   assert.equal(me.json().subscription.plan, 'pro');
   const afterPaid = await repo.creditBalance(nodeId);
-  assert.equal(afterPaid - beforePaid, 1500);
+  assert.equal(afterPaid - beforePaid, 3000);
   await app.close();
 });
 
@@ -3300,7 +3301,7 @@ test('invoice.paid upgrade proration grants plan-difference credits once per inv
   assert.equal(upgradeResB.statusCode, 200);
 
   const balAfterUpgrade = await repo.creditBalance(nodeId);
-  assert.equal(balAfterUpgrade - balBeforeUpgrade, 1000);
+  assert.equal(balAfterUpgrade - balBeforeUpgrade, 2000);
 
   const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${b.json().api_key.api_key}` } });
   assert.equal(me.statusCode, 200);
@@ -3396,7 +3397,7 @@ test('invoice.paid downgrade on subscription_update is deferred until renewal in
   assert.equal(meAfterRenewal.statusCode, 200);
   assert.equal(meAfterRenewal.json().subscription.plan, 'basic');
   const balAfterRenewal = await repo.creditBalance(nodeId);
-  assert.equal(balAfterRenewal - balAfterUpdate, 500);
+  assert.equal(balAfterRenewal - balAfterUpdate, 1000);
   await app.close();
 });
 
@@ -3469,7 +3470,7 @@ test('webhook maps invoice.paid via fetched customer metadata.node_id and persis
   assert.equal(mapping.stripe_customer_id, customerId);
   assert.equal(mapping.stripe_subscription_id, subscriptionId);
   const balAfter = await repo.creditBalance(nodeId);
-  assert.equal(balAfter - balBefore, 500);
+  assert.equal(balAfter - balBefore, 1000);
   await app.close();
 });
 
@@ -4855,9 +4856,9 @@ test('admin stripe diagnostics reports configured=true for supported live sku se
     stripePriceIdsBasic: [LIVE_PRICE_IDS.basic],
     stripePriceIdsPro: [LIVE_PRICE_IDS.pro],
     stripePriceIdsBusiness: [LIVE_PRICE_IDS.business],
-    stripeTopupPrice100: LIVE_PRICE_IDS.topup100,
-    stripeTopupPrice300: LIVE_PRICE_IDS.topup300,
-    stripeTopupPrice1000: LIVE_PRICE_IDS.topup1000,
+    stripeTopupPrice500: LIVE_PRICE_IDS.topup500,
+    stripeTopupPrice1500: LIVE_PRICE_IDS.topup1500,
+    stripeTopupPrice4500: LIVE_PRICE_IDS.topup4500,
   }, async () => {
     const res = await app.inject({
       method: 'GET',
@@ -5507,5 +5508,206 @@ test('node category drilldown daily cap', async () => {
     assert.equal(second.json().error.code, 'rate_limit_exceeded');
     await app.close();
   });
+});
+
+// ---------- MCP endpoint tests ----------
+
+test('GET /v1/meta includes mcp_url', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/meta',
+    headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(body.mcp_url, 'mcp_url must be present');
+  assert.match(body.mcp_url, /\/mcp$/, 'mcp_url must end with /mcp');
+  assert.match(body.mcp_url, /^https:\/\//, 'mcp_url must use forwarded proto');
+  await app.close();
+});
+
+test('GET /v1/meta mcp_url uses MCP_URL env override when set', async () => {
+  const app = buildApp();
+  const customUrl = 'https://custom-mcp.example.com/mcp';
+  const res = await withConfigOverrides({ mcpUrl: customUrl }, () =>
+    app.inject({
+      method: 'GET',
+      url: '/v1/meta',
+      headers: { host: 'fabric.example', 'x-forwarded-proto': 'https' },
+    }),
+  );
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().mcp_url, customUrl);
+  await app.close();
+});
+
+test('MCP POST /mcp requires auth', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: { jsonrpc: '2.0', id: 1, method: 'initialize' },
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+});
+
+test('MCP initialize returns server info', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-init');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: { jsonrpc: '2.0', id: 1, method: 'initialize' },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.jsonrpc, '2.0');
+  assert.equal(body.id, 1);
+  assert.ok(body.result.serverInfo, 'must include serverInfo');
+  assert.equal(body.result.serverInfo.name, 'fabric-api-readonly');
+  assert.ok(body.result.protocolVersion, 'must include protocolVersion');
+  assert.ok(body.result.capabilities, 'must include capabilities');
+  await app.close();
+});
+
+test('MCP tools/list returns allowlisted tools', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-tlist');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  const names = body.result.tools.map((t) => t.name);
+  assert.ok(names.includes('fabric_search_listings'), 'must include fabric_search_listings');
+  assert.ok(names.includes('fabric_search_requests'), 'must include fabric_search_requests');
+  assert.ok(names.includes('fabric_get_unit'), 'must include fabric_get_unit');
+  assert.ok(names.includes('fabric_get_request'), 'must include fabric_get_request');
+  assert.ok(names.includes('fabric_get_offer'), 'must include fabric_get_offer');
+  assert.ok(names.includes('fabric_get_events'), 'must include fabric_get_events');
+  assert.ok(names.includes('fabric_get_credits'), 'must include fabric_get_credits');
+  assert.equal(names.length, 7, 'exactly 7 tools in allowlist');
+  await app.close();
+});
+
+test('MCP unknown tool rejected', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-reject');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 3,
+      method: 'tools/call',
+      params: { name: 'fabric_delete_everything', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(body.result.isError, 'unknown tool must return isError=true');
+  const text = JSON.parse(body.result.content[0].text);
+  assert.equal(text.error, 'unknown_tool');
+  await app.close();
+});
+
+test('MCP unknown JSON-RPC method returns -32601', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-unk-method');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: { jsonrpc: '2.0', id: 99, method: 'resources/list' },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.error.code, -32601);
+  await app.close();
+});
+
+test('MCP fabric_get_credits returns balance', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-credits');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 10,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.id, 10);
+  assert.ok(!body.result.isError, 'fabric_get_credits should succeed');
+  const data = JSON.parse(body.result.content[0].text);
+  assert.equal(typeof data.credits_balance, 'number');
+  await app.close();
+});
+
+test('MCP fabric_get_events returns events envelope', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-events');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 11,
+      method: 'tools/call',
+      params: { name: 'fabric_get_events', arguments: { limit: 10 } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(!body.result.isError, 'fabric_get_events should succeed');
+  const data = JSON.parse(body.result.content[0].text);
+  assert.ok(Array.isArray(data.events), 'events must be an array');
+  await app.close();
+});
+
+test('MCP rate limit triggers 429 after threshold', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-ratelimit');
+  const apiKey = boot.json().api_key.api_key;
+
+  await withConfigOverrides({ rateLimitMcpPerMinute: 2 }, async () => {
+    for (let i = 0; i < 2; i++) {
+      const r = await app.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: { authorization: `ApiKey ${apiKey}` },
+        payload: { jsonrpc: '2.0', id: i, method: 'tools/list' },
+      });
+      assert.equal(r.statusCode, 200, `request ${i} should succeed`);
+    }
+    const limited = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      headers: { authorization: `ApiKey ${apiKey}` },
+      payload: { jsonrpc: '2.0', id: 99, method: 'tools/list' },
+    });
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+  });
+  await app.close();
 });
 

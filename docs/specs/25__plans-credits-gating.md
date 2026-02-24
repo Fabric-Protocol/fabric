@@ -1,4 +1,4 @@
-﻿# Plans, Credits, and Gating (MVP)
+# Plans, Credits, and Gating (MVP)
 
 This document defines commercial and access-control behavior enforced by the API.
 If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-contracts.md`, those documents win.
@@ -105,19 +105,19 @@ Implementation note:
 
 ## 4) Plans (MVP)
 - Free: 0 monthly credits, non-subscriber.
-- Basic: 500 monthly credits.
-- Pro: 1,500 monthly credits.
-- Business: 5,000 monthly credits.
+- Basic: 1,000 monthly credits.
+- Pro: 3,000 monthly credits.
+- Business: 10,000 monthly credits.
 
 Implementation note:
 - Internal storage remains `free|basic|pro|business`.
 
-## 5) Credit top-ups (enabled in MVP)
+## 5) Credit Packs (enabled in MVP)
 - Endpoint: `POST /v1/billing/topups/checkout-session`
 - Packs:
-  - `credits_100`: 100 credits, `$4.00`
-  - `credits_300`: 300 credits, `$12.00`
-  - `credits_1000`: 1,000 credits, `$38.00`
+  - `credits_500`: 500 credits, `$9.99` ("500 Credit Pack")
+  - `credits_1500`: 1,500 credits, `$19.99` ("1500 Credit Pack")
+  - `credits_4500`: 4,500 credits, `$49.99` ("4500 Credit Pack")
 - Fulfillment:
   - Webhook grants `topup_purchase` on paid event with `metadata.topup_pack_code`.
   - Grant idempotency key uses payment reference (`payment_intent` / `invoice`).

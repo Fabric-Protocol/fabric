@@ -17,78 +17,91 @@ const baseUrl = (process.env.FABRIC_API_BASE_URL ?? 'http://localhost:8080').rep
 const apiKey = process.env.FABRIC_API_KEY ?? '';
 const timeoutMs = Number(process.env.FABRIC_MCP_TIMEOUT_MS ?? DEFAULT_TIMEOUT_MS);
 
+const searchInputSchema = {
+  type: 'object',
+  properties: {
+    q: { type: ['string', 'null'] },
+    scope: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
+    filters: { type: 'object' },
+    broadening: {
+      type: 'object',
+      properties: { level: { type: 'number' }, allow: { type: 'boolean' } },
+    },
+    budget: {
+      type: 'object',
+      properties: { credits_max: { type: 'number' } },
+      required: ['credits_max'],
+    },
+    target: {
+      type: 'object',
+      properties: { node_id: { type: ['string', 'null'] }, username: { type: ['string', 'null'] } },
+    },
+    limit: { type: 'number' },
+    cursor: { type: ['string', 'null'] },
+  },
+  required: ['scope', 'filters', 'budget'],
+  additionalProperties: false,
+};
+
 const tools = [
   {
-    name: 'fabric_get_me',
-    description: 'Get the authenticated node profile, subscription snapshot, and credits balance.',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
     name: 'fabric_search_listings',
-    description: 'Run metered listings search (requires active subscription or trial).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        q: { type: ['string', 'null'] },
-        scope: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
-        filters: { type: 'object' },
-        broadening: {
-          type: 'object',
-          properties: {
-            level: { type: 'number' },
-            allow: { type: 'boolean' },
-          },
-          required: ['level', 'allow'],
-          additionalProperties: false,
-        },
-        limit: { type: 'number' },
-        cursor: { type: ['string', 'null'] },
-      },
-      required: ['scope', 'filters'],
-      additionalProperties: false,
-    },
+    description: 'Search published listings. Metered: costs credits per the budget contract.',
+    inputSchema: searchInputSchema,
   },
   {
     name: 'fabric_search_requests',
-    description: 'Run metered requests search (requires active subscription or trial).',
+    description: 'Search published requests. Metered: costs credits per the budget contract.',
+    inputSchema: searchInputSchema,
+  },
+  {
+    name: 'fabric_get_unit',
+    description: 'Get a unit by ID (caller must own the unit).',
     inputSchema: {
       type: 'object',
-      properties: {
-        q: { type: ['string', 'null'] },
-        scope: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
-        filters: { type: 'object' },
-        broadening: {
-          type: 'object',
-          properties: {
-            level: { type: 'number' },
-            allow: { type: 'boolean' },
-          },
-          required: ['level', 'allow'],
-          additionalProperties: false,
-        },
-        limit: { type: 'number' },
-        cursor: { type: ['string', 'null'] },
-      },
-      required: ['scope', 'filters'],
+      properties: { unit_id: { type: 'string' } },
+      required: ['unit_id'],
       additionalProperties: false,
     },
   },
   {
-    name: 'fabric_list_public_node_inventory',
-    description: 'List a target node public listings or requests.',
+    name: 'fabric_get_request',
+    description: 'Get a request by ID (caller must own the request).',
+    inputSchema: {
+      type: 'object',
+      properties: { request_id: { type: 'string' } },
+      required: ['request_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'fabric_get_offer',
+    description: 'Get an offer by ID (caller must be a party to the offer).',
+    inputSchema: {
+      type: 'object',
+      properties: { offer_id: { type: 'string' } },
+      required: ['offer_id'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'fabric_get_events',
+    description: 'Poll offer lifecycle events (webhook polling fallback).',
     inputSchema: {
       type: 'object',
       properties: {
-        node_id: { type: 'string' },
-        kind: { type: 'string', enum: ['listings', 'requests'] },
+        since: { type: ['string', 'null'] },
         limit: { type: 'number' },
-        cursor: { type: ['string', 'null'] },
       },
-      required: ['node_id', 'kind'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'fabric_get_credits',
+    description: 'Get the authenticated node credit balance.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -182,9 +195,6 @@ function safeJsonParse(value: string) {
 }
 
 async function callTool(name: string, args: any) {
-  if (name === 'fabric_get_me') {
-    return await fabricRequest('/v1/me');
-  }
   if (name === 'fabric_search_listings' || name === 'fabric_search_requests') {
     const payload = asObject(args);
     const route = name === 'fabric_search_listings' ? '/v1/search/listings' : '/v1/search/requests';
@@ -195,22 +205,40 @@ async function callTool(name: string, args: any) {
         scope: payload.scope,
         filters: payload.filters ?? {},
         broadening: payload.broadening ?? { level: 0, allow: false },
+        budget: payload.budget ?? { credits_max: 5 },
+        target: payload.target,
         limit: asNumber(payload.limit, 20),
         cursor: asStringOrNull(payload.cursor),
       },
     });
   }
-  if (name === 'fabric_list_public_node_inventory') {
+  if (name === 'fabric_get_unit') {
+    const unitId = String(asObject(args).unit_id ?? '');
+    if (!unitId) throw new Error('unit_id is required');
+    return await fabricRequest(`/v1/units/${encodeURIComponent(unitId)}`);
+  }
+  if (name === 'fabric_get_request') {
+    const requestId = String(asObject(args).request_id ?? '');
+    if (!requestId) throw new Error('request_id is required');
+    return await fabricRequest(`/v1/requests/${encodeURIComponent(requestId)}`);
+  }
+  if (name === 'fabric_get_offer') {
+    const offerId = String(asObject(args).offer_id ?? '');
+    if (!offerId) throw new Error('offer_id is required');
+    return await fabricRequest(`/v1/offers/${encodeURIComponent(offerId)}`);
+  }
+  if (name === 'fabric_get_events') {
     const payload = asObject(args);
-    const nodeId = String(payload.node_id ?? '');
-    const kind = payload.kind === 'requests' ? 'requests' : 'listings';
-    if (!nodeId) throw new Error('node_id is required');
-    const limit = asNumber(payload.limit, 20);
-    const cursor = asStringOrNull(payload.cursor);
-    const search = new URLSearchParams();
-    search.set('limit', String(limit));
-    if (cursor) search.set('cursor', cursor);
-    return await fabricRequest(`/v1/public/nodes/${encodeURIComponent(nodeId)}/${kind}?${search.toString()}`);
+    const params = new URLSearchParams();
+    const since = asStringOrNull(payload.since);
+    if (since) params.set('since', since);
+    const limit = typeof payload.limit === 'number' ? payload.limit : 50;
+    params.set('limit', String(limit));
+    const qs = params.toString();
+    return await fabricRequest(`/events${qs ? `?${qs}` : ''}`);
+  }
+  if (name === 'fabric_get_credits') {
+    return await fabricRequest('/v1/credits/balance');
   }
   throw new Error(`Unknown tool: ${name}`);
 }

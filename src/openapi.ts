@@ -48,6 +48,7 @@ export const openApiDocument = {
                     openapi_url: { type: 'string' },
                     categories_url: { type: 'string' },
                     categories_version: { type: 'integer' },
+                    mcp_url: { type: 'string', description: 'URL of the read-only MCP (Model Context Protocol) endpoint.' },
                     legal_urls: { type: 'object' },
                     support_url: { type: 'string' },
                     docs_urls: { type: 'object' },
@@ -132,6 +133,50 @@ export const openApiDocument = {
       get: {
         summary: 'Agent quickstart documentation page',
         responses: { '200': { description: 'HTML quickstart page', content: { 'text/html': {} } } },
+      },
+    },
+    '/mcp': {
+      post: {
+        summary: 'MCP (Model Context Protocol) read-only endpoint',
+        description: 'JSON-RPC 2.0 endpoint exposing read-only Fabric tools for agent integration. Supports initialize, tools/list, and tools/call methods.',
+        security: [{ ApiKeyAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  jsonrpc: { type: 'string', enum: ['2.0'] },
+                  id: { oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
+                  method: { type: 'string', enum: ['initialize', 'tools/list', 'tools/call', 'notifications/initialized'] },
+                  params: { type: 'object' },
+                },
+                required: ['jsonrpc', 'method'],
+              },
+            },
+          },
+        },
+        responses: {
+          '200': {
+            description: 'JSON-RPC 2.0 response',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    jsonrpc: { type: 'string' },
+                    id: {},
+                    result: {},
+                    error: { type: 'object' },
+                  },
+                },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+          '429': { description: 'Rate limit exceeded' },
+        },
       },
     },
     '/openapi.json': {
@@ -256,7 +301,7 @@ export const openApiDocument = {
     },
     '/v1/credits/quote': {
       get: {
-        summary: 'Get credits/search/top-up quote catalog',
+        summary: 'Get credits/search/Credit Pack quote catalog',
         security: [{ ApiKeyAuth: [] }],
         responses: {
           '200': { description: 'Quote catalog' },
@@ -332,10 +377,10 @@ export const openApiDocument = {
     },
     '/v1/billing/topups/checkout-session': {
       post: {
-        summary: 'Create Stripe Checkout Session for a credit top-up pack',
+        summary: 'Create Stripe Checkout Session for a Credit Pack',
         security: [{ ApiKeyAuth: [] }],
         responses: {
-          '200': { description: 'Top-up checkout session created' },
+          '200': { description: 'Credit Pack checkout session created' },
           '401': { description: 'Unauthorized' },
           '422': { description: 'Validation error' },
         },

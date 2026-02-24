@@ -856,13 +856,14 @@ export async function offerSummary(offer: any) {
   return { ok: true, referrer_node_id: code.issuer_node_id };
 };
 
-const planCredits: Record<string, number> = { free: 0, basic: 500, pro: 1500, business: 5000 };
+const planCredits: Record<string, number> = { free: 0, basic: 1000, pro: 3000, business: 10000 };
 const freeLikePlans = new Set(['free', 'none']);
 const creditsQuoteCache = new Map<string, { expiresAtMs: number; value: any }>();
 const CREDITS_QUOTE_CACHE_TTL_MS = 60 * 1000;
 
 type CreditPackQuote = {
   pack_code: string;
+  name: string;
   credits: number;
   price_cents: number;
   currency: 'usd';
@@ -872,25 +873,28 @@ type CreditPackQuote = {
 function creditPackQuotes(): CreditPackQuote[] {
   return [
     {
-      pack_code: 'credits_100',
-      credits: config.topupPack100Credits,
-      price_cents: config.topupPack100PriceCents,
+      pack_code: 'credits_500',
+      name: '500 Credit Pack',
+      credits: config.topupPack500Credits,
+      price_cents: config.topupPack500PriceCents,
       currency: 'usd',
-      stripe_price_id: nonEmptyString(config.stripeTopupPrice100),
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice500),
     },
     {
-      pack_code: 'credits_300',
-      credits: config.topupPack300Credits,
-      price_cents: config.topupPack300PriceCents,
+      pack_code: 'credits_1500',
+      name: '1500 Credit Pack',
+      credits: config.topupPack1500Credits,
+      price_cents: config.topupPack1500PriceCents,
       currency: 'usd',
-      stripe_price_id: nonEmptyString(config.stripeTopupPrice300),
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice1500),
     },
     {
-      pack_code: 'credits_1000',
-      credits: config.topupPack1000Credits,
-      price_cents: config.topupPack1000PriceCents,
+      pack_code: 'credits_4500',
+      name: '4500 Credit Pack',
+      credits: config.topupPack4500Credits,
+      price_cents: config.topupPack4500PriceCents,
       currency: 'usd',
-      stripe_price_id: nonEmptyString(config.stripeTopupPrice1000),
+      stripe_price_id: nonEmptyString(config.stripeTopupPrice4500),
     },
   ];
 }
@@ -1195,9 +1199,9 @@ function stripeDiagnosticsSnapshot() {
     missing.add(names.single);
   }
 
-  if (!nonEmptyString(config.stripeTopupPrice100)) missing.add('STRIPE_TOPUP_PRICE_100');
-  if (!nonEmptyString(config.stripeTopupPrice300)) missing.add('STRIPE_TOPUP_PRICE_300');
-  if (!nonEmptyString(config.stripeTopupPrice1000)) missing.add('STRIPE_TOPUP_PRICE_1000');
+  if (!nonEmptyString(config.stripeTopupPrice500)) missing.add('STRIPE_TOPUP_PRICE_500');
+  if (!nonEmptyString(config.stripeTopupPrice1500)) missing.add('STRIPE_TOPUP_PRICE_1500');
+  if (!nonEmptyString(config.stripeTopupPrice4500)) missing.add('STRIPE_TOPUP_PRICE_4500');
 
   return {
     stripe_configured: missing.size === 0,

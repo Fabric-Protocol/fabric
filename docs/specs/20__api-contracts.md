@@ -629,15 +629,16 @@ Response 200
   "affordability": { "can_afford_estimate": true },
   "credit_packs": [
     {
-      "pack_code": "credits_100|credits_300|credits_1000",
-      "credits": 100,
-      "price_cents": 400,
+      "pack_code": "credits_500|credits_1500|credits_4500",
+      "name": "500 Credit Pack|1500 Credit Pack|4500 Credit Pack",
+      "credits": 500,
+      "price_cents": 999,
       "currency": "usd",
       "stripe_price_id": "price_...|null"
     }
   ],
   "plans": [
-    { "plan_code": "basic|pro|business", "monthly_credits": 500 }
+    { "plan_code": "basic|pro|business", "monthly_credits": 1000 }
   ]
 }
 
@@ -1837,7 +1838,7 @@ Create a Stripe Checkout Session in payment mode for a one-time credit pack purc
 Request
 {
   "node_id": "uuid",
-  "pack_code": "credits_100|credits_300|credits_1000",
+  "pack_code": "credits_500|credits_1500|credits_4500",
   "success_url": "https://...",
   "cancel_url": "https://..."
 }
@@ -1845,7 +1846,7 @@ Request
 Rules / side effects
 
 - `node_id` must match the authenticated Node.
-- Server resolves Stripe Price ID from configured top-up pack mapping.
+- Server resolves Stripe Price ID from configured Credit Pack mapping.
 - Creates Stripe Checkout Session in payment mode and sets:
   - `metadata.node_id`
   - `metadata.topup_pack_code`
@@ -1854,8 +1855,8 @@ Rules / side effects
 Response 200
 {
   "node_id": "uuid",
-  "pack_code": "credits_100|credits_300|credits_1000",
-  "credits": 100,
+  "pack_code": "credits_500|credits_1500|credits_4500",
+  "credits": 500,
   "checkout_session_id": "cs_...",
   "checkout_url": "https://checkout.stripe.com/..."
 }
