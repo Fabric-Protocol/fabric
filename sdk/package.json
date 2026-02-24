@@ -1,0 +1,8 @@
+{
+  "name": "fabric-sdk-local",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "node ../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+  }
+}
