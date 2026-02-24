@@ -1,6 +1,6 @@
 # Fabric - TODO (thread-active)
 
-Last updated: 2026-02-22
+Last updated: 2026-02-24
 
 
 
@@ -18,7 +18,7 @@ Last updated: 2026-02-22
   - Stripe + credits health
   - liquidity/reliability metrics
   - webhook health (when applicable)
-- [ ] Lightweight MCP server (read-only, pre–go live):
+- [x] Lightweight MCP server (read-only, pre–go live):
   - expose safe read operations only (search, get unit/request, get offer, get events, get credits)
   - no mutations
   - thin wrapper over existing HTTP API (no new business logic)
@@ -37,9 +37,14 @@ Last updated: 2026-02-22
 ### Phase 0.5 — Pricing + grants + acceptance fee (latest thread notes)
 - [ ] Create `supabase_migrations/2026-02-23__apply_credit_ledger_types.sql` for the new credit-ledger constraint migration, and run APPLY+VERIFY in Supabase before go-live (manual step).
 
+### Phase 0.5 — Current phase (latest thread notes)
+- [ ] Add/maintain `agent_toc` schema in OpenAPI + regression tests.
+- [ ] Enforce "no contact info in item content" across all relevant text-bearing objects (verify future objects don't bypass validation).
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
 - [ ] Encrypt webhook secrets at rest (KMS/pgcrypto/vault) with rotation plan and docs update.
+- [ ] Expand enforcement coverage to any additional text fields/endpoints that can surface publicly (publish/projection paths, future objects).
 - [ ] Internationalization baseline (Phase 1):
   - verify Supabase/Postgres UTF-8 encoding (manual SQL check)
   - add optional `language_tag` (BCP-47) for user-entered free-text in units/requests
@@ -60,6 +65,7 @@ High likelihood:
 - [ ] Add trust enforcement ladder and routing effects:
   - `good|watch|limited|suspended|banned`
   - admin override path and audit logging
+- [ ] Revisit drilldown/storefront handling for marketplace nodes (special search lanes vs higher caps) once corpus grows.
 Medium likelihood:
 - [ ] Add explicit retry/backoff and failure visibility docs/runbook for webhook delivery (timeouts/5xx behavior, operational signals).
 - [ ] Cross-language free-text discovery (Phase Next):
@@ -67,10 +73,15 @@ Medium likelihood:
   - add indexing/storage, abuse controls, and diagnostics for cross-language matches
 - [ ] Add moderation heuristics/pattern flags and escalation logic (Phase 2).
 - [ ] Add bounded lexical expansion mode as opt-in, while preserving diagnostics.
+- [ ] Improve contact-info detector to reduce false positives/negatives (tighter patterns, allowlist of safe "@" usage if needed) + add fuzz/edge-case tests.
+- [ ] Add geo widening tiers (`geo_addon`) when widening becomes a real knob; keep breakdown stable.
+- [ ] Consider batch drilldown "multi-category peek" endpoint if UX needs fewer calls (ensure anti-scrape controls).
 - [ ] Refine search-by-node operational pricing (cheap shallow pages + anti-scrape guardrails).
 - [ ] Add storefront-tier higher limits for paid/verified nodes after abuse controls mature.
 - [ ] Add messaging/negotiation threads for nuanced deals with moderation safeguards.
 Low likelihood:
+- [ ] Provide machine-readable "content_rules" block as a separately versioned artifact (if `/v1/meta` grows too large).
+- [ ] Remove `broadening_cost` from breakdown in a versioned API bump (currently retained for compatibility).
 - [ ] Add optional webhook receiver helper snippet/library in SDK (signature verification plus dedupe scaffolding).
 - [ ] Add regions catalog / stricter ISO 3166-2 validation endpoint; keep current regex as format-only until catalog exists.
 
@@ -131,3 +142,4 @@ Low likelihood:
 - Phase 1: /v1/credits/quote, credit packs top-ups, plan-change credit semantics
 - Phase 2: SDKs + MCP + expanded docs + search quote/preview + effort/selectivity split + reputation/routing
 - Phase 3: hardening + admin endpoints + anomaly detection + compliance + compliance metadata + provenance/recourse
+

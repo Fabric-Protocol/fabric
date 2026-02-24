@@ -2,6 +2,118 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-24 - Cloud Run production env var migration for credit packs
+Decision:
+- Live service `fabric-api` (project `fabric-487608`, region `us-west1`) uses `STRIPE_TOPUP_PRICE_500`, `STRIPE_TOPUP_PRICE_1500`, and `STRIPE_TOPUP_PRICE_4500`.
+- Removed old vars from service config: `STRIPE_TOPUP_PRICE_100/300/1000`.
+Rationale:
+- Prevent dead config and mismatched price IDs.
+Scope/impact:
+- Infra (Cloud Run), go-live runbook.
+
+## 2026-02-24 - Replace top up with Credit Packs; new pack SKUs + strict allowlist
+Decision:
+- Credit pack codes and Stripe price IDs:
+- `credits_500` -> "500 Credit Pack" ($9.99) -> 500 credits -> `price_1T3tJlK3gJAgZl81iZzGyRaj`.
+- `credits_1500` -> "1500 Credit Pack" ($19.99) -> 1,500 credits -> `price_1T3tQ2K3gJAgZl81JGlIYaSy`.
+- `credits_4500` -> "4500 Credit Pack" ($49.99) -> 4,500 credits -> `price_1T3tKlK3gJAgZl81HBKJ5a8U`.
+- Strict allowlist: only these price IDs grant pack credits (no grandfathering requested).
+Rationale:
+- Clear naming; packs are worse value than subscriptions (discourage scrape-by-pack).
+- Price ID allowlist prevents unknown grants.
+Scope/impact:
+- API (checkout enum, quotes), Stripe webhook fulfillment mapping, config/env vars, docs.
+
+## 2026-02-24 - Update plan monthly credits (prices unchanged)
+Decision:
+- Monthly subscription credits:
+- Basic $9.99 -> 1,000 credits.
+- Pro $19.99 -> 3,000 credits.
+- Business $49.99 -> 10,000 credits.
+Rationale:
+- "Search feels cheap" UX (5 credits/search) while maintaining anti-scrape via pagination + rate limits.
+Scope/impact:
+- Credits economics, Stripe fulfillment mapping, docs.
+
+## 2026-02-24 - Remove broadening as a concept and keep breakdown compatibility
+Decision:
+- Remove any `broadening` response field.
+- Keep `budget.breakdown.broadening_cost = 0` for compatibility.
+Rationale:
+- Avoid shipping an unused knob and reduce confusion.
+- Preserve backward compatibility for breakdown consumers.
+Scope/impact:
+- API contract and docs.
+
+## 2026-02-24 - Agent confidence budget cap for search and drilldown
+Decision:
+- Replace `budget.credits_requested` with `budget.credits_max` as a hard cap.
+- If needed credits exceed the cap, return `402 budget_cap_exceeded` with `needed`, `max`, and `breakdown`.
+- Successful responses return `budget.credits_charged` and `budget.breakdown` (cost components only).
+Rationale:
+- Prevents surprise debits and reduces agent retry loops.
+- Enables future cost knobs without breaking clients.
+Scope/impact:
+- API contract, credits, errors.
+
+## 2026-02-24 - Drilldown budget cap consistency and no idempotency requirement on read
+Decision:
+- Keep GET drilldowns backward compatible with `?budget_credits_max=`.
+- Add canonical POST drilldowns accepting `budget.credits_max` in request body.
+- Remove `Idempotency-Key` requirement from categories-summary (read-only).
+Rationale:
+- Consistent budget-cap semantics across endpoints.
+- Lower friction for read calls.
+Scope/impact:
+- API contract, agent UX.
+
+## 2026-02-24 - Drilldown pricing tiers with anti-scrape pagination guardrails
+Decision:
+- Drilldowns are paginated at 20 per page and metered:
+- Pages 1-10: 1 credit per page.
+- Pages 11+: 5 credits per page.
+Rationale:
+- Cheap enough to improve deal formation while discouraging full dumps.
+- Allows deeper browsing when needed.
+Scope/impact:
+- API (drilldown endpoints), credits economics, rate limiting.
+
+## 2026-02-24 - Node category counts via batch call with zero credits
+Decision:
+- Ship `POST /v1/public/nodes/categories-summary` (`node_ids[]`, `kind=listings|requests|both`) instead of embedding per-node category counts in search results.
+Rationale:
+- Avoids payload bloat and per-row aggregation cost in search responses.
+- Enables caching and independent rate-limiting for the inventory-map surface.
+Scope/impact:
+- API (new endpoint), search performance, anti-scrape.
+
+## 2026-02-24 - Document takedown and suspension as possible consequences
+Decision:
+- Onboarding docs state repeated violations may result in takedown and/or suspension, using existing admin takedown and suspension/revocation mechanisms.
+Rationale:
+- Transparency: agents understand escalation path beyond rejection.
+Scope/impact:
+- Onboarding trust/safety posture and content-rules sections.
+
+## 2026-02-24 - Disallow contact info in item content with reject-at-write validation
+Decision:
+- Reject contact info in agent-authored fields for Units/Requests (`title`, `description`, `scope_notes`, `public_summary`) on POST and PATCH.
+- Return `422 content_contact_info_disallowed` with `{field}` detail.
+Rationale:
+- Safety: prevents leakage of personal contact details in descriptions and notes.
+- Predictability: deterministic early failure with stable error code for agent retries.
+Scope/impact:
+- API validation in create/update routes for units/requests and related tests.
+
+## 2026-02-24 - Add strong agent TOC to GET /v1/meta discovery
+Decision:
+- Extend `/v1/meta` with `agent_toc` containing `start_here`, `capabilities`, `invariants`, and `trust_safety_rules`.
+Rationale:
+- Low-friction agent onboarding through a single unauthenticated discovery call.
+- Improves trust/transparency with explicit, machine-auditable rules.
+Scope/impact:
+- Additive API field, OpenAPI schema update, and tests for presence/shape.
+
 ## 2026-02-22 - Free credits program updated
 Decision:
 - Signup grant: 100 credits.
