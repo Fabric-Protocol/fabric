@@ -55,6 +55,26 @@ function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
 
+function safeTimingSafeCompare(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function isAllowedCheckoutRedirectUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') return false;
+    const allowlist = config.checkoutRedirectAllowlist;
+    if (allowlist.length === 0) return true;
+    return allowlist.some((allowed) => parsed.hostname === allowed || parsed.hostname.endsWith(`.${allowed}`));
+  } catch {
+    return false;
+  }
+}
+
 const REGION_OBJECT_FIELDS = ['origin_region', 'dest_region', 'service_region'] as const;
 
 function normalizeAndValidateRegionObject(value: unknown): { ok: boolean; value: unknown } {
@@ -995,13 +1015,15 @@ function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string)
   reply.header('X-RateLimit-Reset', String(Math.floor(state.resetAtMs / 1000)));
 
   if (state.count >= rule.limit) {
-    reply.header('Retry-After', String(retryAfterSeconds));
-    reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Rate limit exceeded', {
-      limit: rule.limit,
-      window_seconds: rule.windowSeconds,
-      retry_after_seconds: retryAfterSeconds,
-      rule: rule.name,
-    }));
+    if (!reply.sent) {
+      reply.header('Retry-After', String(retryAfterSeconds));
+      reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Rate limit exceeded', {
+        limit: rule.limit,
+        window_seconds: rule.windowSeconds,
+        retry_after_seconds: retryAfterSeconds,
+        rule: rule.name,
+      }));
+    }
     return false;
   }
   state.count += 1;
@@ -1246,7 +1268,7 @@ function requestErrorLogFields(req: FastifyRequest) {
 }
 
 export function buildApp() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: true, bodyLimit: 1_048_576 });
 
   if (!startupDbEnvCheckLogged) {
     startupDbEnvCheckLogged = true;
@@ -1259,8 +1281,17 @@ export function buildApp() {
     }
   }
 
-  app.addContentTypeParser('*', { parseAs: 'string' }, (_req, body, done) => {
+  app.addContentTypeParser('*', { parseAs: 'string', bodyLimit: 1_048_576 }, (_req, body, done) => {
     done(null, body);
+  });
+
+  app.addHook('onSend', async (_req, reply, payload) => {
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('X-Frame-Options', 'DENY');
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    reply.header('X-XSS-Protection', '0');
+    reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    return payload;
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -1290,7 +1321,9 @@ export function buildApp() {
     }
 
     if (path.startsWith('/v1/admin/') || path.startsWith('/internal/admin/')) {
-      if (req.headers['x-admin-key'] !== config.adminKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
+      if (!safeTimingSafeCompare(String(req.headers['x-admin-key'] ?? ''), config.adminKey)) {
+        return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
+      }
       return;
     }
 
@@ -1520,7 +1553,7 @@ export function buildApp() {
       windowSeconds: 3600,
       subject: 'node',
     };
-    if (!applyRateLimitSubject(reply, nodeRateRule, parsed.data.node_id)) return;
+    if (!applyRateLimitSubject(reply, nodeRateRule, parsed.data.node_id)) return reply;
 
     const out = await fabricService.startRecovery(parsed.data.node_id, parsed.data.method);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
@@ -1600,6 +1633,9 @@ export function buildApp() {
       cancel_url: z.string().url(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
+    if (!isAllowedCheckoutRedirectUrl(parsed.data.success_url) || !isAllowedCheckoutRedirectUrl(parsed.data.cancel_url)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Redirect URL not allowed', { reason: 'redirect_url_not_allowed' }));
+    }
     const out = await fabricService.createBillingCheckoutSession(
       (req as AuthedRequest).nodeId!,
       parsed.data,
@@ -1637,6 +1673,9 @@ export function buildApp() {
       cancel_url: z.string().url(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
+    if (!isAllowedCheckoutRedirectUrl(parsed.data.success_url) || !isAllowedCheckoutRedirectUrl(parsed.data.cancel_url)) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Redirect URL not allowed', { reason: 'redirect_url_not_allowed' }));
+    }
     const out = await fabricService.createTopupCheckoutSession(
       (req as AuthedRequest).nodeId!,
       parsed.data,
@@ -2052,7 +2091,7 @@ export function buildApp() {
   });
 
   app.register(async (webhookApp) => {
-    webhookApp.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
+    webhookApp.addContentTypeParser('application/json', { parseAs: 'buffer', bodyLimit: 65_536 }, (_req, body, done) => {
       done(null, body);
     });
 
@@ -2112,8 +2151,17 @@ export function buildApp() {
         }
         webhookApp.log.info({ signature_verified: true, event_type: eventType, event_id: eventId || null }, 'Stripe webhook signature verified');
 
+        if (event.livemode === false && config.stripeEnforceLivemode) {
+          webhookApp.log.warn({ event_id: eventId, event_type: eventType, reason: 'test_mode_event_in_production' }, 'Stripe test-mode event rejected in production');
+          return reply.status(400).send(errorEnvelope('validation_error', 'Test-mode events not accepted in production'));
+        }
+
         if (!eventId) return reply.status(422).send(errorEnvelope('validation_error', 'Missing stripe event id'));
-        await repo.insertStripeEvent(eventId, eventType, event);
+        const inserted = await repo.insertStripeEvent(eventId, eventType, event);
+        if (!inserted) {
+          webhookApp.log.info({ event_id: eventId, event_type: eventType, reason: 'already_processed' }, 'Stripe event replay skipped');
+          return { ok: true };
+        }
         try {
           const processing = await (fabricService as any).processStripeEvent(event);
           if (processing?.subscription_activated) {
@@ -2166,10 +2214,12 @@ export function buildApp() {
         }));
       }
 
-      const providedSecret = typeof (req.query as any)?.secret === 'string'
-        ? String((req.query as any).secret)
-        : '';
-      if (!providedSecret || providedSecret !== configuredSecret) {
+      const providedSecret = typeof req.headers['x-bcon-callback-secret'] === 'string'
+        ? String(req.headers['x-bcon-callback-secret'])
+        : (typeof (req.query as any)?.secret === 'string' ? String((req.query as any).secret) : '');
+      const configuredBuf = Buffer.from(configuredSecret, 'utf8');
+      const providedBuf = Buffer.from(providedSecret, 'utf8');
+      if (!providedSecret || configuredBuf.length !== providedBuf.length || !crypto.timingSafeEqual(configuredBuf, providedBuf)) {
         req.log.warn({ reason: 'bcon_callback_secret_mismatch' }, 'Bcon webhook secret mismatch');
         return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid webhook secret'));
       }

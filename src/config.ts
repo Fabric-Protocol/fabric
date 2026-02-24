@@ -19,6 +19,14 @@ function parseEmailProvider(value: string | undefined) {
   return 'stub';
 }
 
+function parseBoolean(value: string | undefined, defaultValue: boolean) {
+  if (value === undefined) return defaultValue;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') return false;
+  return defaultValue;
+}
+
 export const config = {
   apiVersion: 'v1',
   requiredLegalVersion: '2026-02-17',
@@ -49,6 +57,7 @@ export const config = {
   dealAcceptanceFeeCredits: Number(process.env.DEAL_ACCEPTANCE_FEE_CREDITS ?? 1),
   stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? '',
   stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? '',
+  stripeEnforceLivemode: parseBoolean(process.env.STRIPE_ENFORCE_LIVEMODE, process.env.NODE_ENV === 'production'),
   stripePriceIdsBasic: parsePriceIds(process.env.STRIPE_PRICE_IDS_BASIC, process.env.STRIPE_PRICE_BASIC),
   stripePriceIdsPro: parsePriceIds(process.env.STRIPE_PRICE_IDS_PRO, process.env.STRIPE_PRICE_PRO),
   stripePriceIdsBusiness: parsePriceIds(process.env.STRIPE_PRICE_IDS_BUSINESS, process.env.STRIPE_PRICE_BUSINESS),
@@ -98,4 +107,6 @@ export const config = {
   rateLimitEmailVerifyStartPerHour: Number(process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR ?? 10),
   mcpUrl: process.env.MCP_URL ?? '',
   rateLimitMcpPerMinute: Number(process.env.RATE_LIMIT_MCP_PER_MINUTE ?? 60),
+  checkoutRedirectAllowlist: parseCsv(process.env.CHECKOUT_REDIRECT_ALLOWLIST),
+  apiKeyPepper: process.env.API_KEY_PEPPER ?? '',
 };

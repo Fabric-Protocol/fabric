@@ -1,10 +1,21 @@
 import crypto from 'node:crypto';
 import { pool, query } from './client.js';
+import { config } from '../config.js';
 
 export type NodeContext = { nodeId: string };
 
+// TODO: Enabling API_KEY_PEPPER in production requires a safe rollout plan:
+// dual-lookup (try HMAC first, fall back to SHA-256) or one-time key rotation.
+// Do not enable the env var without implementing one of these strategies.
+function hashApiKey(rawKey: string): string {
+  if (config.apiKeyPepper) {
+    return crypto.createHmac('sha256', config.apiKeyPepper).update(rawKey).digest('hex');
+  }
+  return crypto.createHash('sha256').update(rawKey).digest('hex');
+}
+
 export async function findApiKey(rawKey: string) {
-  const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+  const keyHash = hashApiKey(rawKey);
   const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean; is_revoked: boolean; has_active_trial: boolean }>(
     `select
        ak.node_id,
@@ -64,7 +75,7 @@ export async function createNode(
 
 export async function createApiKey(nodeId: string, label: string | null) {
   const apiKey = crypto.randomUUID() + crypto.randomUUID();
-  const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+  const keyHash = hashApiKey(apiKey);
   const rows = await query<{ id: string; created_at: string }>(
     'insert into api_keys(node_id,label,key_prefix,key_hash) values($1,$2,$3,$4) returning id,created_at',
     [nodeId, label, apiKey.slice(0, 8), keyHash],
@@ -372,7 +383,7 @@ export async function completeRecoveryChallenge(
     }
 
     const apiKey = crypto.randomUUID() + crypto.randomUUID();
-    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    const keyHash = hashApiKey(apiKey);
     const keyPrefix = apiKey.slice(0, 8);
 
     await client.query('update recovery_challenges set used_at=now() where id=$1', [challenge.id]);
@@ -1460,8 +1471,12 @@ export async function stripeEventExists(id: string) {
   return !!rows[0];
 }
 
-export async function insertStripeEvent(id: string, type: string, payload: any) {
-  await query('insert into stripe_events(id,type,payload) values($1,$2,$3) on conflict do nothing', [id, type, payload]);
+export async function insertStripeEvent(id: string, type: string, payload: any): Promise<boolean> {
+  const rows = await query<{ id: string }>(
+    'INSERT INTO stripe_events(id, type, payload) VALUES($1, $2, $3) ON CONFLICT(id) DO NOTHING RETURNING id',
+    [id, type, payload],
+  );
+  return rows.length > 0;
 }
 
 export async function markStripeProcessed(id: string) {

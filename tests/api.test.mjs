@@ -101,6 +101,8 @@ const creditLedgerTypesMigrationSql = await fs.readFile(
 );
 await query(creditLedgerTypesMigrationSql);
 
+await query('DELETE FROM stripe_events');
+
 async function bootstrap(
   app,
   idk = 'boot-1',
@@ -3552,7 +3554,7 @@ test('webhook processes checkout.session.completed and is idempotent by event id
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh');
   const nodeId = b.json().node.id;
-  const body = { id: 'evt_1', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_1', subscription: 'sub_1' } } };
+  const body = { id: `evt_checkout_completed_${nodeId.slice(0, 8)}`, type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_1', subscription: 'sub_1' } } };
   const sig = sign(body);
   const r1 = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
   const r2 = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
@@ -3599,7 +3601,7 @@ test('webhook accepts valid signature when stripe-signature has multiple v1 valu
   const app = buildApp();
   const b = await bootstrap(app, 'boot-wh-multi');
   const nodeId = b.json().node.id;
-  const body = { id: 'evt_2', type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_2', subscription: 'sub_2' } } };
+  const body = { id: `evt_multi_sig_${nodeId.slice(0, 8)}`, type: 'checkout.session.completed', data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'pro' }, customer: 'cus_2', subscription: 'sub_2' } } };
   const sig = sign(body);
   const header = `t=${sig.t},v1=00${sig.v1.slice(2)},v1=${sig.v1}`;
   const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': header }, payload: sig.raw });

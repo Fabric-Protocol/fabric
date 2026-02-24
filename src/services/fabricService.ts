@@ -1472,7 +1472,7 @@ function nextWebhookRetryDelayMs(attemptNumber: number) {
 }
 
 function recoveryCode() {
-  return String(Math.floor(100000 + Math.random() * 900000));
+  return String(crypto.randomInt(100000, 1000000));
 }
 
 function recoveryHash(value: string) {
@@ -2116,6 +2116,11 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
   const invoice = await repo.findBconInvoiceByExternalId(externalId);
   if (!invoice) return { ok: true, ignored: 'unknown_external_id' as const };
 
+  const terminalStatuses = new Set(['confirmed', 'expired', 'failed']);
+  if (terminalStatuses.has(invoice.status)) {
+    return { ok: true, invoice_id: invoice.id, status: invoice.status, ignored: 'terminal_status' as const };
+  }
+
   const status = normalizeBconStatus((callback as any).status);
   const txid = nonEmptyString((callback as any).txid);
   const value = asFiniteNumber((callback as any).value);
@@ -2133,6 +2138,14 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
   if (!txid) {
     await repo.updateBconInvoiceStatus(invoice.id, { status: 'pending' });
     return { ok: true, invoice_id: invoice.id, status: 'pending', ignored: 'missing_txid' as const };
+  }
+
+  const expectedAmount = Number(invoice.expected_amount);
+  if (value !== null && Number.isFinite(expectedAmount) && expectedAmount > 0) {
+    if (value < expectedAmount * 0.99) {
+      await repo.updateBconInvoiceStatus(invoice.id, { status: 'pending' });
+      return { ok: true, invoice_id: invoice.id, status: 'pending', ignored: 'underpayment' as const, expected: expectedAmount, received: value };
+    }
   }
 
   const insertedTxn = await repo.insertBconTxn({
