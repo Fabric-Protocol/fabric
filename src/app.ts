@@ -16,7 +16,7 @@ type AuthedRequest = FastifyRequest & {
   nodeId?: string;
   plan?: string;
   isSubscriber?: boolean;
-  idem?: { key: string; hash: string; keyScope: string };
+  idem?: { key: string; hash: string; keyScope: string; subject: 'anon' | 'node' | 'admin' };
 };
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
 type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeWebhookLogContext };
@@ -860,7 +860,6 @@ function isPublicRoute(path: string) {
     || path === '/v1/recovery/start'
     || path === '/v1/recovery/complete'
     || path === '/v1/webhooks/stripe'
-    || path === '/v1/webhooks/bcon'
     || path === '/healthz'
     || path === '/openapi.json'
     || path === '/v1/meta'
@@ -873,6 +872,10 @@ function isPublicRoute(path: string) {
     || path === '/legal/refunds'
     || path === '/legal/agents'
     || path === '/legal/aup';
+}
+
+function isAdminRoute(path: string) {
+  return path.startsWith('/v1/admin/') || path.startsWith('/internal/admin/');
 }
 
 function isAnonIdempotentRoute(url: string) {
@@ -982,7 +985,6 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && path === '/v1/public/nodes/categories-summary') return { name: 'categories_summary', limit: config.rateLimitCategoriesSummaryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
-  if (method === 'POST' && path === '/v1/billing/topups/bcon/invoice') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
@@ -1190,33 +1192,6 @@ function rawBodyBuffer(body: unknown) {
   return null;
 }
 
-function parseJsonObjectBody(body: unknown): Record<string, unknown> | null {
-  if (body && typeof body === 'object' && !Buffer.isBuffer(body) && !Array.isArray(body)) {
-    return body as Record<string, unknown>;
-  }
-  if (Buffer.isBuffer(body)) {
-    try {
-      const parsed = JSON.parse(body.toString('utf8'));
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
-        : null;
-    } catch {
-      return null;
-    }
-  }
-  if (typeof body === 'string') {
-    try {
-      const parsed = JSON.parse(body);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-        ? parsed as Record<string, unknown>
-        : null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}
-
 function parseStripeSignature(sigHeader: string) {
   let tValue = '';
   const v1Values: string[] = [];
@@ -1321,7 +1296,7 @@ export function buildApp() {
       return;
     }
 
-    if (path.startsWith('/v1/admin/') || path.startsWith('/internal/admin/')) {
+    if (isAdminRoute(path)) {
       if (!safeTimingSafeCompare(String(req.headers['x-admin-key'] ?? ''), config.adminKey)) {
         return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid admin key'));
       }
@@ -1346,7 +1321,7 @@ export function buildApp() {
 
   app.addHook('preHandler', async (req, reply) => {
     const path = routePath(req.url);
-    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || path === '/v1/webhooks/bcon' || isNoIdemWriteRoute(req)) return;
+    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return;
     const idemKey = req.headers['idempotency-key'];
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
     const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
@@ -1359,7 +1334,17 @@ export function buildApp() {
         if (existing.hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
         return reply.status(existing.status).send(existing.response);
       }
-      (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope };
+      (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope, subject: 'anon' };
+      return;
+    }
+
+    if (isAdminRoute(path)) {
+      const existing = await repo.getAdminIdempotency(String(idemKey), req.method, idemPath);
+      if (existing) {
+        if (existing.request_hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
+        return reply.status(existing.status_code).send(existing.response_json);
+      }
+      (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${req.method}:${idemPath}`, subject: 'admin' };
       return;
     }
 
@@ -1370,12 +1355,12 @@ export function buildApp() {
       if (existing.request_hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
       return reply.status(existing.status_code).send(existing.response_json);
     }
-    (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${nodeId}:${idemPath}` };
+    (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${nodeId}:${idemPath}`, subject: 'node' };
   });
 
   app.addHook('onSend', async (req, reply, payload) => {
     const path = routePath(req.url);
-    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || path === '/v1/webhooks/bcon' || isNoIdemWriteRoute(req)) return payload;
+    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return payload;
     const idem = (req as AuthedRequest).idem;
     if (!idem) return payload;
     let responseJson: unknown;
@@ -1390,8 +1375,12 @@ export function buildApp() {
     } else {
       responseJson = payload;
     }
-    if (isAnonIdempotentRoute(req.url)) {
+    if (idem.subject === 'anon') {
       anonIdem.set(idem.keyScope, { hash: idem.hash, status: reply.statusCode, response: responseJson });
+      return payload;
+    }
+    if (idem.subject === 'admin') {
+      await repo.saveAdminIdempotency(idem.key, req.method, idempotencyRoutePath(req), idem.hash, reply.statusCode, responseJson);
       return payload;
     }
     const nodeId = (req as AuthedRequest).nodeId;
@@ -1706,48 +1695,6 @@ export function buildApp() {
     }
     return out;
   });
-  app.post('/v1/billing/topups/bcon/invoice', async (req, reply) => {
-    const parsed = z.object({
-      node_id: z.string().uuid(),
-      pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
-      chain: z.string().trim().min(1),
-      payment_currency: z.string().trim().min(1),
-    }).safeParse(req.body);
-    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
-    const out = await (fabricService as any).createTopupBconInvoice(
-      (req as AuthedRequest).nodeId!,
-      {
-        ...parsed.data,
-        chain: parsed.data.chain.toLowerCase(),
-        payment_currency: parsed.data.payment_currency.toLowerCase(),
-      },
-    );
-    if ((out as any).forbidden) {
-      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create Credit Pack invoice for another node'));
-    }
-    if ((out as any).validationError) {
-      const missing = Array.isArray((out as any).missing) ? (out as any).missing : undefined;
-      if ((out as any).validationError === 'bcon_not_configured') {
-        req.log.warn(
-          {
-            reason: 'bcon_not_configured',
-            missing: missing ?? [],
-            endpoint: '/v1/billing/topups/bcon/invoice',
-          },
-          'Bcon invoice creation blocked by configuration',
-        );
-      }
-      return reply.status(422).send(errorEnvelope('validation_error', 'Unable to create Credit Pack invoice', {
-        reason: (out as any).validationError,
-        bcon_status: (out as any).bcon_status ?? undefined,
-        pack_code: parsed.data.pack_code,
-        missing,
-        invoice_id: (out as any).invoice_id ?? undefined,
-      }));
-    }
-    return out;
-  });
-
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
@@ -2206,48 +2153,6 @@ export function buildApp() {
       }
     });
 
-    webhookApp.post('/v1/webhooks/bcon', async (req, reply) => {
-      const configuredSecret = (config.bconCallbackSecret ?? '').trim();
-      if (!configuredSecret) {
-        req.log.error({ reason: 'bcon_callback_secret_missing', env_var: 'BCON_CALLBACK_SECRET' }, 'Bcon webhook rejected: callback secret not configured');
-        return reply.status(500).send(errorEnvelope('validation_error', 'Bcon webhook secret is not configured', {
-          reason: 'bcon_callback_secret_missing',
-        }));
-      }
-
-      const providedSecret = typeof req.headers['x-bcon-callback-secret'] === 'string'
-        ? String(req.headers['x-bcon-callback-secret'])
-        : (typeof (req.query as any)?.secret === 'string' ? String((req.query as any).secret) : '');
-      const configuredBuf = Buffer.from(configuredSecret, 'utf8');
-      const providedBuf = Buffer.from(providedSecret, 'utf8');
-      if (!providedSecret || configuredBuf.length !== providedBuf.length || !crypto.timingSafeEqual(configuredBuf, providedBuf)) {
-        req.log.warn({ reason: 'bcon_callback_secret_mismatch' }, 'Bcon webhook secret mismatch');
-        return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid webhook secret'));
-      }
-
-      const parsedBody = parseJsonObjectBody(req.body);
-      if (!parsedBody) {
-        return reply.status(422).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
-      }
-
-      try {
-        const payload = {
-          status: parsedBody.status,
-          external_id: parsedBody.external_id,
-          txid: parsedBody.txid,
-          value: parsedBody.value,
-          addr: parsedBody.addr,
-        };
-        const out = await (fabricService as any).processBconCallback(payload);
-        if ((out as any)?.ignored === 'unknown_external_id') {
-          webhookApp.log.warn({ external_id: payload.external_id ?? null, reason: 'unknown_external_id' }, 'Bcon webhook received unknown external_id');
-        }
-        return { ok: true };
-      } catch (err) {
-        req.log.error({ err }, 'bcon webhook handler failed');
-        return reply.code(500).send({ ok: false });
-      }
-    });
   });
 
   app.post('/v1/admin/takedown', async (req, reply) => {

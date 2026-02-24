@@ -167,6 +167,24 @@ create table if not exists idempotency_keys (
 create unique index if not exists idempotency_keys_unique on idempotency_keys(node_id, key);
 create index if not exists idempotency_keys_expires_idx on idempotency_keys(expires_at);
 
+create table if not exists admin_idempotency_keys (
+  id uuid primary key default gen_random_uuid(),
+
+  key text not null,
+  method text not null,
+  path text not null,
+  request_hash text not null,
+
+  status_code int not null,
+  response_json jsonb not null,
+
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+create unique index if not exists admin_idempotency_keys_unique on admin_idempotency_keys(key, method, path);
+create index if not exists admin_idempotency_keys_expires_idx on admin_idempotency_keys(expires_at);
+
 -- =========================
 -- Subscriptions (Stripe-backed)
 -- =========================
@@ -661,49 +679,6 @@ create table if not exists stripe_events (
   processed_at timestamptz null,
   processing_error text null
 );
-
--- =========================
--- Bcon invoices + processed transactions
--- =========================
-create table if not exists bcon_invoices (
-  id uuid primary key default gen_random_uuid(),
-  node_id uuid not null references nodes(id),
-
-  pack_code text not null,
-  credits int not null check (credits > 0),
-
-  chain text not null,
-  payment_currency text not null,
-  expected_amount numeric not null,
-  origin_currency text null,
-  origin_amount numeric null,
-  address text null,
-
-  status text not null default 'pending' check (status in ('pending','confirmed','failed','expired')),
-  txid text null,
-  paid_at timestamptz null,
-
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
-
-create index if not exists bcon_invoices_node_idx on bcon_invoices(node_id);
-create index if not exists bcon_invoices_status_idx on bcon_invoices(status);
-
-drop trigger if exists bcon_invoices_set_updated_at on bcon_invoices;
-create trigger bcon_invoices_set_updated_at
-before update on bcon_invoices
-for each row execute function set_updated_at();
-
-create table if not exists bcon_txns (
-  txid text primary key,
-  invoice_id uuid not null references bcon_invoices(id) on delete cascade,
-  value numeric null,
-  status text null,
-  seen_at timestamptz not null default now()
-);
-
-create index if not exists bcon_txns_invoice_idx on bcon_txns(invoice_id);
 
 -- =========================
 -- Search logs (redacted)

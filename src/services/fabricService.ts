@@ -3,7 +3,6 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import net from 'node:net';
 import { config } from '../config.js';
 import * as repo from '../db/fabricRepo.js';
-import { BconConfigError, BconHttpError, createAddressInvoice } from '../integrations/bconClient.js';
 import { sendEmail } from './emailProvider.js';
 
 type DnsLookupAll = (hostname: string, options: { all: true; verbatim?: boolean }) => Promise<Array<{ address: string; family: number }>>;
@@ -187,68 +186,6 @@ export const fabricService = {
       checkout_session_id: checkoutSessionId,
       checkout_url: checkoutUrl,
     };
-  },
-  async createTopupBconInvoice(
-    authedNodeId: string,
-    payload: { node_id: string; pack_code: string; chain: string; payment_currency: string },
-  ) {
-    if (payload.node_id !== authedNodeId) return { forbidden: true };
-    const pack = creditPackQuoteByCode(payload.pack_code);
-    if (!pack) return { validationError: 'unsupported_pack_code' };
-
-    const originAmount = Number((pack.price_cents / 100).toFixed(2));
-    const invoice = await repo.createBconInvoice({
-      node_id: authedNodeId,
-      pack_code: pack.pack_code,
-      credits: pack.credits,
-      chain: payload.chain,
-      payment_currency: payload.payment_currency,
-      expected_amount: originAmount,
-      origin_currency: pack.currency,
-      origin_amount: originAmount,
-    });
-    if (!invoice) return { validationError: 'invoice_create_failed' };
-
-    try {
-      const created = await createAddressInvoice({
-        payment_currency: payload.payment_currency,
-        chain: payload.chain,
-        external_id: invoice.id,
-        origin_amount: originAmount,
-        origin_currency: pack.currency,
-      });
-      const updated = await repo.updateBconInvoiceAddress(invoice.id, {
-        address: created.address ?? null,
-        expected_amount: created.payment_amount ?? null,
-        payment_currency: created.payment_currency ?? null,
-        chain: created.chain ?? null,
-      });
-
-      const amount = Number(updated?.expected_amount ?? created.payment_amount ?? Number(invoice.expected_amount));
-      const address = updated?.address ?? created.address ?? null;
-      const currency = updated?.payment_currency ?? created.payment_currency ?? payload.payment_currency;
-      const chain = updated?.chain ?? created.chain ?? payload.chain;
-
-      if (!address || !Number.isFinite(amount)) {
-        return { validationError: 'bcon_invoice_invalid_response', invoice_id: invoice.id };
-      }
-
-      return {
-        invoice_id: invoice.id,
-        address,
-        amount,
-        currency,
-        chain,
-      };
-    } catch (err: any) {
-      if (err instanceof BconConfigError) {
-        return { validationError: 'bcon_not_configured', missing: err.missing };
-      }
-      if (err instanceof BconHttpError) {
-        return { validationError: 'bcon_invoice_create_failed', bcon_status: err.status };
-      }
-      throw err;
-    }
   },
   stripeDiagnostics() {
     return stripeDiagnosticsSnapshot();
@@ -1385,23 +1322,6 @@ function nonEmptyString(value: unknown): string | null {
   return trimmed ? trimmed : null;
 }
 
-function asFiniteNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function normalizeBconStatus(value: unknown): 'pending' | 'confirmed' | 'failed' | 'expired' {
-  const normalized = nonEmptyString(value)?.toLowerCase();
-  if (normalized === 'confirmed' || normalized === 'paid' || normalized === 'success') return 'confirmed';
-  if (normalized === 'failed') return 'failed';
-  if (normalized === 'expired') return 'expired';
-  return 'pending';
-}
-
 function stripePriceIdFromLine(line: any): string | null {
   const direct = nonEmptyString(line?.price?.id)
     ?? nonEmptyString(line?.price)
@@ -2148,75 +2068,6 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
   }
 
   return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
-};
-
-(fabricService as any).processBconCallback = async (payload: any) => {
-  const callback = payload && typeof payload === 'object' ? payload : {};
-  const externalId = nonEmptyString((callback as any).external_id);
-  if (!externalId) return { ok: true, ignored: 'missing_external_id' as const };
-
-  const invoice = await repo.findBconInvoiceByExternalId(externalId);
-  if (!invoice) return { ok: true, ignored: 'unknown_external_id' as const };
-
-  const terminalStatuses = new Set(['confirmed', 'expired', 'failed']);
-  if (terminalStatuses.has(invoice.status)) {
-    return { ok: true, invoice_id: invoice.id, status: invoice.status, ignored: 'terminal_status' as const };
-  }
-
-  const status = normalizeBconStatus((callback as any).status);
-  const txid = nonEmptyString((callback as any).txid);
-  const value = asFiniteNumber((callback as any).value);
-  const callbackAddress = nonEmptyString((callback as any).addr ?? (callback as any).address);
-
-  if (callbackAddress && !invoice.address) {
-    await repo.updateBconInvoiceAddress(invoice.id, { address: callbackAddress });
-  }
-
-  if (status !== 'confirmed') {
-    await repo.updateBconInvoiceStatus(invoice.id, { status });
-    return { ok: true, invoice_id: invoice.id, status };
-  }
-
-  if (!txid) {
-    await repo.updateBconInvoiceStatus(invoice.id, { status: 'pending' });
-    return { ok: true, invoice_id: invoice.id, status: 'pending', ignored: 'missing_txid' as const };
-  }
-
-  const expectedAmount = Number(invoice.expected_amount);
-  if (value !== null && Number.isFinite(expectedAmount) && expectedAmount > 0) {
-    if (value < expectedAmount * 0.99) {
-      await repo.updateBconInvoiceStatus(invoice.id, { status: 'pending' });
-      return { ok: true, invoice_id: invoice.id, status: 'pending', ignored: 'underpayment' as const, expected: expectedAmount, received: value };
-    }
-  }
-
-  const insertedTxn = await repo.insertBconTxn({
-    txid,
-    invoice_id: invoice.id,
-    value,
-    status,
-  });
-  if (!insertedTxn) return { ok: true, invoice_id: invoice.id, status: 'confirmed', duplicate: true };
-
-  const paidAt = new Date().toISOString();
-  await repo.addCreditIdempotent(
-    invoice.node_id,
-    'topup_purchase',
-    Number(invoice.credits),
-    {
-      provider: 'bcon',
-      invoice_id: invoice.id,
-      pack_code: invoice.pack_code,
-      payment_reference: txid,
-      chain: invoice.chain,
-      payment_currency: invoice.payment_currency,
-      address: callbackAddress ?? invoice.address ?? null,
-    },
-    `bcon:${txid}`,
-  );
-  await repo.updateBconInvoiceStatus(invoice.id, { status: 'confirmed', txid, paid_at: paidAt });
-
-  return { ok: true, invoice_id: invoice.id, status: 'confirmed', txid };
 };
 
 function normalizeMessagingHandles(raw: unknown): Array<{ kind: string; handle: string; url: string | null }> {

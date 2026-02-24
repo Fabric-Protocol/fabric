@@ -386,46 +386,6 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/billing/topups/bcon/invoice': {
-      post: {
-        summary: 'Create a Bcon payment invoice for a Credit Pack',
-        security: [{ ApiKeyAuth: [] }],
-        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: { $ref: '#/components/schemas/BconTopupInvoiceRequest' },
-            },
-          },
-        },
-        responses: {
-          '200': {
-            description: 'Bcon invoice created',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/BconTopupInvoiceResponse' },
-              },
-            },
-          },
-          '401': { description: 'Unauthorized' },
-          '403': { description: 'Forbidden' },
-          '422': { description: 'Validation error' },
-        },
-      },
-    },
-    '/v1/webhooks/bcon': {
-      post: {
-        summary: 'Process Bcon payment callback',
-        description: 'Public webhook endpoint. Validate callback secret via query parameter `secret`.',
-        responses: {
-          '200': { description: 'Webhook accepted' },
-          '401': { description: 'Invalid callback secret' },
-          '422': { description: 'Invalid payload' },
-          '500': { description: 'Webhook not configured or internal error' },
-        },
-      },
-    },
     '/v1/requests': {
       post: {
         summary: 'Create a new request',
@@ -681,27 +641,6 @@ export const openApiDocument = {
           },
         },
         required: ['categories_version', 'categories'],
-      },
-      BconTopupInvoiceRequest: {
-        type: 'object',
-        properties: {
-          node_id: { type: 'string', format: 'uuid' },
-          pack_code: { type: 'string', enum: ['credits_500', 'credits_1500', 'credits_4500'] },
-          chain: { type: 'string' },
-          payment_currency: { type: 'string' },
-        },
-        required: ['node_id', 'pack_code', 'chain', 'payment_currency'],
-      },
-      BconTopupInvoiceResponse: {
-        type: 'object',
-        properties: {
-          invoice_id: { type: 'string', format: 'uuid' },
-          address: { type: 'string' },
-          amount: { type: 'number' },
-          currency: { type: 'string' },
-          chain: { type: 'string' },
-        },
-        required: ['invoice_id', 'address', 'amount', 'currency', 'chain'],
       },
       SearchFilters: {
         type: 'object',

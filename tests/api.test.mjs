@@ -10,9 +10,6 @@ delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.STRIPE_TOPUP_PRICE_500;
 delete process.env.STRIPE_TOPUP_PRICE_1500;
 delete process.env.STRIPE_TOPUP_PRICE_4500;
-delete process.env.BCON_API_BASE;
-delete process.env.BCON_STORE_API_KEY;
-delete process.env.BCON_CALLBACK_SECRET;
 delete process.env.EMAIL_PROVIDER;
 delete process.env.RECOVERY_CHALLENGE_TTL_MINUTES;
 delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
@@ -88,12 +85,6 @@ const requestExpiryMigrationSql = await fs.readFile(
   'utf8',
 );
 await query(requestExpiryMigrationSql);
-
-const bconIntegrationMigrationSql = await fs.readFile(
-  new URL('../supabase_migrations/2026-02-24__apply_bcon_integration.sql', import.meta.url),
-  'utf8',
-);
-await query(bconIntegrationMigrationSql);
 
 const creditLedgerTypesMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-23__apply_credit_ledger_types.sql', import.meta.url),
@@ -413,6 +404,23 @@ test('GET /legal/terms returns HTML', async () => {
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
   assert.match(res.body, /Terms of Service/);
+  await app.close();
+});
+
+test('GET /legal/aup returns acceptable-use alias HTML', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/legal/aup' });
+  assert.equal(res.statusCode, 200);
+  assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
+  assert.match(res.body, /Acceptable Use Policy/);
+  await app.close();
+});
+
+test('GET /healthz returns ok', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/healthz' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { ok: true });
   await app.close();
 });
 
@@ -1713,6 +1721,227 @@ test('request ttl_minutes defaults/overrides are enforced and expired requests a
   });
   assert.equal(publicInventory.statusCode, 200);
   assert.equal(publicInventory.json().items.some((item) => item.id === requestId), false);
+  await app.close();
+});
+
+test('unit publish and unpublish toggle projection visibility', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-unit-publish-unpublish');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-publish-unpublish-create' },
+    payload: unitPayload('Unit publish/unpublish', 'unit-publish-unpublish-scope'),
+  });
+  assert.equal(created.statusCode, 200);
+  const unitId = created.json().unit.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-publish-unpublish-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const publishedRows = await query(
+    `select published_at
+     from units
+     where id=$1`,
+    [unitId],
+  );
+  assert.equal(publishedRows.length, 1);
+  assert.notEqual(publishedRows[0].published_at, null);
+  const listingRows = await query('select count(*)::text as c from public_listings where unit_id=$1', [unitId]);
+  assert.equal(Number(listingRows[0].c), 1);
+
+  const unpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/unpublish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-publish-unpublish-unpublish' },
+    payload: {},
+  });
+  assert.equal(unpublish.statusCode, 200);
+
+  const unpublishedRows = await query(
+    `select published_at
+     from units
+     where id=$1`,
+    [unitId],
+  );
+  assert.equal(unpublishedRows.length, 1);
+  assert.equal(unpublishedRows[0].published_at, null);
+  const listingRowsAfter = await query('select count(*)::text as c from public_listings where unit_id=$1', [unitId]);
+  assert.equal(Number(listingRowsAfter[0].c), 0);
+
+  await app.close();
+});
+
+test('request publish and unpublish toggle projection visibility', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-request-publish-unpublish');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'request-publish-unpublish-create' },
+    payload: unitPayload('Request publish/unpublish', 'request-publish-unpublish-scope'),
+  });
+  assert.equal(created.statusCode, 200);
+  const requestId = created.json().request.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'request-publish-unpublish-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const publishedRows = await query(
+    `select published_at
+     from requests
+     where id=$1`,
+    [requestId],
+  );
+  assert.equal(publishedRows.length, 1);
+  assert.notEqual(publishedRows[0].published_at, null);
+  const requestRows = await query('select count(*)::text as c from public_requests where request_id=$1', [requestId]);
+  assert.equal(Number(requestRows[0].c), 1);
+
+  const unpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/unpublish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'request-publish-unpublish-unpublish' },
+    payload: {},
+  });
+  assert.equal(unpublish.statusCode, 200);
+
+  const unpublishedRows = await query(
+    `select published_at
+     from requests
+     where id=$1`,
+    [requestId],
+  );
+  assert.equal(unpublishedRows.length, 1);
+  assert.equal(unpublishedRows[0].published_at, null);
+  const requestRowsAfter = await query('select count(*)::text as c from public_requests where request_id=$1', [requestId]);
+  assert.equal(Number(requestRowsAfter[0].c), 0);
+
+  await app.close();
+});
+
+test('DELETE unit/request endpoints soft-delete resources and hide them from detail reads', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-delete-soft');
+  const apiKey = b.json().api_key.api_key;
+
+  const createdUnit = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-soft-unit-create' },
+    payload: unitPayload('Delete soft unit', 'delete-soft-unit-scope'),
+  });
+  assert.equal(createdUnit.statusCode, 200);
+  const unitId = createdUnit.json().unit.id;
+
+  const createdRequest = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-soft-request-create' },
+    payload: unitPayload('Delete soft request', 'delete-soft-request-scope'),
+  });
+  assert.equal(createdRequest.statusCode, 200);
+  const requestId = createdRequest.json().request.id;
+
+  const deleteUnit = await app.inject({
+    method: 'DELETE',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-soft-unit-delete' },
+  });
+  assert.equal(deleteUnit.statusCode, 200);
+  assert.equal(deleteUnit.json().ok, true);
+
+  const deleteRequest = await app.inject({
+    method: 'DELETE',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-soft-request-delete' },
+  });
+  assert.equal(deleteRequest.statusCode, 200);
+  assert.equal(deleteRequest.json().ok, true);
+
+  const unitDetail = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(unitDetail.statusCode, 404);
+  assert.equal(unitDetail.json().error.code, 'not_found');
+
+  const requestDetail = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(requestDetail.statusCode, 404);
+  assert.equal(requestDetail.json().error.code, 'not_found');
+
+  const unitRows = await query('select deleted_at from units where id=$1', [unitId]);
+  const requestRows = await query('select deleted_at from requests where id=$1', [requestId]);
+  assert.equal(unitRows.length, 1);
+  assert.equal(requestRows.length, 1);
+  assert.notEqual(unitRows[0].deleted_at, null);
+  assert.notEqual(requestRows[0].deleted_at, null);
+  await app.close();
+});
+
+test('public request category drilldown endpoint returns filtered results and debits credits on 200', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-request-category-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+
+  const viewerBoot = await bootstrap(app, 'boot-request-category-viewer');
+  const viewerNodeId = viewerBoot.json().node.id;
+  const viewerApiKey = viewerBoot.json().api_key.api_key;
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-category-create' },
+    payload: {
+      ...unitPayload('Request category drilldown', 'request-category-drilldown-scope'),
+      category_ids: [812],
+    },
+  });
+  assert.equal(created.statusCode, 200);
+  const requestId = created.json().request.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-category-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const before = await repo.creditBalance(viewerNodeId);
+  const drilldown = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/requests/categories/812?limit=20`,
+    headers: { authorization: `ApiKey ${viewerApiKey}` },
+  });
+  assert.equal(drilldown.statusCode, 200);
+  assert.equal(Array.isArray(drilldown.json().items), true);
+  assert.equal(drilldown.json().items.some((item) => item.id === requestId), true);
+
+  const after = await repo.creditBalance(viewerNodeId);
+  assert.equal(before - after, config.nodeCategoryDrilldownCost);
   await app.close();
 });
 
@@ -3021,6 +3250,133 @@ test('POST /v1/credits/quote is idempotent and does not mutate balance', async (
   await app.close();
 });
 
+test('GET /v1/credits/balance requires auth and returns contract shape', async () => {
+  const app = buildApp();
+  const unauth = await app.inject({ method: 'GET', url: '/v1/credits/balance' });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const b = await bootstrap(app, 'boot-credits-balance');
+  const apiKey = b.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/credits/balance',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(typeof res.json().credits_balance, 'number');
+  assert.equal(typeof res.json().subscription.plan, 'string');
+  assert.equal(typeof res.json().subscription.status, 'string');
+  await app.close();
+});
+
+test('GET /v1/credits/ledger requires auth and returns entries envelope', async () => {
+  const app = buildApp();
+  const unauth = await app.inject({ method: 'GET', url: '/v1/credits/ledger' });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const b = await bootstrap(app, 'boot-credits-ledger');
+  const apiKey = b.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/credits/ledger?limit=5',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(Array.isArray(res.json().entries), true);
+  assert.equal(Object.hasOwn(res.json(), 'next_cursor'), true);
+  assert.equal(res.json().entries.some((entry) => entry.type === 'grant_signup'), true);
+  await app.close();
+});
+
+test('POST /v1/referrals/claim supports idempotent replay and rejects invalid code', async () => {
+  const app = buildApp();
+  const referrer = await bootstrap(app, 'boot-refclaim-referrer');
+  const referrerNodeId = referrer.json().node.id;
+  const code = `REF-CLAIM-${referrerNodeId.slice(0, 8)}`;
+  await repo.ensureReferralCode(code, referrerNodeId);
+
+  const claimer = await bootstrap(app, 'boot-refclaim-claimer');
+  const apiKey = claimer.json().api_key.api_key;
+  const idemKey = 'referral-claim-idem-1';
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/referrals/claim',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload: { referral_code: code },
+  });
+  assert.equal(first.statusCode, 200);
+  assert.equal(first.json().ok, true);
+  assert.equal(first.json().referrer_node_id, referrerNodeId);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/referrals/claim',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload: { referral_code: code },
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), first.json());
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/v1/referrals/claim',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
+    payload: { referral_code: `${code}-DIFF` },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/v1/referrals/claim',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'referral-claim-invalid' },
+    payload: { referral_code: 'UNKNOWN_CODE' },
+  });
+  assert.equal(invalid.statusCode, 422);
+  assert.equal(invalid.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('search log persistence redacts email and stores query hash', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-search-log-redaction');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'search-log-redaction-1' },
+    payload: {
+      q: 'Need shipment updates to alice@example.com',
+      scope: 'OTHER',
+      filters: { scope_notes: 'search-redaction-scope' },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+
+  const rows = await query(
+    `select query_redacted, query_hash
+     from search_logs
+     where node_id=$1
+     order by created_at desc
+     limit 1`,
+    [nodeId],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(String(rows[0].query_redacted).includes('alice@example.com'), false);
+  assert.equal(String(rows[0].query_redacted).includes('[redacted_email]'), true);
+  assert.match(String(rows[0].query_hash ?? ''), /^[a-f0-9]{64}$/);
+  await app.close();
+});
+
 test('billing checkout-session creates a Stripe session and respects idempotency', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-billing');
@@ -3163,215 +3519,6 @@ test('billing topups checkout-session creates payment mode session and respects 
   await app.close();
 });
 
-test('billing topups bcon invoice creates DB invoice and returns address details', async () => {
-  const app = buildApp();
-  const b = await bootstrap(app, 'boot-bcon-invoice-create');
-  const nodeId = b.json().node.id;
-  const apiKey = b.json().api_key.api_key;
-
-  await withConfigOverrides(
-    {
-      bconApiBase: 'https://external-api.bcon.global',
-      bconStoreApiKey: 'bcon_store_key_test',
-    },
-    async () => {
-      await withMockFetch(async (url, init = {}) => {
-        assert.equal(String(url), 'https://external-api.bcon.global/api/v2/address');
-        const headers = new Headers(init.headers);
-        assert.equal(headers.get('Authorization'), 'Bearer bcon_store_key_test');
-        const body = JSON.parse(String(init.body ?? '{}'));
-        assert.equal(body.payment_currency, 'usdc');
-        assert.equal(body.chain, 'polygon');
-        assert.equal(typeof body.external_id, 'string');
-        assert.equal(body.origin_currency, 'usd');
-        assert.equal(body.origin_amount, 9.99);
-
-        return jsonResponse(200, {
-          address: '0xabc123',
-          payment_amount: 27.5,
-          payment_currency: 'usdc',
-          chain: 'polygon',
-        });
-      }, async () => {
-        const res = await app.inject({
-          method: 'POST',
-          url: '/v1/billing/topups/bcon/invoice',
-          headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bcon-invoice-create-1' },
-          payload: {
-            node_id: nodeId,
-            pack_code: 'credits_500',
-            chain: 'polygon',
-            payment_currency: 'usdc',
-          },
-        });
-        assert.equal(res.statusCode, 200);
-        assert.equal(typeof res.json().invoice_id, 'string');
-        assert.equal(res.json().address, '0xabc123');
-        assert.equal(res.json().amount, 27.5);
-        assert.equal(res.json().currency, 'usdc');
-        assert.equal(res.json().chain, 'polygon');
-
-        const rows = await query(
-          `select node_id, pack_code, credits, address, status, chain, payment_currency, expected_amount::text as expected_amount
-           from bcon_invoices
-           where id=$1`,
-          [res.json().invoice_id],
-        );
-        assert.equal(rows.length, 1);
-        assert.equal(rows[0].node_id, nodeId);
-        assert.equal(rows[0].pack_code, 'credits_500');
-        assert.equal(Number(rows[0].credits), 500);
-        assert.equal(rows[0].address, '0xabc123');
-        assert.equal(rows[0].status, 'pending');
-        assert.equal(rows[0].chain, 'polygon');
-        assert.equal(rows[0].payment_currency, 'usdc');
-        assert.equal(Number(rows[0].expected_amount), 27.5);
-      });
-    },
-  );
-
-  await app.close();
-});
-
-test('billing topups bcon invoice requires auth', async () => {
-  const app = buildApp();
-  const res = await app.inject({
-    method: 'POST',
-    url: '/v1/billing/topups/bcon/invoice',
-    headers: { 'idempotency-key': 'bcon-invoice-unauth' },
-    payload: {
-      node_id: crypto.randomUUID(),
-      pack_code: 'credits_500',
-      chain: 'polygon',
-      payment_currency: 'usdc',
-    },
-  });
-  assert.equal(res.statusCode, 401);
-  assert.equal(res.json().error.code, 'unauthorized');
-  await app.close();
-});
-
-test('bcon webhook secret mismatch is rejected', async () => {
-  const app = buildApp();
-  await withConfigOverrides({ bconCallbackSecret: 'bcon_secret_expected' }, async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/webhooks/bcon?secret=wrong_secret',
-      payload: { status: 'confirmed', external_id: crypto.randomUUID(), txid: 'tx_bad', value: 1 },
-    });
-    assert.equal(res.statusCode, 401);
-    assert.equal(res.json().error.code, 'unauthorized');
-  });
-  await app.close();
-});
-
-test('bcon webhook confirmed grants credits once per txid', async () => {
-  const app = buildApp();
-  const b = await bootstrap(app, 'boot-bcon-webhook-confirmed');
-  const nodeId = b.json().node.id;
-  const apiKey = b.json().api_key.api_key;
-
-  let invoiceId = '';
-  await withConfigOverrides(
-    {
-      bconApiBase: 'https://external-api.bcon.global',
-      bconStoreApiKey: 'bcon_store_key_test',
-      bconCallbackSecret: 'bcon_callback_secret_test',
-    },
-    async () => {
-      await withMockFetch(async () => jsonResponse(200, {
-        address: '0xfeedbeef',
-        payment_amount: 19.25,
-        payment_currency: 'usdc',
-        chain: 'base',
-      }), async () => {
-        const invoiceRes = await app.inject({
-          method: 'POST',
-          url: '/v1/billing/topups/bcon/invoice',
-          headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'bcon-webhook-invoice-create-1' },
-          payload: {
-            node_id: nodeId,
-            pack_code: 'credits_1500',
-            chain: 'base',
-            payment_currency: 'usdc',
-          },
-        });
-        assert.equal(invoiceRes.statusCode, 200);
-        invoiceId = invoiceRes.json().invoice_id;
-      });
-
-      const txid = `tx_bcon_${nodeId.slice(0, 8)}`;
-      const first = await app.inject({
-        method: 'POST',
-        url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
-        payload: {
-          status: 'confirmed',
-          external_id: invoiceId,
-          txid,
-          value: 19.25,
-          addr: '0xfeedbeef',
-        },
-      });
-      const second = await app.inject({
-        method: 'POST',
-        url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
-        payload: {
-          status: 'confirmed',
-          external_id: invoiceId,
-          txid,
-          value: 19.25,
-          addr: '0xfeedbeef',
-        },
-      });
-
-      assert.equal(first.statusCode, 200);
-      assert.equal(second.statusCode, 200);
-
-      const txnRows = await query('select txid from bcon_txns where txid=$1', [txid]);
-      assert.equal(txnRows.length, 1);
-      const creditRows = await query(
-        `select id from credit_ledger
-         where node_id=$1 and type='topup_purchase' and idempotency_key=$2`,
-        [nodeId, `bcon:${txid}`],
-      );
-      assert.equal(creditRows.length, 1);
-
-      const invoiceRows = await query(
-        `select status, txid, paid_at is not null as paid
-         from bcon_invoices
-         where id=$1`,
-        [invoiceId],
-      );
-      assert.equal(invoiceRows.length, 1);
-      assert.equal(invoiceRows[0].status, 'confirmed');
-      assert.equal(invoiceRows[0].txid, txid);
-      assert.equal(invoiceRows[0].paid, true);
-    },
-  );
-
-  await app.close();
-});
-
-test('bcon webhook unknown external_id returns 200', async () => {
-  const app = buildApp();
-  await withConfigOverrides({ bconCallbackSecret: 'bcon_callback_secret_test' }, async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/v1/webhooks/bcon?secret=bcon_callback_secret_test',
-      payload: {
-        status: 'confirmed',
-        external_id: crypto.randomUUID(),
-        txid: 'tx_unknown_external',
-        value: 10,
-        addr: '0xunknown',
-      },
-    });
-    assert.equal(res.statusCode, 200);
-    assert.equal(res.json().ok, true);
-  });
-  await app.close();
-});
-
 test('billing checkout-session accepts basic/pro/business and rejects plus', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-billing-plan-validation');
@@ -3501,6 +3648,41 @@ test('webhook checkout.session.completed grants topup credits once by payment re
   await app.close();
 });
 
+test('webhook checkout.session.completed with unknown topup pack does not grant credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-topup-unknown-pack');
+  const nodeId = b.json().node.id;
+  const balBefore = await repo.creditBalance(nodeId);
+  const paymentIntent = `pi_topup_unknown_${nodeId.slice(0, 8)}`;
+
+  const event = {
+    id: `evt_topup_unknown_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: {
+      object: {
+        id: `cs_topup_unknown_${nodeId.slice(0, 8)}`,
+        payment_status: 'paid',
+        payment_intent: paymentIntent,
+        metadata: { node_id: nodeId, topup_pack_code: 'credits_not_mapped' },
+      },
+    },
+  };
+  const sig = sign(event);
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(res.statusCode, 200);
+
+  const balAfter = await repo.creditBalance(nodeId);
+  assert.equal(balAfter, balBefore);
+  const rows = await query(
+    `select id
+     from credit_ledger
+     where node_id=$1 and type='topup_purchase' and idempotency_key=$2`,
+    [nodeId, `topup:payment_intent:${paymentIntent}`],
+  );
+  assert.equal(rows.length, 0);
+  await app.close();
+});
+
 test('topup grants enforce daily velocity limit per node', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-topup-velocity');
@@ -3600,6 +3782,20 @@ test('webhook returns stripe_signature_invalid when signature verification fails
   assert.equal(res.statusCode, 400);
   assert.equal(res.json().error.code, 'stripe_signature_invalid');
   assert.equal(res.json().error.details.reason, 'signature_mismatch');
+  await app.close();
+});
+
+test('webhook returns stripe_signature_invalid when signature header is missing', async () => {
+  const app = buildApp();
+  const body = {
+    id: 'evt_missing_sig',
+    type: 'checkout.session.completed',
+    data: { object: { payment_status: 'paid', metadata: { node_id: crypto.randomUUID(), plan_code: 'basic' } } },
+  };
+  const res = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', payload: JSON.stringify(body) });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'stripe_signature_invalid');
+  assert.equal(res.json().error.details.reason, 'missing_signature_header');
   await app.close();
 });
 
@@ -5759,6 +5955,143 @@ test('admin stripe diagnostics reports configured=true for supported live sku se
   await app.close();
 });
 
+test('POST /v1/admin/takedown requires admin auth and records takedown row', async () => {
+  const app = buildApp();
+  const targetId = crypto.randomUUID();
+  const reason = `qa-takedown-${TEST_RUN_SUFFIX}`;
+
+  const unauth = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'idempotency-key': 'adm-takedown-unauth' },
+    payload: { target_type: 'public_listing', target_id: targetId, reason },
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const ok = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-takedown-ok' },
+    payload: { target_type: 'public_listing', target_id: targetId, reason },
+  });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.json().ok, true);
+
+  const rows = await query(
+    `select target_type, target_id, reason
+     from takedowns
+     where target_id=$1
+     order by created_at desc
+     limit 1`,
+    [targetId],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].target_type, 'listing');
+  assert.equal(rows[0].target_id, targetId);
+  assert.equal(rows[0].reason, reason);
+  await app.close();
+});
+
+test('POST /v1/admin/credits/adjust requires admin auth and updates ledger/balance', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-admin-adjust');
+  const nodeId = b.json().node.id;
+  const delta = 17;
+  const reason = `qa-adjust-${TEST_RUN_SUFFIX}`;
+  const before = await repo.creditBalance(nodeId);
+
+  const unauth = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/credits/adjust',
+    headers: { 'idempotency-key': 'adm-adjust-unauth' },
+    payload: { node_id: nodeId, delta, reason },
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const ok = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/credits/adjust',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-adjust-ok' },
+    payload: { node_id: nodeId, delta, reason },
+  });
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.json().ok, true);
+
+  const after = await repo.creditBalance(nodeId);
+  assert.equal(after - before, delta);
+  const rows = await query(
+    `select type, amount, meta
+     from credit_ledger
+     where node_id=$1 and type='adjustment_manual'
+     order by created_at desc
+     limit 1`,
+    [nodeId],
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(Number(rows[0].amount), delta);
+  assert.equal(rows[0].meta.reason, reason);
+  await app.close();
+});
+
+test('admin write endpoints should honor idempotency replay/conflict semantics (spec 10/20)', async () => {
+  const app = buildApp();
+  const targetId = crypto.randomUUID();
+  const idempotencyKey = `adm-idem-${TEST_RUN_SUFFIX}`;
+  const payload = {
+    target_type: 'public_listing',
+    target_id: targetId,
+    reason: `qa-admin-idem-${TEST_RUN_SUFFIX}`,
+  };
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': idempotencyKey },
+    payload,
+  });
+  assert.equal(first.statusCode, 200);
+  assert.deepEqual(first.json(), { ok: true });
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': idempotencyKey },
+    payload,
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+
+  const createdRows = await query(
+    `select count(*)::int as c
+     from takedowns
+     where target_type='listing' and target_id=$1 and reason=$2`,
+    [targetId, payload.reason],
+  );
+  assert.equal(createdRows.length, 1);
+  assert.equal(Number(createdRows[0].c), 1);
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': idempotencyKey },
+    payload: { ...payload, reason: `${payload.reason}-different` },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+
+  const rowsAfterConflict = await query(
+    `select count(*)::int as c
+     from takedowns
+     where target_type='listing' and target_id=$1 and reason=$2`,
+    [targetId, payload.reason],
+  );
+  assert.equal(rowsAfterConflict.length, 1);
+  assert.equal(Number(rowsAfterConflict[0].c), 1);
+  await app.close();
+});
+
 test('admin projection rebuild endpoint requires admin auth and responds shape', async () => {
   const app = buildApp();
   const unauth = await app.inject({ method: 'POST', url: '/v1/admin/projections/rebuild?kind=all&mode=full', headers: { 'idempotency-key': 'adm-1' } });
@@ -6590,3 +6923,4 @@ test('MCP rate limit triggers 429 after threshold', async () => {
   });
   await app.close();
 });
+
