@@ -863,12 +863,17 @@ Request
 Same as Unit create, plus:
 {
   "need_by": "iso|null",
-  "accept_substitutions": true
+  "accept_substitutions": true,
+  "ttl_minutes": 10080
 }
+
+`ttl_minutes` is optional. If omitted, default is 10080 minutes (7 days). If provided, it must be an integer in [60, 43200]. `request.expires_at` is server-computed and returned.
 
 Rules
 
 Free users may create and publish Requests.
+
+Expired requests are excluded from public projections/search.
 
 GET /v1/requests
 Auth
@@ -917,6 +922,8 @@ Purpose
 
 Patch a request; increments version on success.
 
+`ttl_minutes` may be provided on patch. Same bounds [60, 43200] apply; server recomputes and returns `expires_at`.
+
 DELETE /v1/requests/{request_id}
 Auth
 
@@ -933,6 +940,10 @@ None
 Purpose
 
 Soft delete a request.
+
+Errors (request create/patch TTL validation)
+
+400 validation_error (details.reason="ttl_minutes_out_of_range")
 
 7) Publish / unpublish (projections)
 Publish eligibility (locked)
@@ -1350,6 +1361,8 @@ from_node_id, to_node_id
 
 status
 
+expires_at (server-computed)
+
 accepted_by_from_at, accepted_by_to_at
 
 hold summary: held_unit_ids, unheld_unit_ids, hold_status, hold_expires_at
@@ -1363,6 +1376,12 @@ Targeting (LOCKED):
 Offers target exactly one: unit_id XOR request_id.
 
 MVP offer endpoints below are unit-based via unit_ids array.
+
+Pre-purchase daily limits (until first purchase is recorded in Stripe/ledger):
+
+- Offer creates: max 3/day (UTC), including counter-offers that create a new offer row.
+- Offer accepts: max 1/day (UTC).
+- On limit exceed: `429` with `error.code="prepurchase_daily_limit_exceeded"` and details including `action`, `window`, `limit`, `used`, `until`.
 
 POST /v1/offers
 Auth
@@ -1389,7 +1408,8 @@ Request
 {
   "unit_ids": ["uuid"],
   "thread_id": "uuid|null",
-  "note": "string|null"
+  "note": "string|null",
+  "ttl_minutes": 2880
 }
 
 Response 200
@@ -1403,13 +1423,19 @@ Creates holds immediately (partial holds allowed); returns held/unheld unit ids 
 
 If thread_id is present, this is a counter-offer within an existing thread.
 
+`ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
+
 Errors
+
+400 validation_error (details.reason="ttl_minutes_out_of_range")
 
 409 invalid_state_transition / conflict
 
 422 validation_error
 
 422 legal_required
+
+429 prepurchase_daily_limit_exceeded
 
 POST /v1/offers/{offer_id}/counter
 Auth
@@ -1433,7 +1459,7 @@ Purpose
 Create a new offer in the same thread; mark the original as countered.
 
 Request
-{ "unit_ids": ["uuid"], "note": "string|null" }
+{ "unit_ids": ["uuid"], "note": "string|null", "ttl_minutes": 2880 }
 
 Rules / side effects
 
@@ -1443,13 +1469,19 @@ Sets original offer status to countered.
 
 Releases original holds; creates new holds for counter-offer.
 
+`ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
+
 Errors
+
+400 validation_error (details.reason="ttl_minutes_out_of_range")
 
 404 not_found
 
 422 validation_error
 
 422 legal_required
+
+429 prepurchase_daily_limit_exceeded
 
 POST /v1/offers/{offer_id}/accept
 Auth
@@ -1483,6 +1515,8 @@ If other side already accepted → mutually_accepted.
 
 On mutually_accepted, holds become committed (units remain unavailable).
 
+On mutually_accepted, all units involved in the accepted offer are immediately unpublished and removed from `public_listings`.
+
 When the second acceptance finalizes `mutually_accepted`, debit `deal_accept_fee` (1 credit) from each side exactly once.
 
 If either side lacks required credits, finalization fails with `402 credits_exhausted` and no partial debit/finalize occurs.
@@ -1498,6 +1532,8 @@ Errors
 409 invalid_state_transition
 
 422 legal_required
+
+429 prepurchase_daily_limit_exceeded
 
 POST /v1/offers/{offer_id}/reject
 Auth
@@ -1605,7 +1641,9 @@ Hold endpoints may be omitted in MVP because Offer responses include the hold su
 
 Rules:
 
-Hold TTL: 48 hours from offer creation.
+Hold TTL equals offer TTL (`hold.expires_at == offer.expires_at`).
+
+Offer TTL default is 48 hours and may be overridden by `ttl_minutes` (bounds [15, 10080]) on offer create/counter.
 
 Hold created on offer creation (partial holds allowed).
 

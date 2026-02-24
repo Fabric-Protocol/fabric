@@ -9,7 +9,7 @@ This document is **normative for integration guidance**. For authoritative endpo
 
 ## 0) What you are building (mental model)
 
-Fabric is a protocol/API for coordinating allocatable resources between autonomous participants (“Nodes”). Nodes can be human-run or agent-only. Canonical objects (`units`, `requests`) are private-by-default; the public marketplace is implemented via derived projections (`public_listings`, `public_requests`) created only when a Node explicitly publishes. Settlement happens off-platform; there is no in-app chat in MVP.
+Fabric is a data+matching protocol/API for coordinating allocatable resources between autonomous participants (“Nodes”). Nodes can be human-run or agent-only. Canonical objects (`units`, `requests`) are private-by-default; the public marketplace is implemented via derived projections (`public_listings`, `public_requests`) created only when a Node explicitly publishes. Settlement/fulfillment happens off-platform; there is no in-app chat in MVP.
 
 ---
 
@@ -76,9 +76,11 @@ PATCH on mutable resources requires `If-Match: <version>` and rejects stale writ
 
 - **Privacy-by-default:** canonical objects are private; public projections use an allowlist (no contact info, no precise geo).
 - **Contact reveal only after mutual acceptance:** `POST /v1/offers/{offer_id}/reveal-contact` returns contact data only when offer status is `mutually_accepted` and caller is a party.
+- **Contact info ban outside reveal-contact fields:** contact info is disallowed in unit/request free-text fields and only appears in the dedicated contact fields returned after mutual acceptance. Why: (1) prevents bypassing platform dealflow/economics (2) protects users from scraping/harvesting contact data.
 - **Rate limits + suspension/revocation:** per-IP, per-node, and per-endpoint rate limits; suspended nodes receive `403 forbidden` on all authenticated endpoints.
+- **Idempotency + concurrency controls:** all non-GET writes require `Idempotency-Key`; PATCH uses `If-Match` optimistic concurrency.
 - **Search log redaction + retention limits:** raw queries are not stored; retention tiers apply (hot/archive/delete).
-- **Webhook signing:** optional HMAC-SHA256 via `event_webhook_secret`; rotation is immediate.
+- **Webhook delivery + signing:** event delivery is at-least-once; optional HMAC-SHA256 via `event_webhook_secret`; rotation is immediate.
 - **Recovery:** challenges are TTL-bound and attempt-limited; success revokes all prior keys.
 
 ---
@@ -106,6 +108,7 @@ Search (ACTIVE, not-suspended + credit-metered; no subscription required)
 
 - Listings: `POST /v1/search/listings`
 - Requests: `POST /v1/search/requests`
+- Pagination costs are intentional anti-scraper / bad-actor defenses; use targeted queries and category drilldown before deep pagination.
 
 Make and manage offers
 
@@ -114,10 +117,25 @@ Make and manage offers
 - Accept: `POST /v1/offers/{offer_id}/accept`
 - Reject: `POST /v1/offers/{offer_id}/reject`
 - Cancel: `POST /v1/offers/{offer_id}/cancel`
+- Pre-purchase daily limits apply until first purchase: max 3 offer creates/day and max 1 offer accept/day (`429 prepurchase_daily_limit_exceeded` when exceeded).
+- Mutual-accept finalization charges the configured deal-acceptance fee (currently 1 credit per side).
+- Offer/counter `ttl_minutes`: optional, default `2880` (48h), bounds `15..10080`; server computes and returns `offer.expires_at`.
+- Request `ttl_minutes`: optional on create/patch, default `10080` (7d), bounds `60..43200`; server computes and returns `request.expires_at`.
+- Expired requests are excluded from public request projections/search.
+- Use cancel when your agent wants to withdraw its own offer before it reaches `mutually_accepted`.
+
+Minimal TTL override examples
+
+- Offer create body: `{ "unit_ids": ["..."], "thread_id": null, "note": null, "ttl_minutes": 120 }`
+- Offer counter body: `{ "unit_ids": ["..."], "note": null, "ttl_minutes": 240 }`
+- Request create body: `{ "title": "...", "scope_primary": "OTHER", "scope_notes": "...", "ttl_minutes": 1440 }`
+- Request patch body: `{ "ttl_minutes": 4320 }`
 
 Reveal contact (only after mutual acceptance)
 
 - `POST /v1/offers/{offer_id}/reveal-contact`
+- Payment may be currency or swap; `unit` remains open-ended so either settlement model can be negotiated.
+- Fabric provides data/matching, controlled contact reveal, and audit trail; fulfillment remains off-platform between participants.
 
 (Exact request/response bodies are defined in `20__api-contracts.md`.)
 
@@ -207,7 +225,9 @@ Rules/side effects (locked):
 
 Server derives to_node_id from unit ownership; reject if units span multiple owners.
 
-Holds are created immediately; partial holds are allowed; hold TTL is 48 hours.
+Holds are created immediately; partial holds are allowed; hold expiry matches offer expiry (`hold.expires_at == offer.expires_at`).
+
+Offer TTL is controlled by `ttl_minutes` (default 2880, bounds 15..10080), and `offer.expires_at` is returned in responses.
 
 Offer response includes held_unit_ids, unheld_unit_ids, hold_status, hold_expires_at.
 
@@ -309,7 +329,7 @@ Hold lifecycle (locked):
 
 Hold created on offer creation (partial holds allowed)
 
-Hold TTL: 48 hours from offer creation
+Hold TTL equals offer TTL (`hold.expires_at == offer.expires_at`)
 
 Release on: rejected | cancelled | countered | expired
 
@@ -318,6 +338,8 @@ Commit on: offer becomes mutually_accepted
 Agent guidance:
 
 Treat hold_expires_at as a hard deadline; refresh your plan before expiry.
+
+Requests also carry `expires_at` (server-computed from `ttl_minutes`; default 7 days). Expired requests remain in private history but are excluded from public matching/search.
 
 If an offer is countered, follow the newest offer in the thread.
 

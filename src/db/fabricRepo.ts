@@ -436,17 +436,17 @@ export async function createResource(kind: 'units'|'requests', nodeId: string, p
       [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
     return rows[0];
   }
-  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
-      returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.tags,payload.category_ids,payload.public_summary]);
+  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '7 days'),$21,$22,$23)
+      returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version,expires_at`,
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary]);
   return rows[0];
 }
 
 export async function createUnitWithUploadTrial(
   nodeId: string,
   payload: any,
-  options: { threshold: number; trialDays: number; trialCreditGrant: number },
+  options: { threshold: number; trialDays: number },
 ) {
   const rows = await query<any>(`
     with inserted_unit as (
@@ -483,22 +483,22 @@ export async function createUnitWithUploadTrial(
       on conflict (node_id) do nothing
       returning node_id, starts_at, ends_at, upload_count_at_grant
     ),
-    insert_credit as (
+    insert_milestone_credits as (
       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
       select
         $1,
         'grant_trial',
-        $24,
+        100,
         jsonb_build_object(
-          'reason', 'upload_threshold_trial',
-          'threshold', $22,
-          'upload_count', insert_trial.upload_count_at_grant,
-          'trial_ends_at', insert_trial.ends_at
+          'reason', 'unit_milestone_grant',
+          'threshold', milestones.threshold,
+          'unit_count', upload_count.c
         ),
-        'trial_upload_threshold'
-      from insert_trial
+        ('unit_milestone_threshold:' || milestones.threshold::text)
+      from upload_count
+      join (values (10), (20)) as milestones(threshold) on upload_count.c >= milestones.threshold
       on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
-      returning id
+      returning amount
     ),
     insert_trial_event as (
       insert into trial_entitlement_events(node_id, event_type, meta)
@@ -511,7 +511,7 @@ export async function createUnitWithUploadTrial(
           'upload_count', insert_trial.upload_count_at_grant,
           'trial_starts_at', insert_trial.starts_at,
           'trial_ends_at', insert_trial.ends_at,
-          'credits_granted', $24
+          'credits_granted', coalesce((select sum(amount)::int from insert_milestone_credits), 0)
         )
       from insert_trial
       returning id
@@ -551,32 +551,36 @@ export async function createUnitWithUploadTrial(
     payload.public_summary,
     options.threshold,
     options.trialDays,
-    options.trialCreditGrant,
   ]);
   return rows[0];
 }
 
 export async function grantRequestMilestoneIfEligible(
   nodeId: string,
-  options: { threshold: number; creditGrant: number },
+  _options: { threshold: number; creditGrant: number },
 ) {
   const counts = await query<{ c: string }>(
     'select count(*)::text as c from requests where node_id=$1',
     [nodeId],
   );
   const requestCount = Number(counts[0]?.c ?? 0);
-  if (requestCount < options.threshold) return { granted: false, request_count: requestCount };
-  const granted = await addCreditIdempotent(
-    nodeId,
-    'grant_milestone_requests',
-    options.creditGrant,
-    {
-      reason: 'request_threshold_grant',
-      threshold: options.threshold,
-      request_count: requestCount,
-    },
-    `request_milestone_threshold:${options.threshold}`,
-  );
+  const milestones = [10, 20];
+  let granted = false;
+  for (const threshold of milestones) {
+    if (requestCount < threshold) continue;
+    const didGrant = await addCreditIdempotent(
+      nodeId,
+      'grant_milestone_requests',
+      100,
+      {
+        reason: 'request_milestone_grant',
+        threshold,
+        request_count: requestCount,
+      },
+      `request_milestone_threshold:${threshold}`,
+    );
+    granted = granted || didGrant;
+  }
   return { granted, request_count: requestCount };
 }
 
@@ -610,10 +614,10 @@ export async function patchResource(kind:'units'|'requests', nodeId:string, id:s
       desired_quantity=coalesce($8,desired_quantity),measure=coalesce($9,measure),custom_measure=coalesce($10,custom_measure),
       scope_primary=coalesce($11,scope_primary),scope_secondary=coalesce($12,scope_secondary),scope_notes=coalesce($13,scope_notes),
       location_text_public=coalesce($14,location_text_public),origin_region=coalesce($15,origin_region),dest_region=coalesce($16,dest_region),
-      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),max_ship_days=coalesce($19,max_ship_days),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary)
+      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),max_ship_days=coalesce($19,max_ship_days),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary),expires_at=coalesce($23,expires_at)
       where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
-      returning id,row_version as version`,
-    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
+      returning id,row_version as version,expires_at`,
+    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.expires_at]);
   return rows[0] ?? null;
 }
 
@@ -649,7 +653,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
     title: row.title,description: row.description,public_summary: row.public_summary,desired_quantity: row.desired_quantity,measure: row.measure,
     custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
     location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
-    delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,need_by: row.need_by,accept_substitutions: row.accept_substitutions,published_at: row.published_at,updated_at: row.updated_at,
+    delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,need_by: row.need_by,accept_substitutions: row.accept_substitutions,expires_at: row.expires_at,published_at: row.published_at,updated_at: row.updated_at,
   };
   await query(`insert into public_requests(request_id,node_id,doc,published_at) values($1,$2,$3,now())
     on conflict (request_id) do update set doc=excluded.doc,published_at=excluded.published_at,updated_at=now()`, [row.id,row.node_id,doc]);
@@ -724,6 +728,9 @@ export async function searchPublic(
 ) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
   const idColumn = kind === 'listings' ? 'p.unit_id' : 'p.request_id';
+  const lifecycleJoin = kind === 'requests'
+    ? "join requests rq on rq.id = p.request_id and rq.deleted_at is null and rq.expires_at > now()"
+    : '';
   const params: unknown[] = [limit];
   const where: string[] = [];
 
@@ -884,6 +891,7 @@ export async function searchPublic(
          ${ftsRankExpr}::double precision as fts_rank,
          ${routeSpecificityExpr}::int as route_specificity_score
        from ${table} p
+       ${lifecycleJoin}
        join nodes n on n.id=p.node_id
        where ${where.join('\n         and ')}
      )
@@ -945,10 +953,14 @@ export async function addDetailView(viewerNodeId: string, subjectKind: 'listing'
 
 export async function listNodePublic(nodeId:string, kind:'listings'|'requests', limit:number, cursor:string|null) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
+  const lifecycleJoin = kind === 'requests'
+    ? 'join requests rq on rq.id=p.request_id and rq.deleted_at is null and rq.expires_at > now()'
+    : '';
   if (cursor) {
     return query<any>(
       `select p.doc,p.published_at
        from ${table} p
+       ${lifecycleJoin}
        join nodes n on n.id=p.node_id
        where p.node_id=$1
          and p.published_at < $3::timestamptz
@@ -963,6 +975,7 @@ export async function listNodePublic(nodeId:string, kind:'listings'|'requests', 
   return query<any>(
     `select p.doc,p.published_at
      from ${table} p
+     ${lifecycleJoin}
      join nodes n on n.id=p.node_id
      where p.node_id=$1
        and n.status='ACTIVE'
@@ -976,11 +989,15 @@ export async function listNodePublic(nodeId:string, kind:'listings'|'requests', 
 
 export async function listNodePublicByCategory(nodeId: string, kind: 'listings' | 'requests', categoryId: number, limit: number, cursor: string | null) {
   const table = kind === 'listings' ? 'public_listings' : 'public_requests';
+  const lifecycleJoin = kind === 'requests'
+    ? 'join requests rq on rq.id=p.request_id and rq.deleted_at is null and rq.expires_at > now()'
+    : '';
   const categoryKey = String(categoryId);
   if (cursor) {
     return query<any>(
       `select p.doc,p.published_at
        from ${table} p
+       ${lifecycleJoin}
        join nodes n on n.id=p.node_id
        where p.node_id=$1
          and exists (
@@ -1000,6 +1017,7 @@ export async function listNodePublicByCategory(nodeId: string, kind: 'listings' 
   return query<any>(
     `select p.doc,p.published_at
      from ${table} p
+     ${lifecycleJoin}
      join nodes n on n.id=p.node_id
      where p.node_id=$1
        and exists (
@@ -1024,9 +1042,13 @@ export async function listNodeCategorySummary(nodeIds: string[], kind: 'listings
 
   const results: Array<{ node_id: string; kind: string; category_id: number; count: number }> = [];
   for (const { table, kind: k } of tables) {
+    const lifecycleJoin = k === 'requests'
+      ? 'join requests rq on rq.id = p.request_id and rq.deleted_at is null and rq.expires_at > now()'
+      : '';
     const rows = await query<{ node_id: string; category_id: string; count: string }>(
       `select p.node_id, c.category_id, count(*)::text as count
        from ${table} p
+       ${lifecycleJoin}
        join nodes n on n.id = p.node_id
        cross join lateral jsonb_array_elements_text(coalesce(p.doc->'category_ids', '[]'::jsonb)) as c(category_id)
        where p.node_id = any($1::uuid[])
@@ -1047,9 +1069,16 @@ export async function getUnitsOwners(unitIds: string[]) {
   return query<{ id: string; node_id: string }>('select id,node_id from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
 }
 
-export async function createOffer(fromNodeId: string, toNodeId: string, unitId: string, threadId: string, note: string | null) {
+export async function createOffer(
+  fromNodeId: string,
+  toNodeId: string,
+  unitId: string,
+  threadId: string,
+  note: string | null,
+  expiresAt: string,
+) {
   const rows = await query<any>(`insert into offers(thread_id,from_node_id,to_node_id,unit_id,request_id,status,expires_at,note)
-    values($1,$2,$3,$4,null,'pending',now()+interval '48 hours',$5) returning *`, [threadId, fromNodeId, toNodeId, unitId, note]);
+    values($1,$2,$3,$4,null,'pending',$5::timestamptz,$6) returning *`, [threadId, fromNodeId, toNodeId, unitId, expiresAt, note]);
   return rows[0];
 }
 
@@ -1062,8 +1091,8 @@ export async function activeHeld(unitId: string) {
   return Number(rows[0].c) > 0;
 }
 
-export async function createHold(offerId: string, unitId: string) {
-  await query("insert into holds(offer_id,unit_id,status,expires_at) values($1,$2,'active',now()+interval '48 hours')", [offerId, unitId]);
+export async function createHold(offerId: string, unitId: string, expiresAt: string) {
+  await query("insert into holds(offer_id,unit_id,status,expires_at) values($1,$2,'active',$3::timestamptz)", [offerId, unitId, expiresAt]);
 }
 
 export async function getOffer(offerId: string) {
@@ -1089,6 +1118,25 @@ export async function expireStaleOffers() {
        where offer_id in (select id from expired)
          and status='active'
        returning id
+     )
+     select id from expired`,
+  );
+  return rows.length;
+}
+
+export async function expireStaleRequests() {
+  const rows = await query<{ id: string }>(
+    `with expired as (
+       update requests
+       set published_at = null
+       where deleted_at is null
+         and expires_at <= now()
+       returning id
+     ),
+     removed as (
+       delete from public_requests
+       where request_id in (select id from expired)
+       returning request_id
      )
      select id from expired`,
   );
@@ -1181,6 +1229,22 @@ export async function finalizeOfferMutualAcceptanceWithFees(
        where offer_id in (select id from updated_offer)
          and status='active'
        returning id
+     ),
+     involved_units as (
+       select distinct ol.unit_id
+       from offer_lines ol
+       where ol.offer_id in (select id from updated_offer)
+     ),
+     unpublish_units as (
+       update units
+       set published_at = null
+       where id in (select unit_id from involved_units)
+       returning id
+     ),
+     remove_listings as (
+       delete from public_listings
+       where unit_id in (select unit_id from involved_units)
+       returning unit_id
      ),
      charge_from as (
        insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
@@ -1447,6 +1511,107 @@ export async function countTopupPurchasesSince(nodeId: string, sinceIso: string)
     [nodeId, sinceIso],
   );
   return Number(rows[0]?.c ?? 0);
+}
+
+export async function getPrepurchaseOfferCreateUsage(nodeId: string) {
+  const rows = await query<{ has_purchased: boolean; usage_today: string }>(
+    `select
+       (
+         exists (
+           select 1
+           from credit_ledger cl
+           where cl.node_id = $1::uuid
+             and cl.type = 'topup_purchase'
+             and cl.amount > 0
+         )
+         or exists (
+           select 1
+           from stripe_events e
+           where e.type = 'invoice.paid'
+             and (
+               coalesce(e.payload->'data'->'object'->'metadata'->>'node_id', e.payload->'data'->'object'->>'node_id', e.payload->>'node_id') = $1::text
+               or exists (
+                 select 1
+                 from subscriptions s
+                 where s.node_id::text = $1::text
+                   and s.stripe_customer_id is not null
+                   and s.stripe_customer_id = coalesce(e.payload->'data'->'object'->>'customer', e.payload->>'customer')
+               )
+             )
+         )
+         or exists (
+           select 1
+           from subscriptions s
+           where s.node_id = $1::uuid
+             and s.plan_code in ('basic', 'pro', 'business')
+             and s.status in ('active', 'past_due', 'canceled')
+         )
+       ) as has_purchased,
+       (
+         select count(*)::text
+         from offers o
+         where o.from_node_id = $1::uuid
+           and o.deleted_at is null
+           and o.created_at >= date_trunc('day', now())
+       ) as usage_today`,
+    [nodeId],
+  );
+  return {
+    hasPurchased: Boolean(rows[0]?.has_purchased),
+    usageToday: Number(rows[0]?.usage_today ?? 0),
+  };
+}
+
+export async function getPrepurchaseOfferAcceptUsage(nodeId: string) {
+  const rows = await query<{ has_purchased: boolean; usage_today: string }>(
+    `select
+       (
+         exists (
+           select 1
+           from credit_ledger cl
+           where cl.node_id = $1::uuid
+             and cl.type = 'topup_purchase'
+             and cl.amount > 0
+         )
+         or exists (
+           select 1
+           from stripe_events e
+           where e.type = 'invoice.paid'
+             and (
+               coalesce(e.payload->'data'->'object'->'metadata'->>'node_id', e.payload->'data'->'object'->>'node_id', e.payload->>'node_id') = $1::text
+               or exists (
+                 select 1
+                 from subscriptions s
+                 where s.node_id::text = $1::text
+                   and s.stripe_customer_id is not null
+                   and s.stripe_customer_id = coalesce(e.payload->'data'->'object'->>'customer', e.payload->>'customer')
+               )
+             )
+         )
+         or exists (
+           select 1
+           from subscriptions s
+           where s.node_id = $1::uuid
+             and s.plan_code in ('basic', 'pro', 'business')
+             and s.status in ('active', 'past_due', 'canceled')
+         )
+       ) as has_purchased,
+       (
+         select count(*)::text
+         from offers o
+         where o.deleted_at is null
+           and (
+             (o.from_node_id = $1::uuid and o.accepted_by_from_at >= date_trunc('day', now()))
+             or
+             (o.to_node_id = $1::uuid and o.accepted_by_to_at >= date_trunc('day', now()))
+           )
+       ) as usage_today`,
+    [nodeId],
+  );
+  return {
+    hasPurchased: Boolean(rows[0]?.has_purchased),
+    usageToday: Number(rows[0]?.usage_today ?? 0),
+  };
 }
 
 export async function getReferralClaim(nodeId: string) {

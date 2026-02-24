@@ -133,18 +133,19 @@ Implementation note:
 - One claim per referred node.
 
 ## 6b) Upload trial bridge
-- Trigger: first time a node reaches `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `20`).
-- Grant (one-time): active trial entitlement for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`) plus `UPLOAD_TRIAL_CREDIT_GRANT` credits (default `200`).
+- Trigger: Unit-create milestones at 10 and 20.
+- Grant: `+100` credits at each milestone (max `+200`) as `grant_trial`.
+- Trial entitlement remains one-time at `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `20`) for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`).
 - Idempotency/audit:
   - Entitlement is unique per node.
-  - Credit grant is written once as `grant_trial`.
+  - Credit grants are idempotent per node/milestone threshold.
   - Trial grant is recorded in trial entitlement event audit.
 
 ## 6c) Request milestone bridge
-- Trigger: first time a node reaches `REQUEST_MILESTONE_THRESHOLD` Request creates (default `20`).
-- Grant (one-time): `REQUEST_MILESTONE_CREDIT_GRANT` credits (default `200`) as `grant_milestone_requests`.
+- Trigger: Request-create milestones at 10 and 20.
+- Grant: `+100` credits at each milestone (max `+200`) as `grant_milestone_requests`.
 - Idempotency/audit:
-  - Credit grant is one-time per node/threshold.
+  - Credit grants are idempotent per node/milestone threshold.
 
 ## 7) Credits quote endpoints
 - `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).

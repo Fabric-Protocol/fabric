@@ -373,6 +373,7 @@ create table if not exists requests (
 
   need_by timestamptz null,
   accept_substitutions boolean not null default true,
+  expires_at timestamptz not null default (now() + interval '7 days'),
 
   tags text[] null,
   category_ids int[] null,
@@ -385,9 +386,12 @@ create table if not exists requests (
   deleted_at timestamptz null
 );
 
+alter table requests add column if not exists expires_at timestamptz not null default (now() + interval '7 days');
+
 create index if not exists requests_node_idx on requests(node_id) where deleted_at is null;
 create index if not exists requests_published_idx on requests(published_at desc) where deleted_at is null;
 create index if not exists requests_scope_idx on requests(scope_primary) where deleted_at is null;
+create index if not exists requests_expires_idx on requests(expires_at) where deleted_at is null;
 
 drop trigger if exists requests_set_updated_at on requests;
 create trigger requests_set_updated_at

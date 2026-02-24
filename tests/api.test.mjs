@@ -80,6 +80,12 @@ const searchRankingMigrationSql = await fs.readFile(
 );
 await query(searchRankingMigrationSql);
 
+const requestExpiryMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-24__apply_request_expiry.sql', import.meta.url),
+  'utf8',
+);
+await query(requestExpiryMigrationSql);
+
 const creditLedgerTypesMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-23__apply_credit_ledger_types.sql', import.meta.url),
   'utf8',
@@ -311,6 +317,8 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(Boolean(body.paths?.['/v1/categories']?.get), true);
   assert.equal(Boolean(body.paths?.['/v1/search/listings']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/search/requests']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/requests']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/requests/{request_id}']?.patch), true);
   assert.equal(Boolean(body.paths?.['/v1/offers']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/counter']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/accept']?.post), true);
@@ -320,6 +328,21 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const offerCreateParams = body.paths?.['/v1/offers']?.post?.parameters ?? [];
   const idemParamRef = offerCreateParams.find((p) => p && p.$ref === '#/components/parameters/IdempotencyKeyHeader');
   assert.equal(Boolean(idemParamRef), true);
+  const offerCreateSchema = body.components?.schemas?.OfferCreateRequest ?? {};
+  assert.equal(offerCreateSchema.properties?.ttl_minutes?.minimum, 15);
+  assert.equal(offerCreateSchema.properties?.ttl_minutes?.maximum, 10080);
+  const offerCounterSchema = body.components?.schemas?.OfferCounterRequest ?? {};
+  assert.equal(offerCounterSchema.properties?.ttl_minutes?.minimum, 15);
+  assert.equal(offerCounterSchema.properties?.ttl_minutes?.maximum, 10080);
+  const requestCreateSchema = body.components?.schemas?.RequestCreateRequest ?? {};
+  assert.equal(requestCreateSchema.properties?.ttl_minutes?.minimum, 60);
+  assert.equal(requestCreateSchema.properties?.ttl_minutes?.maximum, 43200);
+  const requestPatchSchema = body.components?.schemas?.RequestPatchRequest ?? {};
+  assert.equal(requestPatchSchema.properties?.ttl_minutes?.minimum, 60);
+  assert.equal(requestPatchSchema.properties?.ttl_minutes?.maximum, 43200);
+  const offerSchema = body.components?.schemas?.Offer ?? {};
+  assert.equal(Array.isArray(offerSchema.required), true);
+  assert.equal(offerSchema.required.includes('expires_at'), true);
   const eventsParams = body.paths?.['/events']?.get?.parameters ?? [];
   const sinceParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsSinceQuery');
   const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
@@ -1314,6 +1337,401 @@ test('offer actions require current legal assent even without subscriber gating'
   await app.close();
 });
 
+test('pre-purchase daily offer-create limit blocks the fourth offer until first purchase', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-prepurchase-create-seller');
+  const buyerBoot = await bootstrap(app, 'boot-prepurchase-create-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase create unit', 'prepurchase-create-scope'));
+
+  for (let i = 0; i < 3; i += 1) {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': `prepurchase-create-${i}` },
+      payload: { unit_ids: [unit.id], thread_id: null, note: `offer-${i}` },
+    });
+    assert.equal(create.statusCode, 200);
+  }
+
+  const blocked = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-create-blocked' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'blocked-offer' },
+  });
+  assert.equal(blocked.statusCode, 429);
+  assert.equal(blocked.json().error.code, 'prepurchase_daily_limit_exceeded');
+  assert.equal(blocked.json().error.details.action, 'offer_create');
+  assert.equal(blocked.json().error.details.limit, 3);
+
+  await repo.addCredit(buyerNodeId, 'topup_purchase', 500, { reason: 'test_unlock_prepurchase_create' }, `test_prepurchase_create:${buyerNodeId}`);
+
+  const allowedAfterPurchase = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-create-after-purchase' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'after-purchase' },
+  });
+  assert.equal(allowedAfterPurchase.statusCode, 200);
+  await app.close();
+});
+
+test('pre-purchase daily offer-accept limit blocks second acceptance until first purchase', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-prepurchase-accept-seller');
+  const buyerBoot = await bootstrap(app, 'boot-prepurchase-accept-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const unitA = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit A', 'prepurchase-accept-a'));
+  const unitB = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit B', 'prepurchase-accept-b'));
+
+  const offerA = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-accept-create-a' },
+    payload: { unit_ids: [unitA.id], thread_id: null, note: null },
+  });
+  assert.equal(offerA.statusCode, 200);
+  const offerAId = offerA.json().offer.id;
+
+  const offerB = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-accept-create-b' },
+    payload: { unit_ids: [unitB.id], thread_id: null, note: null },
+  });
+  assert.equal(offerB.statusCode, 200);
+  const offerBId = offerB.json().offer.id;
+
+  const firstAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerAId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-first' },
+    payload: {},
+  });
+  assert.equal(firstAccept.statusCode, 200);
+
+  const secondAcceptBlocked = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerBId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-second-blocked' },
+    payload: {},
+  });
+  assert.equal(secondAcceptBlocked.statusCode, 429);
+  assert.equal(secondAcceptBlocked.json().error.code, 'prepurchase_daily_limit_exceeded');
+  assert.equal(secondAcceptBlocked.json().error.details.action, 'offer_accept');
+  assert.equal(secondAcceptBlocked.json().error.details.limit, 1);
+
+  await repo.addCredit(sellerNodeId, 'topup_purchase', 500, { reason: 'test_unlock_prepurchase_accept' }, `test_prepurchase_accept:${sellerNodeId}`);
+
+  const secondAcceptAfterPurchase = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerBId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-second-after-purchase' },
+    payload: {},
+  });
+  assert.equal(secondAcceptAfterPurchase.statusCode, 200);
+  await app.close();
+});
+
+test('offer ttl_minutes defaults/overrides are enforced and hold expiry matches offer expiry', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-ttl-seller');
+  const buyerBoot = await bootstrap(app, 'boot-offer-ttl-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer TTL unit', 'offer-ttl-scope'));
+  const overrideUnit = await repo.createResource('units', sellerNodeId, unitPayload('Offer TTL override unit', 'offer-ttl-override-scope'));
+
+  const defaultOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-default' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(defaultOffer.statusCode, 200);
+  const defaultBody = defaultOffer.json().offer;
+  const defaultMinutes = (new Date(defaultBody.expires_at).getTime() - Date.now()) / 60000;
+  assert.equal(defaultMinutes >= 2860 && defaultMinutes <= 2890, true);
+  assert.equal(Math.abs(new Date(defaultBody.hold_expires_at).getTime() - new Date(defaultBody.expires_at).getTime()) < 2000, true);
+
+  const overriddenOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-override' },
+    payload: { unit_ids: [overrideUnit.id], thread_id: null, note: null, ttl_minutes: 30 },
+  });
+  assert.equal(overriddenOffer.statusCode, 200);
+  const overriddenBody = overriddenOffer.json().offer;
+  const overrideMinutes = (new Date(overriddenBody.expires_at).getTime() - Date.now()) / 60000;
+  assert.equal(overrideMinutes >= 27 && overrideMinutes <= 33, true);
+  assert.equal(Math.abs(new Date(overriddenBody.hold_expires_at).getTime() - new Date(overriddenBody.expires_at).getTime()) < 2000, true);
+
+  const invalidOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-invalid' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null, ttl_minutes: 10 },
+  });
+  assert.equal(invalidOffer.statusCode, 400);
+  assert.equal(invalidOffer.json().error.code, 'validation_error');
+  assert.equal(invalidOffer.json().error.details.reason, 'ttl_minutes_out_of_range');
+  await app.close();
+});
+
+test('counter ttl_minutes overrides are enforced with bounds', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-counter-ttl-seller');
+  const buyerBoot = await bootstrap(app, 'boot-counter-ttl-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Counter TTL unit', 'counter-ttl-scope'));
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'counter-ttl-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null, ttl_minutes: 120 },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'counter-ttl-valid' },
+    payload: { unit_ids: [unit.id], note: null, ttl_minutes: 240 },
+  });
+  assert.equal(counter.statusCode, 200);
+  const counterOffer = counter.json().offer;
+  const counterMinutes = (new Date(counterOffer.expires_at).getTime() - Date.now()) / 60000;
+  assert.equal(counterMinutes >= 237 && counterMinutes <= 243, true);
+  assert.equal(Math.abs(new Date(counterOffer.hold_expires_at).getTime() - new Date(counterOffer.expires_at).getTime()) < 2000, true);
+
+  const invalidCounter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${counterOffer.id}/counter`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'counter-ttl-invalid' },
+    payload: { unit_ids: [unit.id], note: null, ttl_minutes: 10081 },
+  });
+  assert.equal(invalidCounter.statusCode, 400);
+  assert.equal(invalidCounter.json().error.code, 'validation_error');
+  assert.equal(invalidCounter.json().error.details.reason, 'ttl_minutes_out_of_range');
+  await app.close();
+});
+
+test('request ttl_minutes defaults/overrides are enforced and expired requests are excluded from public matching', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-request-ttl-owner');
+  const seekerBoot = await bootstrap(app, 'boot-request-ttl-seeker');
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+  const seekerApiKey = seekerBoot.json().api_key.api_key;
+  const ownerNodeId = ownerBoot.json().node.id;
+  const uniqueToken = `reqexpiry${crypto.randomBytes(6).toString('hex').replace(/[0-9]/g, 'a')}`;
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-ttl-default' },
+    payload: unitPayload(`Request TTL ${uniqueToken}`, `request-ttl-${uniqueToken}`),
+  });
+  assert.equal(created.statusCode, 200);
+  const requestId = created.json().request.id;
+  const defaultMinutes = (new Date(created.json().request.expires_at).getTime() - Date.now()) / 60000;
+  assert.equal(defaultMinutes >= 10075 && defaultMinutes <= 10085, true);
+
+  const patched = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-ttl-patch', 'if-match': String(created.json().request.version) },
+    payload: { ttl_minutes: 180 },
+  });
+  assert.equal(patched.statusCode, 200);
+  const patchedMinutes = (new Date(patched.json().expires_at).getTime() - Date.now()) / 60000;
+  assert.equal(patchedMinutes >= 177 && patchedMinutes <= 183, true);
+
+  const invalidCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-ttl-invalid-create' },
+    payload: { ...unitPayload('Request TTL invalid create', 'request-ttl-invalid'), ttl_minutes: 30 },
+  });
+  assert.equal(invalidCreate.statusCode, 400);
+  assert.equal(invalidCreate.json().error.code, 'validation_error');
+  assert.equal(invalidCreate.json().error.details.reason, 'ttl_minutes_out_of_range');
+
+  const invalidPatch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-ttl-invalid-patch', 'if-match': String(patched.json().version) },
+    payload: { ttl_minutes: 59 },
+  });
+  assert.equal(invalidPatch.statusCode, 400);
+  assert.equal(invalidPatch.json().error.code, 'validation_error');
+  assert.equal(invalidPatch.json().error.details.reason, 'ttl_minutes_out_of_range');
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'request-ttl-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const beforeExpireSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${seekerApiKey}`, 'idempotency-key': 'request-ttl-before-expire-search' },
+    payload: {
+      q: uniqueToken,
+      scope: 'OTHER',
+      filters: { scope_notes: `request-ttl-${uniqueToken}` },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+      target: { node_id: ownerNodeId },
+    },
+  });
+  assert.equal(beforeExpireSearch.statusCode, 200);
+  assert.equal(beforeExpireSearch.json().items.some((row) => row.item.id === requestId), true);
+
+  await query("update requests set expires_at = now() - interval '1 minute' where id=$1", [requestId]);
+
+  const ownerHistory = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${ownerApiKey}` },
+  });
+  assert.equal(ownerHistory.statusCode, 200);
+  assert.equal(ownerHistory.json().id, requestId);
+
+  const afterExpireSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${seekerApiKey}`, 'idempotency-key': 'request-ttl-after-expire-search' },
+    payload: {
+      q: uniqueToken,
+      scope: 'OTHER',
+      filters: { scope_notes: `request-ttl-${uniqueToken}` },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+      target: { node_id: ownerNodeId },
+    },
+  });
+  assert.equal(afterExpireSearch.statusCode, 200);
+  assert.equal(afterExpireSearch.json().items.some((row) => row.item.id === requestId), false);
+
+  const publicInventory = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/requests`,
+    headers: { authorization: `ApiKey ${seekerApiKey}` },
+  });
+  assert.equal(publicInventory.statusCode, 200);
+  assert.equal(publicInventory.json().items.some((item) => item.id === requestId), false);
+  await app.close();
+});
+
+test('mutual acceptance auto-unpublishes involved units from projections/search', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-mutual-unpublish-seller');
+  const buyerBoot = await bootstrap(app, 'boot-mutual-unpublish-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const marker = `mutualunpub${Date.now()}`;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload(`Mutual unpublish ${marker}`, `mutual-unpublish-${marker}`));
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unit.id}/publish`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'mutual-unpublish-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const visibleBefore = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mutual-unpublish-search-before' },
+    payload: {
+      q: marker,
+      scope: 'OTHER',
+      filters: { scope_notes: `mutual-unpublish-${marker}` },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+      target: { node_id: sellerNodeId },
+    },
+  });
+  assert.equal(visibleBefore.statusCode, 200);
+  assert.equal(visibleBefore.json().items.some((row) => row.item.id === unit.id), true);
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mutual-unpublish-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'mutual-unpublish-seller-accept' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mutual-unpublish-buyer-accept' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  const unitRow = await query("select published_at from units where id=$1", [unit.id]);
+  assert.equal(unitRow[0].published_at, null);
+  const projectionRow = await query("select count(*)::text as c from public_listings where unit_id=$1", [unit.id]);
+  assert.equal(Number(projectionRow[0].c), 0);
+
+  const visibleAfter = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mutual-unpublish-search-after' },
+    payload: {
+      q: marker,
+      scope: 'OTHER',
+      filters: { scope_notes: `mutual-unpublish-${marker}` },
+      budget: { credits_max: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+      target: { node_id: sellerNodeId },
+    },
+  });
+  assert.equal(visibleAfter.statusCode, 200);
+  assert.equal(visibleAfter.json().items.some((row) => row.item.id === unit.id), false);
+
+  const publicInventory = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${sellerNodeId}/listings`,
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(publicInventory.statusCode, 200);
+  assert.equal(publicInventory.json().items.some((item) => item.id === unit.id), false);
+  await app.close();
+});
+
 test('buyer offer create cannot lock seller inventory; seller-side accept locks; idempotency works', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-hold-seller', {
@@ -2244,18 +2662,19 @@ test('event webhook retries are bounded and polling remains available when deliv
   await app.close();
 });
 
-test('unit upload threshold grants one trial entitlement and one credit grant', async () => {
+test('unit milestones grant credits at 10 and 20 while trial entitlement remains one-time at threshold', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-upload-trial-once');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
-  const threshold = config.uploadTrialThreshold;
+  const firstMilestone = 10;
+  const secondMilestone = 20;
 
   const beforeTrial = await repo.getTrialEntitlement(nodeId);
   assert.equal(beforeTrial, null);
-  const balanceBeforeThreshold = await repo.creditBalance(nodeId);
+  const balanceBefore = await repo.creditBalance(nodeId);
 
-  for (let i = 0; i < threshold - 1; i += 1) {
+  for (let i = 0; i < firstMilestone - 1; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/units',
@@ -2267,51 +2686,81 @@ test('unit upload threshold grants one trial entitlement and one credit grant', 
 
   const stillNoTrial = await repo.getTrialEntitlement(nodeId);
   assert.equal(stillNoTrial, null);
+  const balanceBeforeFirstMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceBeforeFirstMilestone, balanceBefore);
 
-  const thresholdHit = await app.inject({
+  const firstMilestoneHit = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${threshold - 1}` },
-    payload: unitPayload(`Trial unit ${threshold - 1}`, `trial-upload-${threshold - 1}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${firstMilestone - 1}` },
+    payload: unitPayload(`Trial unit ${firstMilestone - 1}`, `trial-upload-${firstMilestone - 1}`),
   });
-  assert.equal(thresholdHit.statusCode, 200);
+  assert.equal(firstMilestoneHit.statusCode, 200);
+
+  const balanceAfterFirstMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterFirstMilestone - balanceBeforeFirstMilestone, 100);
+  assert.equal(await repo.getTrialEntitlement(nodeId), null);
+
+  for (let i = firstMilestone; i < secondMilestone - 1; i += 1) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/units',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${i}` },
+      payload: unitPayload(`Trial unit ${i}`, `trial-upload-${i}`),
+    });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const balanceBeforeSecondMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceBeforeSecondMilestone, balanceAfterFirstMilestone);
+
+  const secondMilestoneHit = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${secondMilestone - 1}` },
+    payload: unitPayload(`Trial unit ${secondMilestone - 1}`, `trial-upload-${secondMilestone - 1}`),
+  });
+  assert.equal(secondMilestoneHit.statusCode, 200);
 
   const entitlement = await repo.getTrialEntitlement(nodeId);
   assert.equal(Boolean(entitlement), true);
   assert.equal(entitlement.ends_at instanceof Date || typeof entitlement.ends_at === 'string', true);
 
-  const balanceAfterThreshold = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterThreshold - balanceBeforeThreshold, config.uploadTrialCreditGrant);
+  const balanceAfterSecondMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterSecondMilestone - balanceBeforeSecondMilestone, 100);
+  assert.equal(balanceAfterSecondMilestone - balanceBefore, 200);
 
   const postThreshold = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${threshold}` },
-    payload: unitPayload(`Trial unit ${threshold}`, `trial-upload-${threshold}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${secondMilestone}` },
+    payload: unitPayload(`Trial unit ${secondMilestone}`, `trial-upload-${secondMilestone}`),
   });
   assert.equal(postThreshold.statusCode, 200);
 
   const balanceAfterPostThreshold = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterPostThreshold, balanceAfterThreshold);
+  assert.equal(balanceAfterPostThreshold, balanceAfterSecondMilestone);
 
   const trialCount = await query("select count(*)::text as c from trial_entitlements where node_id=$1", [nodeId]);
   const trialEventCount = await query("select count(*)::text as c from trial_entitlement_events where node_id=$1 and event_type='granted'", [nodeId]);
-  const trialGrantCount = await query("select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_trial'", [nodeId]);
+  const trialGrantRows = await query("select count(*)::text as c, coalesce(sum(amount),0)::text as s from credit_ledger where node_id=$1 and type='grant_trial'", [nodeId]);
   assert.equal(Number(trialCount[0].c), 1);
   assert.equal(Number(trialEventCount[0].c), 1);
-  assert.equal(Number(trialGrantCount[0].c), 1);
+  assert.equal(Number(trialGrantRows[0].c), 2);
+  assert.equal(Number(trialGrantRows[0].s), 200);
   await app.close();
 });
 
-test('request milestone grants one-time credits at threshold', async () => {
+test('request milestones grant credits at 10 and 20 only', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-request-milestone');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
-  const threshold = config.requestMilestoneThreshold;
+  const firstMilestone = 10;
+  const secondMilestone = 20;
 
-  const balanceBeforeThreshold = await repo.creditBalance(nodeId);
-  for (let i = 0; i < threshold - 1; i += 1) {
+  const balanceBefore = await repo.creditBalance(nodeId);
+  for (let i = 0; i < firstMilestone - 1; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/requests',
@@ -2321,34 +2770,59 @@ test('request milestone grants one-time credits at threshold', async () => {
     assert.equal(res.statusCode, 200);
   }
 
-  const balanceBeforeThresholdHit = await repo.creditBalance(nodeId);
-  assert.equal(balanceBeforeThresholdHit, balanceBeforeThreshold);
+  const balanceBeforeFirstMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceBeforeFirstMilestone, balanceBefore);
 
-  const thresholdHit = await app.inject({
+  const firstMilestoneHit = await app.inject({
     method: 'POST',
     url: '/v1/requests',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${threshold - 1}` },
-    payload: unitPayload(`Request milestone ${threshold - 1}`, `request-milestone-${threshold - 1}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${firstMilestone - 1}` },
+    payload: unitPayload(`Request milestone ${firstMilestone - 1}`, `request-milestone-${firstMilestone - 1}`),
   });
-  assert.equal(thresholdHit.statusCode, 200);
-  const balanceAfterThresholdHit = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterThresholdHit - balanceBeforeThresholdHit, config.requestMilestoneCreditGrant);
+  assert.equal(firstMilestoneHit.statusCode, 200);
+  const balanceAfterFirstMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterFirstMilestone - balanceBeforeFirstMilestone, 100);
+
+  for (let i = firstMilestone; i < secondMilestone - 1; i += 1) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/requests',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${i}` },
+      payload: unitPayload(`Request milestone ${i}`, `request-milestone-${i}`),
+    });
+    assert.equal(res.statusCode, 200);
+  }
+
+  const balanceBeforeSecondMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceBeforeSecondMilestone, balanceAfterFirstMilestone);
+
+  const secondMilestoneHit = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${secondMilestone - 1}` },
+    payload: unitPayload(`Request milestone ${secondMilestone - 1}`, `request-milestone-${secondMilestone - 1}`),
+  });
+  assert.equal(secondMilestoneHit.statusCode, 200);
+  const balanceAfterSecondMilestone = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterSecondMilestone - balanceBeforeSecondMilestone, 100);
+  assert.equal(balanceAfterSecondMilestone - balanceBefore, 200);
 
   const postThreshold = await app.inject({
     method: 'POST',
     url: '/v1/requests',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${threshold}` },
-    payload: unitPayload(`Request milestone ${threshold}`, `request-milestone-${threshold}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `request-milestone-${secondMilestone}` },
+    payload: unitPayload(`Request milestone ${secondMilestone}`, `request-milestone-${secondMilestone}`),
   });
   assert.equal(postThreshold.statusCode, 200);
   const balanceAfterPostThreshold = await repo.creditBalance(nodeId);
-  assert.equal(balanceAfterPostThreshold, balanceAfterThresholdHit);
+  assert.equal(balanceAfterPostThreshold, balanceAfterSecondMilestone);
 
   const grantRows = await query(
-    "select count(*)::text as c from credit_ledger where node_id=$1 and type='grant_milestone_requests'",
+    "select count(*)::text as c, coalesce(sum(amount),0)::text as s from credit_ledger where node_id=$1 and type='grant_milestone_requests'",
     [nodeId],
   );
-  assert.equal(Number(grantRows[0].c), 1);
+  assert.equal(Number(grantRows[0].c), 2);
+  assert.equal(Number(grantRows[0].s), 200);
   await app.close();
 });
 
@@ -5710,4 +6184,3 @@ test('MCP rate limit triggers 429 after threshold', async () => {
   });
   await app.close();
 });
-

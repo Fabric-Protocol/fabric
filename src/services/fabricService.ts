@@ -364,7 +364,6 @@ export const fabricService = {
     const created = await repo.createUnitWithUploadTrial(nodeId, payload, {
       threshold: config.uploadTrialThreshold,
       trialDays: config.uploadTrialDurationDays,
-      trialCreditGrant: config.uploadTrialCreditGrant,
     });
     return {
       unit: {
@@ -382,7 +381,10 @@ export const fabricService = {
   patchUnit(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('units', nodeId, id, version, payload); },
   deleteUnit(nodeId: string, id: string) { return repo.deleteResource('units', nodeId, id); },
   async createRequest(nodeId: string, payload: any) {
-    const request = await repo.createResource('requests', nodeId, payload);
+    const request = await repo.createResource('requests', nodeId, {
+      ...payload,
+      expires_at: requestExpiresAtIso(payload.ttl_minutes),
+    });
     await repo.grantRequestMilestoneIfEligible(nodeId, {
       threshold: config.requestMilestoneThreshold,
       creditGrant: config.requestMilestoneCreditGrant,
@@ -391,14 +393,20 @@ export const fabricService = {
   },
   listRequests(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('requests', nodeId, limit, cursor); },
   getRequest(nodeId: string, id: string) { return repo.getResource('requests', nodeId, id); },
-  patchRequest(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('requests', nodeId, id, version, payload); },
+  patchRequest(nodeId: string, id: string, version: number, payload: any) {
+    const nextPayload = { ...payload };
+    if (payload.ttl_minutes !== undefined) nextPayload.expires_at = requestExpiresAtIso(payload.ttl_minutes);
+    return repo.patchResource('requests', nodeId, id, version, nextPayload);
+  },
   deleteRequest(nodeId: string, id: string) { return repo.deleteResource('requests', nodeId, id); },
   async publish(kind: 'units' | 'requests', nodeId: string, id: string) {
+    if (kind === 'requests') await repo.expireStaleRequests();
     const me = await repo.getMe(nodeId);
     if (!me) return { notFound: true };
     if (me.status !== 'ACTIVE' || me.suspended_at) return { forbidden: true };
     const row = await repo.getResource(kind, nodeId, id);
     if (!row) return { notFound: true };
+    if (kind === 'requests' && new Date(row.expires_at).getTime() <= Date.now()) return { validationError: 'request_expired' };
     const failure = requirePublishFields(row);
     if (failure) return { validationError: failure };
     await repo.setPublished(kind, id, true);
@@ -408,6 +416,7 @@ export const fabricService = {
   },
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
   async search(nodeId: string, kind: 'listings' | 'requests', body: any, idemKey: string) {
+    if (kind === 'requests') await repo.expireStaleRequests();
     const targetResolution = await resolveSearchTargetNode(body.target ?? null);
     if (targetResolution.validationError) return { validationError: targetResolution.validationError };
     const targetNodeId = targetResolution.targetNodeId;
@@ -526,6 +535,7 @@ export const fabricService = {
     };
   },
   async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', limit: number, cursor: string | null) {
+    if (kind === 'requests') await repo.expireStaleRequests();
     const cost = config.searchCreditCost;
     const balance = await repo.creditBalance(nodeId);
     if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
@@ -544,6 +554,7 @@ export const fabricService = {
     cursor: string | null,
     creditsMax?: number,
   ) {
+    if (kind === 'requests') await repo.expireStaleRequests();
     const { publishedAt, pageIndex } = decodeDrilldownCursor(cursor);
     const cost = drilldownPageCost(pageIndex);
 
@@ -583,6 +594,7 @@ export const fabricService = {
     };
   },
   async nodePublicCategoriesSummary(_nodeId: string, nodeIds: string[], kind: 'listings' | 'requests' | 'both') {
+    if (kind === 'requests' || kind === 'both') await repo.expireStaleRequests();
     const rows = await repo.listNodeCategorySummary(nodeIds, kind);
     const summaries: Record<string, { listings?: Array<{ category_id: number; count: number }>; requests?: Array<{ category_id: number; count: number }> }> = {};
     for (const nid of nodeIds) {
@@ -639,6 +651,7 @@ export async function offerSummary(offer: any) {
     unheld_unit_ids: hold.unheld_unit_ids,
     hold_status: hold.hold_status,
     hold_expires_at: hold.hold_expires_at,
+    expires_at: offer.expires_at,
     created_at: offer.created_at,
     updated_at: offer.updated_at,
     version: offer.row_version,
@@ -646,7 +659,24 @@ export async function offerSummary(offer: any) {
   };
 }
 
-(fabricService as any).createOffer = async (nodeId: string, unitIds: string[], threadId: string | null, note: string | null) => {
+const OFFER_TTL_MINUTES_DEFAULT = 48 * 60;
+const OFFER_TTL_MINUTES_MIN = 15;
+const OFFER_TTL_MINUTES_MAX = 7 * 24 * 60;
+const REQUEST_TTL_MINUTES_DEFAULT = 7 * 24 * 60;
+const REQUEST_TTL_MINUTES_MIN = 60;
+const REQUEST_TTL_MINUTES_MAX = 30 * 24 * 60;
+
+const PREPURCHASE_DAILY_OFFER_CREATE_LIMIT = 3;
+const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
+
+(fabricService as any).createOffer = async (
+  nodeId: string,
+  unitIds: string[],
+  threadId: string | null,
+  note: string | null,
+  ttlMinutes: number | undefined,
+  options: { skipPrepurchaseDailyLimit?: boolean } = {},
+) => {
   if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   const owners = await repo.getUnitsOwners(unitIds);
   if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
@@ -654,8 +684,14 @@ export async function offerSummary(offer: any) {
   if (uniqueOwners.size !== 1) return { conflict: 'multiple_owners' };
   const ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
   const toNodeId = owners[0].node_id;
+  if (!options.skipPrepurchaseDailyLimit) {
+    const prepurchaseDailyLimit = await prePurchaseOfferCreateLimit(nodeId);
+    if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
+  }
   const th = threadId ?? crypto.randomUUID();
-  const offer = await repo.createOffer(nodeId, toNodeId, unitIds[0], th, note);
+  const offerExpiresAt = offerExpiresAtIso(ttlMinutes);
+  const offer = await repo.createOffer(nodeId, toNodeId, unitIds[0], th, note, offerExpiresAt);
+  const offerExpiresAtIsoValue = toIsoString(offer.expires_at) ?? offerExpiresAt;
   const held: string[] = [];
   const unheld: string[] = [];
   for (const unitId of unitIds) {
@@ -667,7 +703,7 @@ export async function offerSummary(offer: any) {
     }
     if (await repo.activeHeld(unitId)) unheld.push(unitId);
     else {
-      await repo.createHold(offer.id, unitId);
+      await repo.createHold(offer.id, unitId, offerExpiresAtIsoValue);
       held.push(unitId);
     }
   }
@@ -685,12 +721,20 @@ export async function offerSummary(offer: any) {
   return { offer: sum };
 };
 
-(fabricService as any).counterOffer = async (nodeId: string, offerId: string, unitIds: string[], note: string | null) => {
+(fabricService as any).counterOffer = async (
+  nodeId: string,
+  offerId: string,
+  unitIds: string[],
+  note: string | null,
+  ttlMinutes: number | undefined,
+) => {
   if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
   if (![prior.from_node_id, prior.to_node_id].includes(nodeId)) return { notFound: true };
+  const prepurchaseDailyLimit = await prePurchaseOfferCreateLimit(nodeId);
+  if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
   await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
   await repo.releaseHolds(prior.id);
   await emitOfferLifecycleEvents({
@@ -701,7 +745,7 @@ export async function offerSummary(offer: any) {
     toNodeId: prior.to_node_id,
     payload: { status: 'countered', thread_id: prior.thread_id },
   });
-  const next = await (fabricService as any).createOffer(nodeId, unitIds, prior.thread_id, note);
+  const next = await (fabricService as any).createOffer(nodeId, unitIds, prior.thread_id, note, ttlMinutes, { skipPrepurchaseDailyLimit: true });
   return next;
 };
 
@@ -711,11 +755,13 @@ export async function offerSummary(offer: any) {
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
+  if (offer.status !== 'pending' && offer.status !== 'accepted_by_a' && offer.status !== 'accepted_by_b') return { conflict: true };
+  const prepurchaseDailyLimit = await prePurchaseOfferAcceptLimit(nodeId);
+  if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
   if (offer.to_node_id === nodeId) {
-    const holdLock = await ensureSellerOwnedHolds(offerId, nodeId);
+    const holdLock = await ensureSellerOwnedHolds(offerId, nodeId, toIsoString(offer.expires_at) ?? offerExpiresAtIso(undefined));
     if (!holdLock.ok) return { conflict: true };
   }
-  if (offer.status !== 'pending' && offer.status !== 'accepted_by_a' && offer.status !== 'accepted_by_b') return { conflict: true };
   const byFrom = offer.from_node_id === nodeId;
   if (byFrom) {
     if (offer.accepted_by_to_at) {
@@ -905,7 +951,7 @@ function creditPackQuoteByCode(packCode: string | null | undefined) {
   return creditPackQuotes().find((pack) => pack.pack_code === normalized) ?? null;
 }
 
-async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
+async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string, offerExpiresAt: string) {
   const lines = await repo.getOfferLines(offerId);
   if (lines.length === 0) return { ok: true };
   const unitIds = lines.map((line) => line.unit_id);
@@ -916,7 +962,7 @@ async function ensureSellerOwnedHolds(offerId: string, sellerNodeId: string) {
       return { ok: false };
     }
     if (await repo.activeHeld(unitId)) continue;
-    await repo.createHold(offerId, unitId);
+    await repo.createHold(offerId, unitId, offerExpiresAt);
   }
   return { ok: true };
 }
@@ -2017,10 +2063,64 @@ function normalizeMessagingHandles(raw: unknown): Array<{ kind: string; handle: 
   return out;
 }
 
+function toIsoString(value: unknown) {
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string' && value.length > 0) return value;
+  return null;
+}
+
+function resolveOfferTtlMinutes(ttlMinutes: unknown) {
+  const parsed = Number(ttlMinutes);
+  if (!Number.isInteger(parsed)) return OFFER_TTL_MINUTES_DEFAULT;
+  if (parsed < OFFER_TTL_MINUTES_MIN || parsed > OFFER_TTL_MINUTES_MAX) return OFFER_TTL_MINUTES_DEFAULT;
+  return parsed;
+}
+
+function resolveRequestTtlMinutes(ttlMinutes: unknown) {
+  const parsed = Number(ttlMinutes);
+  if (!Number.isInteger(parsed)) return REQUEST_TTL_MINUTES_DEFAULT;
+  if (parsed < REQUEST_TTL_MINUTES_MIN || parsed > REQUEST_TTL_MINUTES_MAX) return REQUEST_TTL_MINUTES_DEFAULT;
+  return parsed;
+}
+
+function offerExpiresAtIso(ttlMinutes: unknown) {
+  const ttl = resolveOfferTtlMinutes(ttlMinutes);
+  return new Date(Date.now() + ttl * 60_000).toISOString();
+}
+
+function requestExpiresAtIso(ttlMinutes: unknown) {
+  const ttl = resolveRequestTtlMinutes(ttlMinutes);
+  return new Date(Date.now() + ttl * 60_000).toISOString();
+}
+
 async function hasCurrentLegalAssent(nodeId: string) {
   const me = await repo.getMe(nodeId);
   if (!me) return false;
   return Boolean(me.legal_accepted_at) && String(me.legal_version ?? '') === config.requiredLegalVersion;
+}
+
+async function prePurchaseOfferCreateLimit(nodeId: string) {
+  const usage = await repo.getPrepurchaseOfferCreateUsage(nodeId);
+  if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_OFFER_CREATE_LIMIT) return null;
+  return {
+    action: 'offer_create',
+    window: 'utc_day',
+    limit: PREPURCHASE_DAILY_OFFER_CREATE_LIMIT,
+    used: usage.usageToday,
+    until: 'first_purchase',
+  };
+}
+
+async function prePurchaseOfferAcceptLimit(nodeId: string) {
+  const usage = await repo.getPrepurchaseOfferAcceptUsage(nodeId);
+  if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT) return null;
+  return {
+    action: 'offer_accept',
+    window: 'utc_day',
+    limit: PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT,
+    used: usage.usageToday,
+    until: 'first_purchase',
+  };
 }
 
 function encodeEventCursor(createdAt: unknown, id: unknown): string | null {

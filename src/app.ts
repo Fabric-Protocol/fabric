@@ -29,6 +29,10 @@ const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
 const searchBroadQueryState = new Map<string, number[]>();
 const SEARCH_CURSOR_PREFIX = 'pg1:';
 const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
+const OFFER_TTL_MINUTES_MIN = 15;
+const OFFER_TTL_MINUTES_MAX = 10080;
+const REQUEST_TTL_MINUTES_MIN = 60;
+const REQUEST_TTL_MINUTES_MAX = 43200;
 
 const CONTACT_EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
 const CONTACT_PHONE_RE = /(?:\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
@@ -44,6 +48,10 @@ function detectContactInfo(data: Record<string, unknown>): string | null {
     if (CONTACT_HANDLE_RE.test(val)) return field;
   }
   return null;
+}
+
+function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
+  return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
 
 const resourceSchema = z.object({
@@ -613,7 +621,7 @@ REQUEST=$(curl -sS -X POST "$BASE/v1/requests" \\
   -H "Authorization: ApiKey $API_KEY" \\
   -H "Idempotency-Key: $REQ_IDEM" \\
   -H "Content-Type: application/json" \\
-  -d '{"title":"Need an example unit","description":"Quickstart request","type":"service","desired_quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart"}')
+  -d '{"title":"Need an example unit","description":"Quickstart request","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart","ttl_minutes":10080}')
 REQUEST_ID=$(printf '%s' "$REQUEST" | jq -r '.request.id')</code></pre>
 
     <pre><code>SEARCH_IDEM=$(uuidgen)
@@ -629,8 +637,17 @@ OFFER=$(curl -sS -X POST "$BASE/v1/offers" \\
   -H "Authorization: ApiKey $API_KEY" \\
   -H "Idempotency-Key: $OFFER_IDEM" \\
   -H "Content-Type: application/json" \\
-  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"thread_id\":null,\"note\":\"Initial offer\"}")
+  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"thread_id\":null,\"note\":\"Initial offer\",\"ttl_minutes\":120}")
 OFFER_ID=$(printf '%s' "$OFFER" | jq -r '.offer.id')</code></pre>
+
+    <pre><code># Counter-offer with explicit TTL override
+COUNTERPARTY_API_KEY="ApiKey from counterparty node"
+COUNTER_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/counter" \\
+  -H "Authorization: ApiKey $COUNTERPARTY_API_KEY" \\
+  -H "Idempotency-Key: $COUNTER_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"note\":\"Counter terms\",\"ttl_minutes\":240}"</code></pre>
 
     <pre><code># Use recipient node API key for offer decisions:
 RECIPIENT_API_KEY="ApiKey from counterparty node"
@@ -648,6 +665,13 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reject" \\
   -H "Content-Type: application/json" \\
   -d '{}'
 
+CANCEL_IDEM=$(uuidgen)
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/cancel" \\
+  -H "Authorization: ApiKey $API_KEY" \\
+  -H "Idempotency-Key: $CANCEL_IDEM" \\
+  -H "Content-Type: application/json" \\
+  -d '{}'
+
 REVEAL_IDEM=$(uuidgen)
 curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
   -H "Authorization: ApiKey $API_KEY" \\
@@ -660,6 +684,15 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
       <li>On timeout/5xx, retry with the same <code>Idempotency-Key</code> and identical payload.</li>
       <li>If payload changes, generate a new idempotency key.</li>
       <li>On 429, back off and retry after the advised window.</li>
+    </ul>
+
+    <h2>Time Limits (Agent-overridable)</h2>
+    <ul>
+      <li><strong>Offer/counter TTL:</strong> send optional <code>ttl_minutes</code>; default <code>2880</code> (48h), bounds <code>15..10080</code>.</li>
+      <li><strong>Request TTL:</strong> send optional <code>ttl_minutes</code> on create/patch; default <code>10080</code> (7d), bounds <code>60..43200</code>.</li>
+      <li><strong>Server-computed expiry:</strong> <code>expires_at</code> is computed/returned by server (not caller-editable directly).</li>
+      <li><strong>Hold expiry linkage:</strong> <code>hold.expires_at</code> always equals the offer <code>expires_at</code>.</li>
+      <li><strong>Reason:</strong> agents live faster than human workflows, so bounded TTL overrides let agents tune negotiation timing while preserving abuse controls.</li>
     </ul>
 
     <h2>Offer Eventing (Webhook + Polling)</h2>
@@ -696,12 +729,14 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
     <ul>
       <li><strong>Privacy-by-default:</strong> canonical objects are private; public projections use an allowlist of fields (no contact info, no precise geo).</li>
       <li><strong>Contact reveal requires mutual acceptance:</strong> <code>POST /v1/offers/{offer_id}/reveal-contact</code> returns contact data only when offer status is <code>mutually_accepted</code> and caller is a party.</li>
-      <li><strong>No contact info in descriptions/notes:</strong> Unit and Request text fields (<code>title</code>, <code>description</code>, <code>scope_notes</code>, <code>public_summary</code>) are validated at create and update time. Emails, phone numbers, and labeled messaging handles are rejected with <code>422 content_contact_info_disallowed</code>. Repeated or egregious violations may result in takedown (<code>POST /v1/admin/takedown</code>) and/or suspension.</li>
+      <li><strong>Contact info is banned everywhere except reveal-contact fields:</strong> Unit and Request text fields (<code>title</code>, <code>description</code>, <code>scope_notes</code>, <code>public_summary</code>) are validated at create and update time. Emails, phone numbers, and labeled messaging handles are rejected with <code>422 content_contact_info_disallowed</code>. Contact fields are only returned by <code>POST /v1/offers/{offer_id}/reveal-contact</code> after mutual acceptance. This prevents bypassing platform dealflow/economics and reduces scraping/harvesting risk.</li>
       <li><strong>Suspension/revocation:</strong> suspended nodes receive <code>403 forbidden</code> on all authenticated endpoints.</li>
-      <li><strong>Rate limits:</strong> per-IP, per-node, and per-endpoint limits with <code>429</code> responses.</li>
+      <li><strong>Anti-abuse controls:</strong> per-IP, per-node, and per-endpoint limits with <code>429</code> responses.</li>
+      <li><strong>Idempotency + concurrency:</strong> non-GET writes require <code>Idempotency-Key</code>; PATCH uses <code>If-Match</code> optimistic concurrency.</li>
       <li><strong>Search log redaction:</strong> raw queries are not stored; retention windows apply (hot/archive/delete).</li>
-      <li><strong>Webhook signing:</strong> optional HMAC-SHA256 via <code>event_webhook_secret</code>; rotation is immediate.</li>
+      <li><strong>Webhook delivery + signing:</strong> delivery is at-least-once; optional HMAC-SHA256 via <code>event_webhook_secret</code>; rotation is immediate.</li>
       <li><strong>Recovery:</strong> challenges are TTL-bound and attempt-limited; success revokes all prior keys.</li>
+      <li><strong>Platform role:</strong> Fabric is data+matching + contact-reveal + audit trail; fulfillment and settlement are off-platform between counterparties.</li>
     </ul>
     <p>Machine-readable trust rules are available in <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code>.</p>
 
@@ -721,8 +756,14 @@ PAGE2=$(curl -sS "$BASE/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey
       <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
       <li>Search includes a budget contract: send <code>budget.credits_max</code>; server returns 402 <code>budget_cap_exceeded</code> if computed cost exceeds this cap.</li>
       <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
+      <li>Payment can be currency or swap; <code>unit</code> stays intentionally open-ended so either model can be negotiated.</li>
+      <li>Pre-purchase daily limits apply until first purchase: max 3 offer creates/day and max 1 offer accept/day.</li>
+      <li>On the second acceptance that finalizes <code>mutually_accepted</code>, each side is charged the configured deal acceptance fee (currently 1 credit per side).</li>
+      <li>Mutual acceptance auto-completes by unpublishing/removing all involved units from public listings/search.</li>
+      <li>Use <code>POST /v1/offers/{offer_id}/cancel</code> when the offer creator needs to withdraw before mutual acceptance.</li>
+      <li>Expired requests are excluded from public request projections/search; private history remains queryable.</li>
       <li>Delivery/Transport example: publish with <code>scope_primary=ship_to</code>, then run a targeted follow-up search with a small budget.</li>
-      <li>Anti-scrape policy: deep pagination is intentionally costly/restricted; use target + category drilldown for second-order exploration.</li>
+      <li>Pagination costs are intentional anti-scraper / bad-actor defenses; deep pagination is costly/restricted, so use target + category drilldown for second-order exploration.</li>
       <li>If you need missing categories, submit suggestions through <code>/support</code>.</li>
       <li>Default page limit is 20 unless an endpoint accepts a custom limit.</li>
       <li>Search retention windows: hot up to 30 days, archive-eligible up to 365 days, then deletion-eligible.</li>
@@ -1574,8 +1615,15 @@ export function buildApp() {
   });
 
   app.post('/v1/requests', async (req, reply) => {
-    const parsed = resourceSchema.extend({ need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional() }).safeParse(req.body);
+    const parsed = resourceSchema.extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, REQUEST_TTL_MINUTES_MIN, REQUEST_TTL_MINUTES_MAX)) {
+      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
+        reason: 'ttl_minutes_out_of_range',
+        min_ttl_minutes: REQUEST_TTL_MINUTES_MIN,
+        max_ttl_minutes: REQUEST_TTL_MINUTES_MAX,
+      }));
+    }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     return fabricService.createRequest((req as AuthedRequest).nodeId!, parsed.data);
@@ -1593,8 +1641,15 @@ export function buildApp() {
   app.patch('/v1/requests/:request_id', async (req, reply) => {
     const ifMatch = req.headers['if-match'];
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
-    const parsed = resourceSchema.partial().safeParse(req.body);
+    const parsed = resourceSchema.partial().extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, REQUEST_TTL_MINUTES_MIN, REQUEST_TTL_MINUTES_MAX)) {
+      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
+        reason: 'ttl_minutes_out_of_range',
+        min_ttl_minutes: REQUEST_TTL_MINUTES_MIN,
+        max_ttl_minutes: REQUEST_TTL_MINUTES_MAX,
+      }));
+    }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
     const item = await fabricService.patchRequest((req as AuthedRequest).nodeId!, (req.params as any).request_id, Number(ifMatch), parsed.data);
@@ -1770,25 +1825,42 @@ export function buildApp() {
     return out;
   });
   app.post('/v1/offers', async (req, reply) => {
-    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable(), note: z.string().nullable() }).safeParse(req.body);
+    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable(), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note);
+    if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, OFFER_TTL_MINUTES_MIN, OFFER_TTL_MINUTES_MAX)) {
+      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
+        reason: 'ttl_minutes_out_of_range',
+        min_ttl_minutes: OFFER_TTL_MINUTES_MIN,
+        max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
+      }));
+    }
+    const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note, parsed.data.ttl_minutes);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/counter', async (req, reply) => {
-    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), note: z.string().nullable() }).safeParse(req.body);
+    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
-    const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note);
+    if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, OFFER_TTL_MINUTES_MIN, OFFER_TTL_MINUTES_MAX)) {
+      return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
+        reason: 'ttl_minutes_out_of_range',
+        min_ttl_minutes: OFFER_TTL_MINUTES_MIN,
+        max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
+      }));
+    }
+    const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note, parsed.data.ttl_minutes);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     return out;
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
     const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', out.creditsExhausted));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
@@ -1993,8 +2065,8 @@ export function buildApp() {
     if (kind === 'all' || kind === 'requests') {
       await query('truncate table public_requests');
       await query(`insert into public_requests(request_id,node_id,doc,published_at)
-        select r.id,r.node_id,jsonb_build_object('id',r.id,'node_id',r.node_id,'scope_primary',r.scope_primary,'scope_secondary',r.scope_secondary,'title',r.title,'description',r.description,'public_summary',r.public_summary,'desired_quantity',r.desired_quantity,'measure',r.measure,'custom_measure',r.custom_measure,'category_ids',r.category_ids,'tags',r.tags,'type',r.type,'condition',r.condition,'location_text_public',r.location_text_public,'origin_region',r.origin_region,'dest_region',r.dest_region,'service_region',r.service_region,'delivery_format',r.delivery_format,'max_ship_days',r.max_ship_days,'need_by',r.need_by,'accept_substitutions',r.accept_substitutions,'published_at',r.published_at,'updated_at',r.updated_at),r.published_at
-        from requests r join nodes n on n.id=r.node_id where r.published_at is not null and r.deleted_at is null and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='request' and t.target_id=r.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=r.node_id and t.reversed_at is null)`);
+        select r.id,r.node_id,jsonb_build_object('id',r.id,'node_id',r.node_id,'scope_primary',r.scope_primary,'scope_secondary',r.scope_secondary,'title',r.title,'description',r.description,'public_summary',r.public_summary,'desired_quantity',r.desired_quantity,'measure',r.measure,'custom_measure',r.custom_measure,'category_ids',r.category_ids,'tags',r.tags,'type',r.type,'condition',r.condition,'location_text_public',r.location_text_public,'origin_region',r.origin_region,'dest_region',r.dest_region,'service_region',r.service_region,'delivery_format',r.delivery_format,'max_ship_days',r.max_ship_days,'need_by',r.need_by,'accept_substitutions',r.accept_substitutions,'expires_at',r.expires_at,'published_at',r.published_at,'updated_at',r.updated_at),r.published_at
+        from requests r join nodes n on n.id=r.node_id where r.published_at is not null and r.deleted_at is null and r.expires_at > now() and n.status='ACTIVE' and n.suspended_at is null and n.deleted_at is null and not exists (select 1 from takedowns t where t.target_type='request' and t.target_id=r.id and t.reversed_at is null) and not exists (select 1 from takedowns t where t.target_type='node' and t.target_id=r.node_id and t.reversed_at is null)`);
     }
     const listingsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_listings'))[0].c);
     const requestsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_requests'))[0].c);
@@ -2007,4 +2079,3 @@ export function buildApp() {
 
   return app;
 }
-
