@@ -878,6 +878,36 @@ Decision:
 Open decision:
 - Whether `package-lock.json` is committed as policy (recommended) vs kept untracked.
 
+## 2026-02-25 — Go-live readiness checklist and deployment status
+
+### Completed by agent:
+- All code committed and pushed to `feat/offer-eventing` (225/225 tests pass)
+- Both SQL migrations applied to production Supabase (`crypto_payments` table, `offer_events` nullable `offer_id` + new event types)
+- 6 secrets in GCP Secret Manager: `DATABASE_URL`, `ADMIN_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `NOWPAYMENTS_API_KEY`, `NOWPAYMENTS_IPN_SECRET` + `DATABASE_SSL_CA` (pre-existing)
+- Latest image deployed to Cloud Run (rev `fabric-api-00079-mlc`), service live at `https://fabric-api-2x2ettafia-uw.a.run.app`
+- 3 Cloud Scheduler jobs created: `fabric-projections-rebuild` (30min), `fabric-sweep` (5min), `fabric-retention` (daily 03:00 UTC)
+- Service confirmed responding: `/v1/meta` 200, `/v1/categories` 200, DB connected
+
+### Still needs doing by agent:
+- (#6) Bootstrap-to-reveal happy-path test against live URL (was blocked by bootstrap rate limit cooldown)
+- (#7) Set up daily alerting (Cloud Scheduler → daily-metrics → email/Slack)
+- (#8) Verify `/support` page has real contact info
+- (#9) Test 402 credits-exhausted from agent perspective
+- (#10) Review `/legal/*` pages for completeness
+
+### Human-only items:
+- (#1) Set `--min-instances=1` on Cloud Run (one command: `gcloud run services update fabric-api --min-instances=1 --region us-west1 --project fabric-487608`)
+- (#2) Point Stripe dashboard webhook URL to `https://fabric-api-2x2ettafia-uw.a.run.app/v1/webhooks/stripe` (agent cannot access Stripe dashboard)
+- (#3) Verify NOWPayments Polygon wallet receives correctly (send $1 USDC on Polygon to yourself)
+- (#5) End-to-end Stripe payment flow (go through checkout.stripe.com, confirm credits appear)
+
+### Day-one risk awareness:
+- Rate limits are per-instance in-memory — 2+ Cloud Run instances means 2x effective limits
+- No alerting yet — operational blindness is the biggest risk
+- No referral clawback mechanism (G4) — self-referral abuse possible with stolen cards
+- NOWPayments default wallet is Base but code tells agents `usdcmatic` (Polygon) — verify config match
+- Legal pages may be placeholder HTML — liability gap if agents accept empty terms
+
 ## (Add future decisions below)
 Template:
 ## YYYY-MM-DD - <Decision title>
