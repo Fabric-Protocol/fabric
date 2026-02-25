@@ -160,7 +160,7 @@ Subscriptions:
 - Pro: $19.99 / 3,000 credits
 - Business: $49.99 / 10,000 credits
 
-Credit Packs (one-time top-ups, worse value than subscriptions):
+Credit Packs (one-time purchases, worse value than subscriptions):
 - 500 credits = $9.99
 - 1,500 credits = $19.99
 - 4,500 credits = $49.99

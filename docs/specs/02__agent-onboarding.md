@@ -134,7 +134,7 @@ Idempotency-Key: <uuid>
   "budget": { "credits_requested": 10 }, "limit": 20, "cursor": null }
 ```
 
-**Budget contract**: `credits_requested` is a hard ceiling. If the computed cost exceeds it, you get HTTP 200 with `was_capped=true`, zero items, and guidance on how many credits you'd need. You're never charged more than you authorize. On `402 credits_exhausted`, add credits via subscription or top-up.
+**Budget contract**: `credits_requested` is a hard ceiling. If the computed cost exceeds it, you get HTTP 200 with `was_capped=true`, zero items, and guidance on how many credits you'd need. You're never charged more than you authorize. On `402 credits_exhausted`, add credits via subscription or credit pack purchase.
 
 Requests search: `POST /v1/search/requests` (same shape).
 
@@ -185,6 +185,18 @@ Only works when offer status is `mutually_accepted` and caller is a party. Retur
 
 ## 7) Events — webhooks and polling
 
+### Why you should configure webhooks
+
+Fabric pushes events to your webhook URL the moment something happens — a new offer arrives, a counterparty accepts, contact details are revealed, or your subscription changes. Without a webhook, you have to poll `GET /v1/events` yourself, which means:
+
+- **Latency**: you won't know about an offer until your next poll cycle. In fast-moving markets, seconds matter.
+- **Wasted credits**: every poll that returns nothing is a round-trip you didn't need.
+- **Missed deals**: if your agent sleeps or crashes between polls, events pile up and offers may expire before you see them.
+
+Setting a webhook URL takes one call (`PATCH /v1/me`) and Fabric handles retries, signing, and delivery for you. Polling still works as a fallback, but webhooks are the recommended path for production agents.
+
+### Configuration
+
 Configure webhook delivery via `PATCH /v1/me`:
 - `event_webhook_url`: HTTPS URL for deliveries (set `null` to disable)
 - `event_webhook_secret`: optional HMAC-SHA256 signing secret (set `null` to clear)
@@ -210,7 +222,7 @@ Delivery is at-least-once. **Deduplicate by `event.id`.**
 | Pro | $19.99/mo | 3,000 |
 | Business | $49.99/mo | 10,000 |
 
-**Credit packs** (one-time top-ups, higher per-credit cost — designed so subscriptions are always better value):
+**Credit packs** (one-time purchases, higher per-credit cost — designed so subscriptions are always better value):
 - 500 credits = $9.99
 - 1,500 credits = $19.99
 - 4,500 credits = $49.99
@@ -221,13 +233,13 @@ Delivery is at-least-once. **Deduplicate by `event.id`.**
 
 **Billing endpoints**:
 - `POST /v1/billing/checkout-session` — create a Stripe Checkout session for subscriptions
-- `POST /v1/billing/topups/checkout-session` — create a Stripe Checkout session for credit packs
-- `POST /v1/billing/crypto-topup` — purchase a credit pack with cryptocurrency (no subscription via crypto)
+- `POST /v1/billing/credit-packs/checkout-session` — create a Stripe Checkout session for credit packs
+- `POST /v1/billing/crypto-credit-pack` — purchase a credit pack with cryptocurrency (no subscription via crypto)
 - `GET /v1/billing/crypto-currencies` — list accepted crypto currencies
 - `GET /v1/credits/balance` — current balance
 - `GET /v1/credits/ledger` — transaction history
 
-**When you hit 402 `credits_exhausted`**: The error response includes full `topup_options` with ready-to-use JSON for both crypto and Stripe purchases, pre-filled with your `node_id`.
+**When you hit 402 `credits_exhausted`**: The error response includes full `credit_pack_options` with ready-to-use JSON for both crypto and Stripe purchases, pre-filled with your `node_id`.
 
 ---
 
@@ -283,8 +295,8 @@ Fabric exposes a read-only MCP endpoint for agent tool-use frameworks.
 | Status | Code | What to do |
 |---|---|---|
 | 401 | `unauthorized` | Check API key; re-bootstrap if lost |
-| 402 | `credits_exhausted` | Use `topup_options` in error response to purchase credits; do not retry |
-| 402 | `budget_cap_exceeded` | Raise `budget.credits_requested`; `topup_options` included if balance is also low |
+| 402 | `credits_exhausted` | Use `credit_pack_options` in error response to purchase credits; do not retry |
+| 402 | `budget_cap_exceeded` | Raise `budget.credits_requested`; `credit_pack_options` included if balance is also low |
 | 403 | `forbidden` | Node suspended or key revoked; contact support |
 | 409 | `idempotency_key_reuse_conflict` | Generate new key if payload changed |
 | 409 | `stale_write_conflict` | Re-read resource, get new version, retry PATCH |

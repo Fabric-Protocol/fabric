@@ -72,20 +72,20 @@ limit 1;
 | `STRIPE_PRICE_PRO` | Optional alias for `pro` single price id | `price_abc` | `src/config.ts:30`, `src/services/fabricService.ts:446`, `src/services/fabricService.ts:452` |
 | `STRIPE_PRICE_IDS_BUSINESS` | Required if plan `business` is sold (or use `STRIPE_PRICE_BUSINESS`) | `price_abc,price_def` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
 | `STRIPE_PRICE_BUSINESS` | Optional alias for `business` single price id | `price_abc` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
-| `STRIPE_TOPUP_PRICE_500` | Required if `credits_500` top-up is enabled | `price_1T3tJlK3gJAgZl81iZzGyRaj` | `src/config.ts:65` |
-| `STRIPE_TOPUP_PRICE_1500` | Required if `credits_1500` top-up is enabled | `price_1T3tQ2K3gJAgZl81JGlIYaSy` | `src/config.ts:66` |
-| `STRIPE_TOPUP_PRICE_4500` | Required if `credits_4500` top-up is enabled | `price_1T3tKlK3gJAgZl81HBKJ5a8U` | `src/config.ts:67` |
+| `STRIPE_CREDIT_PACK_PRICE_500` | Required if `credits_500` credit pack is enabled | `price_1T3tJlK3gJAgZl81iZzGyRaj` | `src/config.ts:62` |
+| `STRIPE_CREDIT_PACK_PRICE_1500` | Required if `credits_1500` credit pack is enabled | `price_1T3tQ2K3gJAgZl81JGlIYaSy` | `src/config.ts:63` |
+| `STRIPE_CREDIT_PACK_PRICE_4500` | Required if `credits_4500` credit pack is enabled | `price_1T3tKlK3gJAgZl81HBKJ5a8U` | `src/config.ts:64` |
 
-### C) Top-up pack credits + pricing (safe defaults exist)
+### C) Credit pack credits + pricing (safe defaults exist)
 
 | Env var | Required | Default | Notes |
 |---|---|---|---|
-| `TOPUP_PACK_500_CREDITS` | Optional | `500` | Credits granted for `credits_500` pack |
-| `TOPUP_PACK_1500_CREDITS` | Optional | `1500` | Credits granted for `credits_1500` pack |
-| `TOPUP_PACK_4500_CREDITS` | Optional | `4500` | Credits granted for `credits_4500` pack |
-| `TOPUP_PACK_500_PRICE_CENTS` | Optional | `999` | Display price for `credits_500` (used in quotes) |
-| `TOPUP_PACK_1500_PRICE_CENTS` | Optional | `1999` | Display price for `credits_1500` |
-| `TOPUP_PACK_4500_PRICE_CENTS` | Optional | `4999` | Display price for `credits_4500` |
+| `CREDIT_PACK_500_CREDITS` | Optional | `500` | Credits granted for `credits_500` pack |
+| `CREDIT_PACK_1500_CREDITS` | Optional | `1500` | Credits granted for `credits_1500` pack |
+| `CREDIT_PACK_4500_CREDITS` | Optional | `4500` | Credits granted for `credits_4500` pack |
+| `CREDIT_PACK_500_PRICE_CENTS` | Optional | `999` | Display price for `credits_500` (used in quotes) |
+| `CREDIT_PACK_1500_PRICE_CENTS` | Optional | `1999` | Display price for `credits_1500` |
+| `CREDIT_PACK_4500_PRICE_CENTS` | Optional | `4999` | Display price for `credits_4500` |
 
 ### D) Pricing/credits/rate-limit tuning (safe defaults exist)
 
@@ -94,11 +94,11 @@ limit 1;
 | `DEFAULT_RATE_LIMIT_LIMIT` | Optional (default `1000`) | `1000` | `src/config.ts:24`, `src/app.ts:418` |
 | `SEARCH_CREDIT_COST` | Optional (default `5`) | `5` | `src/config.ts:40` |
 | `SIGNUP_GRANT_CREDITS` | Optional (default `100`) | `100` | `src/config.ts:51` |
-| `TOPUP_MAX_GRANTS_PER_DAY` | Optional (default `3`) | `3` | `src/config.ts:42`, `src/services/fabricService.ts:808` |
+| `CREDIT_PACK_MAX_GRANTS_PER_DAY` | Optional (default `3`) | `3` | `src/config.ts:81`, `src/services/fabricService.ts` |
 | `RATE_LIMIT_BOOTSTRAP_PER_HOUR` | Optional (default `3`) | `3` | `src/config.ts:43`, `src/app.ts:252` |
 | `RATE_LIMIT_SEARCH_PER_MINUTE` | Optional (default `20`) | `20` | `src/config.ts:44`, `src/app.ts:253` |
 | `RATE_LIMIT_CREDITS_QUOTE_PER_MINUTE` | Optional (default `60`) | `60` | `src/config.ts:45`, `src/app.ts:254` |
-| `RATE_LIMIT_TOPUP_CHECKOUT_PER_DAY` | Optional (default `10`) | `10` | `src/config.ts:46`, `src/app.ts:255` |
+| `RATE_LIMIT_CREDIT_PACK_CHECKOUT_PER_DAY` | Optional (default `10`) | `10` | `src/config.ts:89`, `src/app.ts` |
 | `RATE_LIMIT_INVENTORY_PER_MINUTE` | Optional (default `6`) | `6` | `src/config.ts:47`, `src/app.ts:256` |
 | `RATE_LIMIT_OFFER_WRITE_PER_MINUTE` | Optional (default `30`) | `30` | `src/config.ts:48`, `src/app.ts:257` |
 | `RATE_LIMIT_OFFER_DECISION_PER_MINUTE` | Optional (default `60`) | `60` | `src/config.ts:49`, `src/app.ts:258` |
@@ -115,9 +115,9 @@ limit 1;
    - `ADMIN_KEY`
    - `STRIPE_SECRET_KEY`
    - `STRIPE_WEBHOOK_SECRET`
-3. Set plain env vars for any plan/top-up price IDs you are enabling:
+3. Set plain env vars for any plan/credit pack price IDs you are enabling:
    - plan prices: `STRIPE_PRICE_*` or `STRIPE_PRICE_IDS_*`
-   - top-up prices: `STRIPE_TOPUP_PRICE_500`, `STRIPE_TOPUP_PRICE_1500`, `STRIPE_TOPUP_PRICE_4500`
+   - credit pack prices: `STRIPE_CREDIT_PACK_PRICE_500`, `STRIPE_CREDIT_PACK_PRICE_1500`, `STRIPE_CREDIT_PACK_PRICE_4500`
 4. Deploy revision and wait for `latestReadyRevisionName` to become ready.
 
 ### 2) Configure Stripe webhook endpoint
@@ -207,7 +207,7 @@ Expected flow:
 |---|---|---|
 | `validation_error` + `stripe_not_configured` | `STRIPE_SECRET_KEY` missing | Set `STRIPE_SECRET_KEY`, redeploy |
 | `validation_error` + `missing_price_mapping` | plan price id missing for requested `plan_code` | Set matching `STRIPE_PRICE_*`/`STRIPE_PRICE_IDS_*`, redeploy |
-| `validation_error` + `missing_topup_price_mapping` | top-up price id missing | Set `STRIPE_TOPUP_PRICE_*`, redeploy |
+| `validation_error` + `missing_credit_pack_price_mapping` | credit pack price id missing | Set `STRIPE_CREDIT_PACK_PRICE_*`, redeploy |
 | webhook 400 + `stripe_signature_invalid` | wrong/missing `STRIPE_WEBHOOK_SECRET` | Set correct endpoint `whsec_...`, redeploy |
 | smoke cannot reach service | wrong URL or Cloud Run ingress/IAM issue | verify `<CLOUD_RUN_URL>`, ensure service is invokable for your caller |
 

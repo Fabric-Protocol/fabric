@@ -113,16 +113,16 @@ Implementation note:
 - Internal storage remains `free|basic|pro|business`.
 
 ## 5) Credit Packs (enabled in MVP)
-- Endpoint: `POST /v1/billing/topups/checkout-session`
+- Endpoint: `POST /v1/billing/credit-packs/checkout-session`
 - Packs:
   - `credits_500`: 500 credits, `$9.99` ("500 Credit Pack")
   - `credits_1500`: 1,500 credits, `$19.99` ("1500 Credit Pack")
   - `credits_4500`: 4,500 credits, `$49.99` ("4500 Credit Pack")
 - Fulfillment:
-  - Webhook grants `topup_purchase` on paid event with `metadata.topup_pack_code`.
+  - Webhook grants `topup_purchase` on paid event with `metadata.pack_code`.
   - Grant idempotency key uses payment reference (`payment_intent` / `invoice`).
 - Anti-abuse:
-  - `TOPUP_MAX_GRANTS_PER_DAY` (default `3`) enforced per node (UTC day).
+  - `CREDIT_PACK_MAX_GRANTS_PER_DAY` (default `3`) enforced per node (UTC day).
   - Over-limit events are acknowledged (`200`) but grant is skipped.
 
 ## 6) Referrals

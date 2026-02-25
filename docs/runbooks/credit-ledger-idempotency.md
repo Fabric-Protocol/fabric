@@ -11,7 +11,7 @@ Credits must never be double-applied for the same billing/payment event.
 ## Recommended key strategy
 - Monthly subscription grant: `invoice:<invoice_id>:monthly`
 - Upgrade/proration difference grant: `invoice:<invoice_id>:upgrade`
-- Top-up grant: `topup:<payment_intent_id>` (fallback: checkout session id)
+- Credit pack grant: `credit_pack:<payment_intent_id>` (fallback: checkout session id)
 
 ## Operational checks
 1. For a target node and invoice id:

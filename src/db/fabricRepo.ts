@@ -1551,7 +1551,7 @@ export async function monthlyCreditGranted(nodeId: string, periodStart: string) 
   return Number(rows[0].c) > 0;
 }
 
-export async function countTopupPurchasesSince(nodeId: string, sinceIso: string) {
+export async function countCreditPackPurchasesSince(nodeId: string, sinceIso: string) {
   const rows = await query<{ c: string }>(
     "select count(*)::text as c from credit_ledger where node_id=$1 and type='topup_purchase' and amount > 0 and created_at >= $2::timestamptz",
     [nodeId, sinceIso],
@@ -1826,6 +1826,76 @@ export async function markCryptoPaymentStatus(nowpaymentsId: number, status: str
     `update crypto_payments set status=$2, actually_paid=coalesce($3, actually_paid), updated_at=now() where nowpayments_id=$1`,
     [nowpaymentsId, status, actuallyPaid],
   );
+}
+
+export async function getHealthPulse(windowMinutes: number = 15) {
+  const windowStart = new Date(Date.now() - (windowMinutes * 60 * 1000)).toISOString();
+
+  const stripeRows = await query<{ received: string; processing_errors: string; oldest_unprocessed_minutes: string }>(
+    `select
+       count(*)::text as received,
+       count(*) filter (where processing_error is not null)::text as processing_errors,
+       coalesce(extract(epoch from (now() - min(received_at))) / 60, 0)::text as oldest_unprocessed_minutes
+     from stripe_events
+     where received_at >= $1::timestamptz and processed_at is null`,
+    [windowStart],
+  );
+
+  const cryptoRows = await query<{ pending: string; failed: string }>(
+    `select
+       count(*) filter (where status='waiting')::text as pending,
+       count(*) filter (where status='failed' or status='expired')::text as failed
+     from crypto_payments
+     where created_at >= $1::timestamptz`,
+    [windowStart],
+  );
+
+  const webhookRows = await query<{ pending_retries: string; oldest_pending_minutes: string; recent_failures: string }>(
+    `select
+       count(*) filter (where ok=false and delivered_at is null and next_retry_at is not null)::text as pending_retries,
+       coalesce(extract(epoch from (now() - min(created_at))) / 60, 0)::text as oldest_pending_minutes,
+       count(*) filter (where ok=false)::text as recent_failures
+     from event_webhook_deliveries
+     where created_at >= $1::timestamptz`,
+    [windowStart],
+  );
+
+  const stripeReceived = Number(stripeRows[0]?.received ?? 0);
+  const stripeErrors = Number(stripeRows[0]?.processing_errors ?? 0);
+  const oldestUnprocessed = Number(stripeRows[0]?.oldest_unprocessed_minutes ?? 0);
+  const cryptoPending = Number(cryptoRows[0]?.pending ?? 0);
+  const cryptoFailed = Number(cryptoRows[0]?.failed ?? 0);
+  const webhookPendingRetries = Number(webhookRows[0]?.pending_retries ?? 0);
+  const oldestPendingWebhook = Number(webhookRows[0]?.oldest_pending_minutes ?? 0);
+  const webhookRecentFailures = Number(webhookRows[0]?.recent_failures ?? 0);
+
+  const alerts: string[] = [];
+  if (stripeErrors > 0) alerts.push(`${stripeErrors} Stripe processing error(s) in last ${windowMinutes}m`);
+  if (oldestUnprocessed > 5) alerts.push(`Oldest unprocessed Stripe event: ${oldestUnprocessed.toFixed(1)}m`);
+  if (cryptoFailed > 0) alerts.push(`${cryptoFailed} failed/expired crypto payment(s) in last ${windowMinutes}m`);
+  if (webhookPendingRetries > 5) alerts.push(`${webhookPendingRetries} webhook deliveries pending retry`);
+  if (oldestPendingWebhook > 10) alerts.push(`Oldest pending webhook: ${oldestPendingWebhook.toFixed(1)}m`);
+
+  return {
+    generated_at: new Date().toISOString(),
+    window_minutes: windowMinutes,
+    status: alerts.length === 0 ? 'healthy' as const : 'degraded' as const,
+    alerts,
+    stripe: {
+      events_received: stripeReceived,
+      processing_errors: stripeErrors,
+      oldest_unprocessed_minutes: Math.round(oldestUnprocessed * 10) / 10,
+    },
+    crypto: {
+      pending_payments: cryptoPending,
+      failed_or_expired: cryptoFailed,
+    },
+    webhooks: {
+      pending_retries: webhookPendingRetries,
+      oldest_pending_minutes: Math.round(oldestPendingWebhook * 10) / 10,
+      recent_failures: webhookRecentFailures,
+    },
+  };
 }
 
 export async function getDailyMetricsSnapshot(windowHours: number = 24) {

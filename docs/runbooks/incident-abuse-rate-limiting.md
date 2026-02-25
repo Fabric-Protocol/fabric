@@ -3,7 +3,7 @@
 ## Trigger examples
 - Sudden request spikes from a node/IP.
 - Repeated `401`/`429`/signature failures with suspicious patterns.
-- Fraud indicators in top-up or subscription transitions.
+- Fraud indicators in credit pack purchase or subscription transitions.
 
 ## Immediate actions
 1. Capture scope:

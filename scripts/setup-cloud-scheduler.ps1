@@ -139,9 +139,41 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[OK] fabric-daily-digest"
 
+# 5) Health pulse — every 10 minutes (checks Stripe, crypto, webhook health; emails only on degraded)
+gcloud scheduler jobs create http fabric-health-pulse `
+  --project $ProjectId `
+  --location $Region `
+  --schedule "*/10 * * * *" `
+  --time-zone "UTC" `
+  --http-method POST `
+  --uri "$ServiceUrl/internal/admin/health-pulse" `
+  --headers "X-Admin-Key=$AdminKey,Content-Type=application/json" `
+  --message-body "{}" `
+  --attempt-deadline 60s `
+  --description "Payment and webhook health check (alerts on degraded)" `
+  --quiet 2>$null
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[WARN] Job 'fabric-health-pulse' may already exist. Updating..."
+  gcloud scheduler jobs update http fabric-health-pulse `
+    --project $ProjectId `
+    --location $Region `
+    --schedule "*/10 * * * *" `
+    --time-zone "UTC" `
+    --http-method POST `
+    --uri "$ServiceUrl/internal/admin/health-pulse" `
+    --update-headers "X-Admin-Key=$AdminKey,Content-Type=application/json" `
+    --message-body "{}" `
+    --attempt-deadline 60s `
+    --description "Payment and webhook health check (alerts on degraded)" `
+    --quiet
+}
+Write-Host "[OK] fabric-health-pulse"
+
 Write-Host ""
-Write-Host "[DONE] All 4 Cloud Scheduler jobs configured."
+Write-Host "[DONE] All 5 Cloud Scheduler jobs configured."
 Write-Host "  - fabric-projections-rebuild (every 30min at :07/:37 America/Los_Angeles)"
 Write-Host "  - fabric-sweep (every 5min UTC)"
 Write-Host "  - fabric-retention (daily 03:00 UTC)"
 Write-Host "  - fabric-daily-digest (daily 06:00 UTC)"
+Write-Host "  - fabric-health-pulse (every 10min UTC)"

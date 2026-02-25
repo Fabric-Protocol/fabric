@@ -1902,8 +1902,8 @@ Errors
 
 422 validation_error
 
-14b) Billing checkout session (credit top-ups)
-POST /v1/billing/topups/checkout-session
+14b) Billing checkout session (credit packs)
+POST /v1/billing/credit-packs/checkout-session
 Auth
 
 Required
@@ -1934,8 +1934,8 @@ Rules / side effects
 - Server resolves Stripe Price ID from configured Credit Pack mapping.
 - Creates Stripe Checkout Session in payment mode and sets:
   - `metadata.node_id`
-  - `metadata.topup_pack_code`
-  - `metadata.topup_credits`
+  - `metadata.pack_code` (legacy: `metadata.topup_pack_code` also accepted)
+  - `metadata.pack_credits` (legacy: `metadata.topup_credits` also accepted)
 
 Response 200
 {
@@ -1996,9 +1996,9 @@ Referral award is capped at 50 paid grants per referrer.
 
 Top-up grants:
 
-- If event payload includes `metadata.topup_pack_code`, grant the configured pack credits as `topup_purchase`.
+- If event payload includes `metadata.pack_code` (or legacy `metadata.topup_pack_code`), grant the configured pack credits as `topup_purchase`.
 - Grant idempotency is keyed by payment reference (`payment_intent` or `invoice`), independent of Stripe `event.id`.
-- Enforce daily velocity limit per node (`TOPUP_MAX_GRANTS_PER_DAY`); over-limit events still return `200` without grant side effects.
+- Enforce daily velocity limit per node (`CREDIT_PACK_MAX_GRANTS_PER_DAY`); over-limit events still return `200` without grant side effects.
 
 Plan-change semantics:
 
@@ -2055,7 +2055,7 @@ Errors
 
 15c) Crypto billing (NOWPayments)
 
-POST /v1/billing/crypto-topup
+POST /v1/billing/crypto-credit-pack
 Auth
 
 Required
@@ -2111,7 +2111,7 @@ None
 
 Purpose
 
-List available NOWPayments crypto currencies that agents can use for top-ups.
+List available NOWPayments crypto currencies that agents can use for credit pack purchases.
 
 Response 200
 { "currencies": ["usdcmatic", "btc", "eth", ...] }

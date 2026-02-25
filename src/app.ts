@@ -87,6 +87,16 @@ function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
 
+const WEBHOOK_NUDGE = 'Set event_webhook_url via PATCH /v1/me to receive real-time notifications instead of polling.';
+
+async function maybeAppendWebhookNudge(nodeId: string, out: Record<string, unknown>): Promise<Record<string, unknown>> {
+  try {
+    const me = await repo.getMe(nodeId);
+    if (!me.event_webhook_url) out.setup_incomplete = { event_webhook_url: WEBHOOK_NUDGE };
+  } catch { /* non-critical */ }
+  return out;
+}
+
 const _hmacCompareKey = crypto.randomBytes(32);
 function safeTimingSafeCompare(provided: string, expected: string): boolean {
   if (!provided || !expected) return false;
@@ -829,6 +839,7 @@ function isNoIdemWriteRoute(req: FastifyRequest) {
   return path === '/v1/public/nodes/categories-summary'
     || path === '/mcp'
     || path.startsWith('/internal/admin/')
+    || path === '/v1/admin/projections/rebuild'
     || /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path);
 }
 
@@ -869,7 +880,7 @@ function purchaseGuidance(nodeId: string) {
   return {
     crypto: {
       description: 'One-time credit pack via cryptocurrency. No subscription available.',
-      endpoint: 'POST /v1/billing/crypto-topup',
+      endpoint: 'POST /v1/billing/crypto-credit-pack',
       example_body: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
       available_packs: packs,
       supported_currencies: 'GET /v1/billing/crypto-currencies returns the full list of accepted pay_currency values',
@@ -877,7 +888,7 @@ function purchaseGuidance(nodeId: string) {
     stripe: {
       description: 'Credit card payment. Supports one-time credit packs and recurring subscriptions with monthly credit grants.',
       credit_packs: {
-        endpoint: 'POST /v1/billing/topups/checkout-session',
+        endpoint: 'POST /v1/billing/credit-packs/checkout-session',
         example_body: { node_id: nodeId, pack_code: 'credits_500', success_url: 'https://your-app.example/success', cancel_url: 'https://your-app.example/cancel' },
         available_packs: packs,
       },
@@ -899,10 +910,10 @@ function creditsExhaustedEnvelope(nodeId: string, exhaustedDetails: Record<strin
   return {
     error: {
       code: 'credits_exhausted',
-      message: 'Not enough credits. Top up via crypto or Stripe.',
+      message: 'Not enough credits. Purchase a credit pack via crypto or Stripe.',
       details: {
         ...exhaustedDetails,
-        topup_options: purchaseGuidance(nodeId),
+        credit_pack_options: purchaseGuidance(nodeId),
       },
     },
   };
@@ -1005,8 +1016,8 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/public/nodes/categories-summary') return { name: 'categories_summary', limit: config.rateLimitCategoriesSummaryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
-  if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
-  if (method === 'POST' && path === '/v1/billing/crypto-topup') return { name: 'crypto_topup', limit: config.rateLimitCryptoTopupPerDay, windowSeconds: 86400, subject: 'node' };
+  if (method === 'POST' && path === '/v1/billing/credit-packs/checkout-session') return { name: 'credit_pack_checkout', limit: config.rateLimitCreditPackCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
+  if (method === 'POST' && path === '/v1/billing/crypto-credit-pack') return { name: 'crypto_credit_pack', limit: config.rateLimitCryptoCreditPackPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
@@ -1701,7 +1712,7 @@ export function buildApp() {
     }
     return out;
   });
-  app.post('/v1/billing/topups/checkout-session', async (req, reply) => {
+  app.post('/v1/billing/credit-packs/checkout-session', async (req, reply) => {
     const parsed = z.object({
       node_id: z.string().uuid(),
       pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
@@ -1712,7 +1723,7 @@ export function buildApp() {
     if (!isAllowedCheckoutRedirectUrl(parsed.data.success_url) || !isAllowedCheckoutRedirectUrl(parsed.data.cancel_url)) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Redirect URL not allowed', { reason: 'redirect_url_not_allowed' }));
     }
-    const out = await fabricService.createTopupCheckoutSession(
+    const out = await fabricService.createCreditPackCheckoutSession(
       (req as AuthedRequest).nodeId!,
       parsed.data,
       (req as AuthedRequest).idem?.key ?? null,
@@ -1727,7 +1738,7 @@ export function buildApp() {
           {
             reason: 'stripe_not_configured',
             missing: missing ?? [],
-            endpoint: '/v1/billing/topups/checkout-session',
+            endpoint: '/v1/billing/credit-packs/checkout-session',
           },
           'Stripe checkout blocked by configuration',
         );
@@ -1741,7 +1752,7 @@ export function buildApp() {
     }
     return out;
   });
-  app.post('/v1/billing/crypto-topup', async (req, reply) => {
+  app.post('/v1/billing/crypto-credit-pack', async (req, reply) => {
     const parsed = z.object({
       node_id: z.string().uuid(),
       pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
@@ -1749,10 +1760,10 @@ export function buildApp() {
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
     if (parsed.data.node_id !== (req as AuthedRequest).nodeId) {
-      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create crypto top-up for another node'));
+      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create crypto credit pack purchase for another node'));
     }
-    if (!config.cryptoTopupEnabled) {
-      return reply.status(422).send(errorEnvelope('validation_error', 'Crypto top-up is not enabled', { reason: 'crypto_topup_disabled' }));
+    if (!config.cryptoCreditPackEnabled) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Crypto credit pack purchases are not enabled', { reason: 'crypto_credit_pack_disabled' }));
     }
     if (!config.nowpaymentsApiKey) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Crypto payments not configured', { reason: 'crypto_not_configured' }));
@@ -1802,7 +1813,7 @@ export function buildApp() {
     };
   });
   app.get('/v1/billing/crypto-currencies', async (_req, reply) => {
-    if (!config.cryptoTopupEnabled || !config.nowpaymentsApiKey) {
+    if (!config.cryptoCreditPackEnabled || !config.nowpaymentsApiKey) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Crypto payments not configured', { reason: 'crypto_not_configured' }));
     }
     const result = await nowPayments.getAvailableCurrencies();
@@ -2011,7 +2022,7 @@ export function buildApp() {
     const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
     if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
     const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, kind, categoryId, limit, cursor, creditsMax);
-    if ((out as any).budgetCapExceeded) return reply.status(402).send({ error: { code: 'budget_cap_exceeded', message: 'Budget cap exceeded', details: { ...(out as any).budgetCapExceeded, topup_options: purchaseGuidance(callerNodeId) } } });
+    if ((out as any).budgetCapExceeded) return reply.status(402).send({ error: { code: 'budget_cap_exceeded', message: 'Budget cap exceeded', details: { ...(out as any).budgetCapExceeded, credit_pack_options: purchaseGuidance(callerNodeId) } } });
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(callerNodeId, (out as any).creditsExhausted));
     return out;
   }
@@ -2109,7 +2120,7 @@ export function buildApp() {
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
-    return out;
+    return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {
     const out = await (fabricService as any).rejectOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
@@ -2130,7 +2141,7 @@ export function buildApp() {
     if (out.notAccepted) return reply.status(409).send(errorEnvelope('offer_not_mutually_accepted', 'Offer not mutually accepted'));
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
-    return out;
+    return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
   });
   app.get('/v1/events', async (req, reply) => {
     const q = req.query as any;
@@ -2313,7 +2324,7 @@ export function buildApp() {
         if (paymentStatus === 'finished' || paymentStatus === 'partially_paid') {
           const grantCredits = paymentStatus === 'finished' ? existing.credits : 0;
           if (grantCredits > 0) {
-            const idempotencyKey = `crypto_topup:${paymentId}`;
+            const idempotencyKey = `crypto_credit_pack:${paymentId}`;
             const inserted = await repo.addCreditIdempotent(
               existing.node_id,
               'topup_purchase',
@@ -2329,7 +2340,7 @@ export function buildApp() {
             );
             webhookApp.log.info(
               { payment_id: paymentId, node_id: existing.node_id, credits: grantCredits, inserted, pack_code: existing.pack_code },
-              inserted ? 'Crypto top-up credits granted' : 'Crypto top-up idempotent replay',
+              inserted ? 'Crypto credit pack credits granted' : 'Crypto credit pack idempotent replay',
             );
           }
         }
@@ -2358,38 +2369,55 @@ export function buildApp() {
   });
   app.get('/internal/admin/daily-metrics', async () => fabricService.adminDailyMetrics());
 
+  app.post('/internal/admin/health-pulse', async (req) => {
+    const pulse = await fabricService.adminHealthPulse();
+    app.log.info({ digest: 'health_pulse', pulse }, 'Health pulse check');
+
+    if (pulse.status === 'degraded') {
+      const alertLines = [
+        `Fabric Health Pulse — ${pulse.generated_at}`,
+        `Status: DEGRADED`,
+        `Window: ${pulse.window_minutes}m`,
+        '',
+        ...pulse.alerts.map(a => `  ⚠ ${a}`),
+        '',
+        `Stripe: ${pulse.stripe.events_received} events, ${pulse.stripe.processing_errors} errors, oldest unprocessed ${pulse.stripe.oldest_unprocessed_minutes}m`,
+        `Crypto: ${pulse.crypto.pending_payments} pending, ${pulse.crypto.failed_or_expired} failed/expired`,
+        `Webhooks: ${pulse.webhooks.pending_retries} retries pending, ${pulse.webhooks.recent_failures} failures, oldest pending ${pulse.webhooks.oldest_pending_minutes}m`,
+      ];
+      const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
+      await sendEmail({ to: digestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text: alertLines.join('\n') });
+    }
+
+    return pulse;
+  });
+
   app.post('/internal/admin/daily-digest', async (req) => {
     const metrics = await fabricService.adminDailyMetrics();
     const lines = [
       `Fabric Daily Digest — ${metrics.generated_at}`,
       `Window: ${metrics.window_hours}h`,
       '',
-      '== Abuse ==',
-      `  Suspended nodes: ${metrics.abuse.suspended_nodes}`,
-      `  Active takedowns: ${metrics.abuse.active_takedowns}`,
-      `  Recovery attempts exceeded: ${metrics.abuse.recovery_attempts_exceeded}`,
+      '== Marketplace Activity ==',
+      `  Public listings: ${metrics.liquidity.public_listings}`,
+      `  Public requests: ${metrics.liquidity.public_requests}`,
+      `  Offers created: ${metrics.liquidity.offers_created}`,
+      `  Deals closed: ${metrics.liquidity.offers_mutually_accepted}`,
       '',
-      '== Stripe / Credits ==',
-      `  Stripe events received: ${metrics.stripe_credits_health.stripe_events_received}`,
-      `  Stripe processing errors: ${metrics.stripe_credits_health.stripe_processing_errors}`,
+      '== Growth ==',
+      `  Active nodes: ${metrics.reliability.active_nodes}`,
+      `  Active API keys: ${metrics.reliability.active_api_keys}`,
+      `  Searches: ${metrics.reliability.searches}`,
+      '',
+      '== Revenue / Credits ==',
       `  Credit grants: ${metrics.stripe_credits_health.credit_grants}`,
       `  Credit debits: ${metrics.stripe_credits_health.credit_debits}`,
       `  Credit net: ${metrics.stripe_credits_health.credit_net}`,
       '',
-      '== Liquidity ==',
-      `  Public listings: ${metrics.liquidity.public_listings}`,
-      `  Public requests: ${metrics.liquidity.public_requests}`,
-      `  Offers created: ${metrics.liquidity.offers_created}`,
-      `  Offers mutually accepted: ${metrics.liquidity.offers_mutually_accepted}`,
-      '',
-      '== Reliability ==',
-      `  Searches: ${metrics.reliability.searches}`,
-      `  Active nodes: ${metrics.reliability.active_nodes}`,
-      `  Active API keys: ${metrics.reliability.active_api_keys}`,
-      '',
-      '== Webhook Health ==',
-      `  Offer webhook deliveries: ${metrics.webhook_health.offer_webhook_deliveries}`,
-      `  Offer webhook failures: ${metrics.webhook_health.offer_webhook_failures}`,
+      '== Trust & Safety ==',
+      `  Suspended nodes: ${metrics.abuse.suspended_nodes}`,
+      `  Active takedowns: ${metrics.abuse.active_takedowns}`,
+      `  Recovery lockouts: ${metrics.abuse.recovery_attempts_exceeded}`,
     ];
     const text = lines.join('\n');
     app.log.info({ digest: 'daily_metrics', metrics }, 'Daily metrics digest');

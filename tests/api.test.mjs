@@ -7,9 +7,9 @@ delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
-delete process.env.STRIPE_TOPUP_PRICE_500;
-delete process.env.STRIPE_TOPUP_PRICE_1500;
-delete process.env.STRIPE_TOPUP_PRICE_4500;
+delete process.env.STRIPE_CREDIT_PACK_PRICE_500;
+delete process.env.STRIPE_CREDIT_PACK_PRICE_1500;
+delete process.env.STRIPE_CREDIT_PACK_PRICE_4500;
 delete process.env.EMAIL_PROVIDER;
 delete process.env.RECOVERY_CHALLENGE_TTL_MINUTES;
 delete process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS;
@@ -34,9 +34,9 @@ process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
 process.env.STRIPE_PRICE_BASIC = 'price_basic_test';
 process.env.STRIPE_PRICE_PRO = 'price_pro_test';
 process.env.STRIPE_PRICE_BUSINESS = 'price_business_test';
-process.env.STRIPE_TOPUP_PRICE_500 = 'price_topup_500_test';
-process.env.STRIPE_TOPUP_PRICE_1500 = 'price_topup_1500_test';
-process.env.STRIPE_TOPUP_PRICE_4500 = 'price_topup_4500_test';
+process.env.STRIPE_CREDIT_PACK_PRICE_500 = 'price_credit_pack_500_test';
+process.env.STRIPE_CREDIT_PACK_PRICE_1500 = 'price_credit_pack_1500_test';
+process.env.STRIPE_CREDIT_PACK_PRICE_4500 = 'price_credit_pack_4500_test';
 process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
 process.env.EMAIL_PROVIDER = 'stub';
 process.env.RECOVERY_CHALLENGE_TTL_MINUTES = '10';
@@ -56,7 +56,7 @@ process.env.REFERRAL_MAX_GRANTS_PER_REFERRER = '50';
 process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
 process.env.NOWPAYMENTS_API_KEY = 'test-nowpayments-key';
 process.env.NOWPAYMENTS_IPN_SECRET = 'test-ipn-secret';
-process.env.CRYPTO_TOPUP_ENABLED = 'true';
+process.env.CRYPTO_CREDIT_PACK_ENABLED = 'true';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 const TEST_RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -64,9 +64,9 @@ const LIVE_PRICE_IDS = {
   basic: 'price_1T1tO2K3gJAgZl81QzBXfPIf',
   pro: 'price_1T1wL1K3gJAgZl81IYKvjCsD',
   business: 'price_1T1wLgK3gJAgZl81450PfCc3',
-  topup500: 'price_1T3tJlK3gJAgZl81iZzGyRaj',
-  topup1500: 'price_1T3tQ2K3gJAgZl81JGlIYaSy',
-  topup4500: 'price_1T3tKlK3gJAgZl81HBKJ5a8U',
+  creditPack500: 'price_1T3tJlK3gJAgZl81iZzGyRaj',
+  creditPack1500: 'price_1T3tQ2K3gJAgZl81JGlIYaSy',
+  creditPack4500: 'price_1T3tKlK3gJAgZl81HBKJ5a8U',
 };
 
 const { buildApp } = await import('../dist/src/app.js');
@@ -3194,7 +3194,7 @@ test('GET /v1/credits/quote returns pack and plan quote catalog', async () => {
   assert.equal(body.credit_packs[0].name, '500 Credit Pack');
   assert.equal(body.credit_packs[0].credits, 500);
   assert.equal(body.credit_packs[0].price_cents, 999);
-  assert.equal(body.credit_packs[0].stripe_price_id, 'price_topup_500_test');
+  assert.equal(body.credit_packs[0].stripe_price_id, 'price_credit_pack_500_test');
   await app.close();
 });
 
@@ -3446,12 +3446,12 @@ test('billing checkout-session creates a Stripe session and respects idempotency
   await app.close();
 });
 
-test('billing topups checkout-session creates payment mode session and respects idempotency', async () => {
+test('billing credit-packs checkout-session creates payment mode session and respects idempotency', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-topup-checkout');
+  const b = await bootstrap(app, 'boot-credit-pack-checkout');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
-  const idemKey = 'topup-checkout-1';
+  const idemKey = 'credit-pack-checkout-1';
   let fetchCalls = 0;
 
   await withMockFetch(async (url, init = {}) => {
@@ -3459,18 +3459,18 @@ test('billing topups checkout-session creates payment mode session and respects 
     assert.equal(String(url), 'https://api.stripe.com/v1/checkout/sessions');
     const headers = new Headers(init.headers);
     assert.match(headers.get('Authorization') ?? '', /^Bearer /);
-    assert.match(headers.get('Idempotency-Key') ?? '', /^fabric_topup:/);
+    assert.match(headers.get('Idempotency-Key') ?? '', /^fabric_credit_pack:/);
 
     const form = new URLSearchParams(String(init.body ?? ''));
     assert.equal(form.get('mode'), 'payment');
-    assert.equal(form.get('line_items[0][price]'), 'price_topup_1500_test');
+    assert.equal(form.get('line_items[0][price]'), 'price_credit_pack_1500_test');
     assert.equal(form.get('metadata[node_id]'), nodeId);
-    assert.equal(form.get('metadata[topup_pack_code]'), 'credits_1500');
-    assert.equal(form.get('metadata[topup_credits]'), '1500');
+    assert.equal(form.get('metadata[pack_code]'), 'credits_1500');
+    assert.equal(form.get('metadata[pack_credits]'), '1500');
 
     return jsonResponse(200, {
-      id: 'cs_topup_test_123',
-      url: 'https://checkout.stripe.com/c/pay/cs_topup_test_123',
+      id: 'cs_credit_pack_test_123',
+      url: 'https://checkout.stripe.com/c/pay/cs_credit_pack_test_123',
       mode: 'payment',
     });
   }, async () => {
@@ -3483,7 +3483,7 @@ test('billing topups checkout-session creates payment mode session and respects 
 
     const first = await app.inject({
       method: 'POST',
-      url: '/v1/billing/topups/checkout-session',
+      url: '/v1/billing/credit-packs/checkout-session',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
       payload,
     });
@@ -3491,12 +3491,12 @@ test('billing topups checkout-session creates payment mode session and respects 
     assert.equal(first.json().node_id, nodeId);
     assert.equal(first.json().pack_code, 'credits_1500');
     assert.equal(first.json().credits, 1500);
-    assert.equal(first.json().checkout_session_id, 'cs_topup_test_123');
-    assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_topup_test_123');
+    assert.equal(first.json().checkout_session_id, 'cs_credit_pack_test_123');
+    assert.equal(first.json().checkout_url, 'https://checkout.stripe.com/c/pay/cs_credit_pack_test_123');
 
     const replay = await app.inject({
       method: 'POST',
-      url: '/v1/billing/topups/checkout-session',
+      url: '/v1/billing/credit-packs/checkout-session',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
       payload,
     });
@@ -3505,7 +3505,7 @@ test('billing topups checkout-session creates payment mode session and respects 
 
     const conflict = await app.inject({
       method: 'POST',
-      url: '/v1/billing/topups/checkout-session',
+      url: '/v1/billing/credit-packs/checkout-session',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': idemKey },
       payload: { ...payload, pack_code: 'credits_500' },
     });
@@ -3611,27 +3611,27 @@ test('billing checkout-session returns stripe_not_configured with missing env va
   await app.close();
 });
 
-test('webhook checkout.session.completed grants topup credits once by payment reference', async () => {
+test('webhook checkout.session.completed grants credit pack credits once by payment reference', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-topup-webhook-idem');
+  const b = await bootstrap(app, 'boot-credit-pack-webhook-idem');
   const nodeId = b.json().node.id;
   const balBefore = await repo.creditBalance(nodeId);
 
   const eventA = {
-    id: `evt_topup_a_${nodeId.slice(0, 8)}`,
+    id: `evt_cp_a_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
     data: {
       object: {
-        id: `cs_topup_a_${nodeId.slice(0, 8)}`,
+        id: `cs_cp_a_${nodeId.slice(0, 8)}`,
         payment_status: 'paid',
-        payment_intent: `pi_topup_${nodeId.slice(0, 8)}`,
-        metadata: { node_id: nodeId, topup_pack_code: 'credits_1500' },
+        payment_intent: `pi_cp_${nodeId.slice(0, 8)}`,
+        metadata: { node_id: nodeId, pack_code: 'credits_1500' },
       },
     },
   };
   const eventB = {
     ...eventA,
-    id: `evt_topup_b_${nodeId.slice(0, 8)}`,
+    id: `evt_cp_b_${nodeId.slice(0, 8)}`,
   };
 
   const sigA = sign(eventA);
@@ -3646,22 +3646,22 @@ test('webhook checkout.session.completed grants topup credits once by payment re
   await app.close();
 });
 
-test('webhook checkout.session.completed with unknown topup pack does not grant credits', async () => {
+test('webhook checkout.session.completed with unknown credit pack does not grant credits', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-topup-unknown-pack');
+  const b = await bootstrap(app, 'boot-cp-unknown-pack');
   const nodeId = b.json().node.id;
   const balBefore = await repo.creditBalance(nodeId);
-  const paymentIntent = `pi_topup_unknown_${nodeId.slice(0, 8)}`;
+  const paymentIntent = `pi_cp_unknown_${nodeId.slice(0, 8)}`;
 
   const event = {
-    id: `evt_topup_unknown_${nodeId.slice(0, 8)}`,
+    id: `evt_cp_unknown_${nodeId.slice(0, 8)}`,
     type: 'checkout.session.completed',
     data: {
       object: {
-        id: `cs_topup_unknown_${nodeId.slice(0, 8)}`,
+        id: `cs_cp_unknown_${nodeId.slice(0, 8)}`,
         payment_status: 'paid',
         payment_intent: paymentIntent,
-        metadata: { node_id: nodeId, topup_pack_code: 'credits_not_mapped' },
+        metadata: { node_id: nodeId, pack_code: 'credits_not_mapped' },
       },
     },
   };
@@ -3675,28 +3675,28 @@ test('webhook checkout.session.completed with unknown topup pack does not grant 
     `select id
      from credit_ledger
      where node_id=$1 and type='topup_purchase' and idempotency_key=$2`,
-    [nodeId, `topup:payment_intent:${paymentIntent}`],
+    [nodeId, `credit_pack:payment_intent:${paymentIntent}`],
   );
   assert.equal(rows.length, 0);
   await app.close();
 });
 
-test('topup grants enforce daily velocity limit per node', async () => {
+test('credit pack grants enforce daily velocity limit per node', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-topup-velocity');
+  const b = await bootstrap(app, 'boot-cp-velocity');
   const nodeId = b.json().node.id;
   const balBefore = await repo.creditBalance(nodeId);
 
   for (let i = 0; i < 4; i += 1) {
     const event = {
-      id: `evt_topup_vel_${nodeId.slice(0, 8)}_${i}`,
+      id: `evt_cp_vel_${nodeId.slice(0, 8)}_${i}`,
       type: 'checkout.session.completed',
       data: {
         object: {
-          id: `cs_topup_vel_${nodeId.slice(0, 8)}_${i}`,
+          id: `cs_cp_vel_${nodeId.slice(0, 8)}_${i}`,
           payment_status: 'paid',
-          payment_intent: `pi_topup_vel_${nodeId.slice(0, 8)}_${i}`,
-          metadata: { node_id: nodeId, topup_pack_code: 'credits_500' },
+          payment_intent: `pi_cp_vel_${nodeId.slice(0, 8)}_${i}`,
+          metadata: { node_id: nodeId, pack_code: 'credits_500' },
         },
       },
     };
@@ -5932,9 +5932,9 @@ test('admin stripe diagnostics reports configured=true for supported live sku se
     stripePriceIdsBasic: [LIVE_PRICE_IDS.basic],
     stripePriceIdsPro: [LIVE_PRICE_IDS.pro],
     stripePriceIdsBusiness: [LIVE_PRICE_IDS.business],
-    stripeTopupPrice500: LIVE_PRICE_IDS.topup500,
-    stripeTopupPrice1500: LIVE_PRICE_IDS.topup1500,
-    stripeTopupPrice4500: LIVE_PRICE_IDS.topup4500,
+    stripeCreditPackPrice500: LIVE_PRICE_IDS.creditPack500,
+    stripeCreditPackPrice1500: LIVE_PRICE_IDS.creditPack1500,
+    stripeCreditPackPrice4500: LIVE_PRICE_IDS.creditPack4500,
   }, async () => {
     const res = await app.inject({
       method: 'GET',
@@ -8795,19 +8795,19 @@ test('MCP fabric_get_offer returns offer for party and error for non-party', asy
 });
 
 // =====================================================================
-// GAP 7 — billing topups invalid pack_code returns 422
+// GAP 7 — billing credit-packs invalid pack_code returns 422
 // =====================================================================
 
-test('POST /v1/billing/topups/checkout-session rejects invalid pack_code with 422', async () => {
+test('POST /v1/billing/credit-packs/checkout-session rejects invalid pack_code with 422', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-topup-invalid');
+  const b = await bootstrap(app, 'boot-cp-invalid');
   const apiKey = b.json().api_key.api_key;
   const nodeId = b.json().node.id;
 
   const res = await app.inject({
     method: 'POST',
-    url: '/v1/billing/topups/checkout-session',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'topup-invalid-pack' },
+    url: '/v1/billing/credit-packs/checkout-session',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'cp-invalid-pack' },
     payload: {
       node_id: nodeId,
       pack_code: 'credits_999999',
@@ -9081,27 +9081,27 @@ test('POST /internal/admin/sweep expires stale offers and requests', async () =>
 });
 
 // =====================================================================
-// Crypto top-up — NOWPayments integration
+// Crypto credit pack — NOWPayments integration
 // =====================================================================
 
-test('POST /v1/billing/crypto-topup requires auth', async () => {
+test('POST /v1/billing/crypto-credit-pack requires auth', async () => {
   const app = buildApp();
   const res = await app.inject({
     method: 'POST',
-    url: '/v1/billing/crypto-topup',
+    url: '/v1/billing/crypto-credit-pack',
     payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
   });
   assert.equal(res.statusCode, 401);
   await app.close();
 });
 
-test('POST /v1/billing/crypto-topup rejects wrong node_id', async () => {
+test('POST /v1/billing/crypto-credit-pack rejects wrong node_id', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-crypto-wrongnode');
   const apiKey = b.json().api_key.api_key;
   const res = await app.inject({
     method: 'POST',
-    url: '/v1/billing/crypto-topup',
+    url: '/v1/billing/crypto-credit-pack',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-wrong-${TEST_RUN_SUFFIX}` },
     payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
   });
@@ -9110,14 +9110,14 @@ test('POST /v1/billing/crypto-topup rejects wrong node_id', async () => {
   await app.close();
 });
 
-test('POST /v1/billing/crypto-topup rejects invalid pack_code', async () => {
+test('POST /v1/billing/crypto-credit-pack rejects invalid pack_code', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-crypto-badpack');
   const apiKey = b.json().api_key.api_key;
   const nodeId = b.json().node.id;
   const res = await app.inject({
     method: 'POST',
-    url: '/v1/billing/crypto-topup',
+    url: '/v1/billing/crypto-credit-pack',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-badpack-${TEST_RUN_SUFFIX}` },
     payload: { node_id: nodeId, pack_code: 'credits_999', pay_currency: 'usdcmatic' },
   });
@@ -9126,7 +9126,7 @@ test('POST /v1/billing/crypto-topup rejects invalid pack_code', async () => {
   await app.close();
 });
 
-test('POST /v1/billing/crypto-topup creates payment and stores record (mocked NOWPayments)', async () => {
+test('POST /v1/billing/crypto-credit-pack creates payment and stores record (mocked NOWPayments)', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-crypto-create');
   const apiKey = b.json().api_key.api_key;
@@ -9156,7 +9156,7 @@ test('POST /v1/billing/crypto-topup creates payment and stores record (mocked NO
   try {
     const res = await app.inject({
       method: 'POST',
-      url: '/v1/billing/crypto-topup',
+      url: '/v1/billing/crypto-credit-pack',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-create-${TEST_RUN_SUFFIX}` },
       payload: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
     });

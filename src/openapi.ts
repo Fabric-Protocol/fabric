@@ -451,7 +451,7 @@ export const openApiDocument = {
         },
       },
     },
-    '/v1/billing/topups/checkout-session': {
+    '/v1/billing/credit-packs/checkout-session': {
       post: {
         summary: 'Create Stripe Checkout Session for a Credit Pack',
         security: [{ ApiKeyAuth: [] }],
