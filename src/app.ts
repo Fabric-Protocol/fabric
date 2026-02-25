@@ -13,6 +13,7 @@ import { registerMcpRoute } from './mcp.js';
 import { ALLOWED_REGION_IDS, isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
 import * as nowPayments from './services/nowPayments.js';
 import { retentionCutoffs } from './retentionPolicy.js';
+import { sendEmail } from './services/emailProvider.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -827,6 +828,7 @@ function isNoIdemWriteRoute(req: FastifyRequest) {
   const path = routePath(req.url);
   return path === '/v1/public/nodes/categories-summary'
     || path === '/mcp'
+    || path.startsWith('/internal/admin/')
     || /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path);
 }
 
@@ -2355,6 +2357,49 @@ export function buildApp() {
     };
   });
   app.get('/internal/admin/daily-metrics', async () => fabricService.adminDailyMetrics());
+
+  app.post('/internal/admin/daily-digest', async (req) => {
+    const metrics = await fabricService.adminDailyMetrics();
+    const lines = [
+      `Fabric Daily Digest — ${metrics.generated_at}`,
+      `Window: ${metrics.window_hours}h`,
+      '',
+      '== Abuse ==',
+      `  Suspended nodes: ${metrics.abuse.suspended_nodes}`,
+      `  Active takedowns: ${metrics.abuse.active_takedowns}`,
+      `  Recovery attempts exceeded: ${metrics.abuse.recovery_attempts_exceeded}`,
+      '',
+      '== Stripe / Credits ==',
+      `  Stripe events received: ${metrics.stripe_credits_health.stripe_events_received}`,
+      `  Stripe processing errors: ${metrics.stripe_credits_health.stripe_processing_errors}`,
+      `  Credit grants: ${metrics.stripe_credits_health.credit_grants}`,
+      `  Credit debits: ${metrics.stripe_credits_health.credit_debits}`,
+      `  Credit net: ${metrics.stripe_credits_health.credit_net}`,
+      '',
+      '== Liquidity ==',
+      `  Public listings: ${metrics.liquidity.public_listings}`,
+      `  Public requests: ${metrics.liquidity.public_requests}`,
+      `  Offers created: ${metrics.liquidity.offers_created}`,
+      `  Offers mutually accepted: ${metrics.liquidity.offers_mutually_accepted}`,
+      '',
+      '== Reliability ==',
+      `  Searches: ${metrics.reliability.searches}`,
+      `  Active nodes: ${metrics.reliability.active_nodes}`,
+      `  Active API keys: ${metrics.reliability.active_api_keys}`,
+      '',
+      '== Webhook Health ==',
+      `  Offer webhook deliveries: ${metrics.webhook_health.offer_webhook_deliveries}`,
+      `  Offer webhook failures: ${metrics.webhook_health.offer_webhook_failures}`,
+    ];
+    const text = lines.join('\n');
+    app.log.info({ digest: 'daily_metrics', metrics }, 'Daily metrics digest');
+
+    const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
+    const emailResult = await sendEmail({ to: digestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text });
+
+    return { ok: true, email_sent: emailResult.ok, email_provider: emailResult.provider, email_reason: emailResult.reason ?? null, metrics };
+  });
+
   app.post('/v1/admin/credits/adjust', async (req, reply) => {
     const parsed = z.object({ node_id: z.string(), delta: z.number(), reason: z.string() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));

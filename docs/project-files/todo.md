@@ -13,11 +13,11 @@ Last updated: 2026-02-24
 
 ### Phase 0.5 / Phase 1 — Payments + enforcement (latest thread notes)
 - [ ] Keep "credit packs" terminology consistent in Stripe display naming and docs.
-- [ ] Add `GET /internal/admin/daily-metrics` as the source for daily email digest:
-  - abuse/throttles/suspensions
-  - Stripe + credits health
-  - liquidity/reliability metrics
-  - webhook health (when applicable)
+- [x] Add `GET /internal/admin/daily-metrics` as the source for daily email digest (Done 2026-02-25):
+  - `GET /internal/admin/daily-metrics` returns full snapshot
+  - `POST /internal/admin/daily-digest` added: fetches metrics, logs structured digest, sends email if provider configured
+  - Cloud Scheduler job `fabric-daily-digest` added to setup script (daily 06:00 UTC)
+  - Internal admin POST routes exempted from idempotency (Cloud Scheduler compat)
 - [x] Lightweight MCP server (read-only, pre–go live):
   - expose safe read operations only (search, get unit/request, get offer, get events, get credits)
   - no mutations

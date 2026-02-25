@@ -110,8 +110,38 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "[OK] fabric-retention"
 
+# 4) Daily digest — daily at 06:00 UTC (emits metrics to Cloud Logging + sends email if configured)
+gcloud scheduler jobs create http fabric-daily-digest `
+  --project $ProjectId `
+  --location $Region `
+  --schedule "0 6 * * *" `
+  --time-zone "UTC" `
+  --http-method POST `
+  --uri "$ServiceUrl/internal/admin/daily-digest" `
+  --headers "X-Admin-Key=$AdminKey,Content-Type=application/json" `
+  --attempt-deadline 120s `
+  --description "Daily operational metrics digest (Cloud Logging + email)" `
+  --quiet 2>$null
+
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "[WARN] Job 'fabric-daily-digest' may already exist. Updating..."
+  gcloud scheduler jobs update http fabric-daily-digest `
+    --project $ProjectId `
+    --location $Region `
+    --schedule "0 6 * * *" `
+    --time-zone "UTC" `
+    --http-method POST `
+    --uri "$ServiceUrl/internal/admin/daily-digest" `
+    --headers "X-Admin-Key=$AdminKey,Content-Type=application/json" `
+    --attempt-deadline 120s `
+    --description "Daily operational metrics digest (Cloud Logging + email)" `
+    --quiet
+}
+Write-Host "[OK] fabric-daily-digest"
+
 Write-Host ""
-Write-Host "[DONE] All 3 Cloud Scheduler jobs configured."
+Write-Host "[DONE] All 4 Cloud Scheduler jobs configured."
 Write-Host "  - fabric-projections-rebuild (every 30min at :07/:37 America/Los_Angeles)"
 Write-Host "  - fabric-sweep (every 5min UTC)"
 Write-Host "  - fabric-retention (daily 03:00 UTC)"
+Write-Host "  - fabric-daily-digest (daily 06:00 UTC)"

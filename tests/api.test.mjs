@@ -6133,6 +6133,33 @@ test('GET /internal/admin/daily-metrics requires admin auth and returns digest s
   await app.close();
 });
 
+test('POST /internal/admin/daily-digest requires admin auth, returns metrics and email status', async () => {
+  const app = buildApp();
+
+  const unauth = await app.inject({
+    method: 'POST',
+    url: '/internal/admin/daily-digest',
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const ok = await app.inject({
+    method: 'POST',
+    url: '/internal/admin/daily-digest',
+    headers: { 'x-admin-key': 'admin-test' },
+  });
+  assert.equal(ok.statusCode, 200);
+  const body = ok.json();
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.email_sent, 'boolean');
+  assert.equal(typeof body.email_provider, 'string');
+  assert.equal(typeof body.metrics.generated_at, 'string');
+  assert.equal(body.metrics.window_hours, 24);
+  assert.equal(typeof body.metrics.abuse.suspended_nodes, 'number');
+  assert.equal(typeof body.metrics.liquidity.offers_created, 'number');
+  await app.close();
+});
+
 test('email verification happy path updates verified timestamp', async () => {
   const app = buildApp();
   emailProvider.clearStubEmailOutbox();

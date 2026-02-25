@@ -888,25 +888,28 @@ Open decision:
 - 3 Cloud Scheduler jobs created: `fabric-projections-rebuild` (30min), `fabric-sweep` (5min), `fabric-retention` (daily 03:00 UTC)
 - Service confirmed responding: `/v1/meta` 200, `/v1/categories` 200, DB connected
 
-### Still needs doing by agent:
-- (#6) Bootstrap-to-reveal happy-path test against live URL (was blocked by bootstrap rate limit cooldown)
-- (#7) Set up daily alerting (Cloud Scheduler → daily-metrics → email/Slack)
-- (#8) Verify `/support` page has real contact info
-- (#9) Test 402 credits-exhausted from agent perspective
-- (#10) Review `/legal/*` pages for completeness
+### All agent items completed:
+- (#6) Bootstrap-to-reveal happy-path: 25/25 checks passed against live service (bootstrap → /v1/me → create unit → create offer → accept both sides → reveal contact with email/phone/messaging_handles).
+
+### Completed by agent (this session):
+- (#7) Daily alerting: `POST /internal/admin/daily-digest` endpoint added — fetches all daily metrics, logs structured digest to Cloud Logging, sends email if email provider is configured. Cloud Scheduler job `fabric-daily-digest` (daily 06:00 UTC) added to setup script. Internal admin POST routes exempted from idempotency requirement (Cloud Scheduler doesn't send idempotency keys). Test added (226/226 pass).
+- (#8) `/support` page verified: returns 200 with real operator name (Pilsang Park), email (mapmoiras@gmail.com), effective date (2026-02-17), and comprehensive support guidance.
+- (#9) 402/429 agent UX verified: pre-purchase daily limit (429) includes full `purchase_options` with both Stripe (credit packs + subscriptions) and crypto paths, available packs/plans, endpoint examples, and `how_to_remove_limit` guidance. 402 `credits_exhausted` includes `topup_options` with same structure. Budget-cap-exceeded returns 200 with `was_capped: true` and guidance (soft cap). Agent UX is good.
+- (#10) All 5 legal pages verified: `/legal/terms` (7252 chars), `/legal/privacy` (7113), `/legal/acceptable-use` (6649), `/legal/refunds` (3824), `/legal/agents` (5251) — all return 200 with operator name, effective date, and contact email.
 
 ### Human-only items:
 - (#1) Set `--min-instances=1` on Cloud Run (one command: `gcloud run services update fabric-api --min-instances=1 --region us-west1 --project fabric-487608`)
 - (#2) Point Stripe dashboard webhook URL to `https://fabric-api-2x2ettafia-uw.a.run.app/v1/webhooks/stripe` (agent cannot access Stripe dashboard)
 - (#3) Verify NOWPayments Polygon wallet receives correctly (send $1 USDC on Polygon to yourself)
 - (#5) End-to-end Stripe payment flow (go through checkout.stripe.com, confirm credits appear)
+- (DONE) ADMIN_KEY rotated: incorrect versions destroyed, new key (v4, 64 chars, no trailing newline) deployed. All 4 Cloud Scheduler jobs updated. Admin auth verified working.
 
 ### Day-one risk awareness:
 - Rate limits are per-instance in-memory — 2+ Cloud Run instances means 2x effective limits
-- No alerting yet — operational blindness is the biggest risk
+- Daily alerting endpoint added but email delivery requires EMAIL_PROVIDER + SENDGRID_API_KEY env vars on Cloud Run (currently using stub provider). Cloud Logging structured logs provide fallback observability.
 - No referral clawback mechanism (G4) — self-referral abuse possible with stolen cards
 - NOWPayments default wallet is Base but code tells agents `usdcmatic` (Polygon) — verify config match
-- Legal pages may be placeholder HTML — liability gap if agents accept empty terms
+- Legal pages verified complete — no placeholder HTML risk
 
 ## (Add future decisions below)
 Template:
