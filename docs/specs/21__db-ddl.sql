@@ -603,13 +603,15 @@ create index if not exists contact_reveals_offer_idx on contact_reveals(offer_id
 
 create table if not exists offer_events (
   id uuid primary key default gen_random_uuid(),
-  offer_id uuid not null references offers(id) on delete cascade,
+  offer_id uuid null references offers(id) on delete cascade,
   event_type text not null check (event_type in (
     'offer_created',
     'offer_countered',
     'offer_accepted',
     'offer_cancelled',
-    'offer_contact_revealed'
+    'offer_contact_revealed',
+    'subscription_changed',
+    'credits_topup_completed'
   )),
   actor_node_id uuid not null references nodes(id),
   recipient_node_id uuid not null references nodes(id),

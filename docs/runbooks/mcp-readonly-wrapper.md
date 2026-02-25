@@ -143,7 +143,7 @@ Exits `0` on all checks passed, `1` on any failure.
 | `fabric_get_unit` | `GET /v1/units/{unit_id}` |
 | `fabric_get_request` | `GET /v1/requests/{request_id}` |
 | `fabric_get_offer` | `GET /v1/offers/{offer_id}` |
-| `fabric_get_events` | `GET /events` |
+| `fabric_get_events` | `GET /v1/events` |
 | `fabric_get_credits` | `GET /v1/credits/balance` |
 
 ---

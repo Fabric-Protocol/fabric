@@ -19,7 +19,7 @@
 - Day-to-day access is via **API keys** (`Authorization: ApiKey <api_key>`).
 - Multiple agents per Node implemented as **multiple API keys per Node** (label + revoke/rotate); no fine-grained permissions in MVP.
 - **Bootstrap is unauthenticated** and rate-limited; it creates a Node and issues the first API key.
-- **Signup grant:** 200 credits applied **once per Node** at bootstrap (ledger entry).
+- **Signup grant:** 100 credits applied **once per Node** at bootstrap (ledger entry).
 
 ---
 
@@ -85,7 +85,7 @@ Notes:
   - **Requests search** (seller/provider intent): `POST /v1/search/requests`
 - Brokers can do both searches and burn credits for both.
 - Implementation: **Postgres FTS + filters** on projection tables.
-- Search is **entitled-spender-only** (`active subscription` OR `active trial`) and **credit-metered**.
+- Search is **credit-metered** (pre-purchase daily limits apply; no subscriber gate).
 - Metered endpoints are covered by the global write-safety rule:
   - **Idempotency-Key REQUIRED** to avoid double-charges on retries.
 

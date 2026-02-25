@@ -72,23 +72,28 @@ limit 1;
 | `STRIPE_PRICE_PRO` | Optional alias for `pro` single price id | `price_abc` | `src/config.ts:30`, `src/services/fabricService.ts:446`, `src/services/fabricService.ts:452` |
 | `STRIPE_PRICE_IDS_BUSINESS` | Required if plan `business` is sold (or use `STRIPE_PRICE_BUSINESS`) | `price_abc,price_def` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
 | `STRIPE_PRICE_BUSINESS` | Optional alias for `business` single price id | `price_abc` | `src/config.ts:31`, `src/services/fabricService.ts:447`, `src/services/fabricService.ts:452` |
-| `STRIPE_TOPUP_PRICE_100` | Required if `credits_100` top-up is enabled | `price_abc` | `src/config.ts:33`, `src/services/fabricService.ts:400` |
-| `STRIPE_TOPUP_PRICE_300` | Required if `credits_300` top-up is enabled | `price_abc` | `src/config.ts:34`, `src/services/fabricService.ts:407` |
-| `STRIPE_TOPUP_PRICE_1000` | Required if `credits_1000` top-up is enabled | `price_abc` | `src/config.ts:35`, `src/services/fabricService.ts:414` |
+| `STRIPE_TOPUP_PRICE_500` | Required if `credits_500` top-up is enabled | `price_1T3tJlK3gJAgZl81iZzGyRaj` | `src/config.ts:65` |
+| `STRIPE_TOPUP_PRICE_1500` | Required if `credits_1500` top-up is enabled | `price_1T3tQ2K3gJAgZl81JGlIYaSy` | `src/config.ts:66` |
+| `STRIPE_TOPUP_PRICE_4500` | Required if `credits_4500` top-up is enabled | `price_1T3tKlK3gJAgZl81HBKJ5a8U` | `src/config.ts:67` |
 
-### C) Pricing/credits/rate-limit tuning (safe defaults exist)
+### C) Top-up pack credits + pricing (safe defaults exist)
+
+| Env var | Required | Default | Notes |
+|---|---|---|---|
+| `TOPUP_PACK_500_CREDITS` | Optional | `500` | Credits granted for `credits_500` pack |
+| `TOPUP_PACK_1500_CREDITS` | Optional | `1500` | Credits granted for `credits_1500` pack |
+| `TOPUP_PACK_4500_CREDITS` | Optional | `4500` | Credits granted for `credits_4500` pack |
+| `TOPUP_PACK_500_PRICE_CENTS` | Optional | `999` | Display price for `credits_500` (used in quotes) |
+| `TOPUP_PACK_1500_PRICE_CENTS` | Optional | `1999` | Display price for `credits_1500` |
+| `TOPUP_PACK_4500_PRICE_CENTS` | Optional | `4999` | Display price for `credits_4500` |
+
+### D) Pricing/credits/rate-limit tuning (safe defaults exist)
 
 | Env var | Required | Example shape | Used at |
 |---|---|---|---|
 | `DEFAULT_RATE_LIMIT_LIMIT` | Optional (default `1000`) | `1000` | `src/config.ts:24`, `src/app.ts:418` |
-| `SEARCH_CREDIT_COST` | Optional (default `2`) | `2` | `src/config.ts:25`, `src/services/fabricService.ts:172`, `src/services/fabricService.ts:227` |
-| `SIGNUP_GRANT_CREDITS` | Optional (default `200`) | `200` | `src/config.ts:26`, `src/services/fabricService.ts:37` |
-| `TOPUP_PACK_100_CREDITS` | Optional (default `100`) | `100` | `src/config.ts:36`, `src/services/fabricService.ts:397` |
-| `TOPUP_PACK_300_CREDITS` | Optional (default `300`) | `300` | `src/config.ts:37`, `src/services/fabricService.ts:404` |
-| `TOPUP_PACK_1000_CREDITS` | Optional (default `1000`) | `1000` | `src/config.ts:38`, `src/services/fabricService.ts:411` |
-| `TOPUP_PACK_100_PRICE_CENTS` | Optional (default `400`) | `400` | `src/config.ts:39`, `src/services/fabricService.ts:398` |
-| `TOPUP_PACK_300_PRICE_CENTS` | Optional (default `1200`) | `1200` | `src/config.ts:40`, `src/services/fabricService.ts:405` |
-| `TOPUP_PACK_1000_PRICE_CENTS` | Optional (default `3800`) | `3800` | `src/config.ts:41`, `src/services/fabricService.ts:412` |
+| `SEARCH_CREDIT_COST` | Optional (default `5`) | `5` | `src/config.ts:40` |
+| `SIGNUP_GRANT_CREDITS` | Optional (default `100`) | `100` | `src/config.ts:51` |
 | `TOPUP_MAX_GRANTS_PER_DAY` | Optional (default `3`) | `3` | `src/config.ts:42`, `src/services/fabricService.ts:808` |
 | `RATE_LIMIT_BOOTSTRAP_PER_HOUR` | Optional (default `3`) | `3` | `src/config.ts:43`, `src/app.ts:252` |
 | `RATE_LIMIT_SEARCH_PER_MINUTE` | Optional (default `20`) | `20` | `src/config.ts:44`, `src/app.ts:253` |
@@ -112,7 +117,7 @@ limit 1;
    - `STRIPE_WEBHOOK_SECRET`
 3. Set plain env vars for any plan/top-up price IDs you are enabling:
    - plan prices: `STRIPE_PRICE_*` or `STRIPE_PRICE_IDS_*`
-   - top-up prices: `STRIPE_TOPUP_PRICE_100`, `STRIPE_TOPUP_PRICE_300`, `STRIPE_TOPUP_PRICE_1000`
+   - top-up prices: `STRIPE_TOPUP_PRICE_500`, `STRIPE_TOPUP_PRICE_1500`, `STRIPE_TOPUP_PRICE_4500`
 4. Deploy revision and wait for `latestReadyRevisionName` to become ready.
 
 ### 2) Configure Stripe webhook endpoint
@@ -128,6 +133,55 @@ limit 1;
    - `customer.subscription.deleted`
 4. Copy endpoint signing secret (`whsec_...`) and set as `STRIPE_WEBHOOK_SECRET` in Cloud Run.
 5. Deploy a new revision if needed.
+
+## Cloud Scheduler Jobs (Human-Only)
+
+Two scheduled jobs are required for correct lifecycle behavior in production.
+
+### 1) Offer + request expiry sweep (every 5 minutes)
+
+Expires stale offers (releases holds) and unpublishes expired requests.
+
+```
+POST <CLOUD_RUN_URL>/internal/admin/sweep
+Header: X-Admin-Key: <ADMIN_KEY>
+Header: Idempotency-Key: sweep-<timestamp>
+```
+
+Setup via `gcloud`:
+```powershell
+gcloud scheduler jobs create http fabric-sweep `
+  --location=us-west1 `
+  --schedule="*/5 * * * *" `
+  --uri="<CLOUD_RUN_URL>/internal/admin/sweep" `
+  --http-method=POST `
+  --headers="X-Admin-Key=<ADMIN_KEY>,Idempotency-Key=sweep-scheduled" `
+  --oidc-service-account-email=<SERVICE_ACCOUNT_EMAIL>
+```
+
+### 2) Projection rebuild (every 30 minutes at :07 and :37 PT)
+
+Recomputes `public_listings` and `public_requests` from canonical objects, correcting any drift.
+
+```
+POST <CLOUD_RUN_URL>/v1/admin/projections/rebuild?kind=all&mode=full
+Header: X-Admin-Key: <ADMIN_KEY>
+Header: Idempotency-Key: rebuild-<timestamp>
+```
+
+Setup via `gcloud`:
+```powershell
+gcloud scheduler jobs create http fabric-projection-rebuild `
+  --location=us-west1 `
+  --schedule="7,37 * * * *" `
+  --time-zone="America/Los_Angeles" `
+  --uri="<CLOUD_RUN_URL>/v1/admin/projections/rebuild?kind=all&mode=full" `
+  --http-method=POST `
+  --headers="X-Admin-Key=<ADMIN_KEY>,Idempotency-Key=rebuild-scheduled" `
+  --oidc-service-account-email=<SERVICE_ACCOUNT_EMAIL>
+```
+
+**Note:** Replace `<CLOUD_RUN_URL>`, `<ADMIN_KEY>`, and `<SERVICE_ACCOUNT_EMAIL>` with your actual values. The service account must have `roles/run.invoker` on the Cloud Run service.
 
 ## PowerShell Verification
 

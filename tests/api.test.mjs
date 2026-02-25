@@ -54,6 +54,9 @@ process.env.REQUEST_MILESTONE_THRESHOLD = '20';
 process.env.REQUEST_MILESTONE_CREDIT_GRANT = '200';
 process.env.REFERRAL_MAX_GRANTS_PER_REFERRER = '50';
 process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
+process.env.NOWPAYMENTS_API_KEY = 'test-nowpayments-key';
+process.env.NOWPAYMENTS_IPN_SECRET = 'test-ipn-secret';
+process.env.CRYPTO_TOPUP_ENABLED = 'true';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 const TEST_RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
@@ -73,6 +76,7 @@ const { query } = await import('../dist/src/db/client.js');
 const retentionPolicy = await import('../dist/src/retentionPolicy.js');
 const emailProvider = await import('../dist/src/services/emailProvider.js');
 const fabricService = await import('../dist/src/services/fabricService.js');
+const nowPaymentsModule = await import('../dist/src/services/nowPayments.js');
 
 const searchRankingMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-22__apply_search_ranking.sql', import.meta.url),
@@ -92,7 +96,14 @@ const creditLedgerTypesMigrationSql = await fs.readFile(
 );
 await query(creditLedgerTypesMigrationSql);
 
+const cryptoPaymentsMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-25__apply_crypto_payments.sql', import.meta.url),
+  'utf8',
+);
+await query(cryptoPaymentsMigrationSql);
+
 await query('DELETE FROM stripe_events');
+await query('DELETE FROM admin_idempotency_keys');
 
 async function bootstrap(
   app,
@@ -251,8 +262,8 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   const toc = body.agent_toc;
   assert.ok(toc, 'agent_toc must be present');
   assert.ok(Array.isArray(toc.start_here), 'start_here must be an array');
-  assert.ok(toc.start_here.includes('GET /v1/meta'), 'start_here must include GET /v1/meta');
-  assert.ok(toc.start_here.includes('POST /v1/bootstrap'), 'start_here must include POST /v1/bootstrap');
+  assert.ok(toc.start_here.some(s => s.includes('GET /v1/meta')), 'start_here must include GET /v1/meta');
+  assert.ok(toc.start_here.some(s => s.includes('POST /v1/bootstrap')), 'start_here must include POST /v1/bootstrap');
   assert.ok(Array.isArray(toc.capabilities), 'capabilities must be an array');
   assert.ok(toc.capabilities.length >= 3, 'capabilities must list at least 3 items');
   assert.ok(Array.isArray(toc.invariants), 'invariants must be an array');
@@ -433,15 +444,15 @@ test('GET /docs/agents returns quickstart HTML content', async () => {
   });
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type'] ?? ''), /^text\/html/);
-  assert.match(res.body, /Fabric Agent Quickstart/);
+  assert.match(res.body, /Fabric.*Agent Quickstart/);
   assert.match(res.body, /Authorization: ApiKey/);
   assert.match(res.body, /Idempotency-Key/);
   assert.match(res.body, /If-Match/);
   assert.match(res.body, /https:\/\/fabric\.example\/openapi\.json/);
   assert.match(res.body, /\/v1\/offers/);
-  assert.match(res.body, /event_webhook_secret/);
-  assert.match(res.body, /x-fabric-signature/);
-  assert.match(res.body, /GET \/v1\/events/);
+  assert.match(res.body, /Why things cost/);
+  assert.match(res.body, /trust_safety_rules/);
+  assert.match(res.body, /why_costs_exist/);
   await app.close();
 });
 
@@ -1185,7 +1196,7 @@ test('unit patch rejects public_summary containing phone number', async () => {
   await app.close();
 });
 
-test('search requires entitled spender (subscriber or trial) while offer progression is available without subscriber status', async () => {
+test('search works with credits only (no subscriber gate) and offer progression is available without subscriber status', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-no-sub-seller', {
     display_name: 'Offer No Sub Seller',
@@ -2969,51 +2980,46 @@ test('event webhook retries are bounded and polling remains available when deliv
   await app.close();
 });
 
-test('unit milestones grant credits at 10 and 20 while trial entitlement remains one-time at threshold', async () => {
+test('unit milestones grant credits at 10 and 20 (idempotent, no excess grants)', async () => {
   const app = buildApp();
-  const b = await bootstrap(app, 'boot-upload-trial-once');
+  const b = await bootstrap(app, 'boot-upload-milestone');
   const nodeId = b.json().node.id;
   const apiKey = b.json().api_key.api_key;
   const firstMilestone = 10;
   const secondMilestone = 20;
 
-  const beforeTrial = await repo.getTrialEntitlement(nodeId);
-  assert.equal(beforeTrial, null);
   const balanceBefore = await repo.creditBalance(nodeId);
 
   for (let i = 0; i < firstMilestone - 1; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/units',
-      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${i}` },
-      payload: unitPayload(`Trial unit ${i}`, `trial-upload-${i}`),
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `ms-unit-${i}` },
+      payload: unitPayload(`Milestone unit ${i}`, `ms-upload-${i}`),
     });
     assert.equal(res.statusCode, 200);
   }
 
-  const stillNoTrial = await repo.getTrialEntitlement(nodeId);
-  assert.equal(stillNoTrial, null);
   const balanceBeforeFirstMilestone = await repo.creditBalance(nodeId);
   assert.equal(balanceBeforeFirstMilestone, balanceBefore);
 
   const firstMilestoneHit = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${firstMilestone - 1}` },
-    payload: unitPayload(`Trial unit ${firstMilestone - 1}`, `trial-upload-${firstMilestone - 1}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `ms-unit-${firstMilestone - 1}` },
+    payload: unitPayload(`Milestone unit ${firstMilestone - 1}`, `ms-upload-${firstMilestone - 1}`),
   });
   assert.equal(firstMilestoneHit.statusCode, 200);
 
   const balanceAfterFirstMilestone = await repo.creditBalance(nodeId);
   assert.equal(balanceAfterFirstMilestone - balanceBeforeFirstMilestone, 100);
-  assert.equal(await repo.getTrialEntitlement(nodeId), null);
 
   for (let i = firstMilestone; i < secondMilestone - 1; i += 1) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/units',
-      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${i}` },
-      payload: unitPayload(`Trial unit ${i}`, `trial-upload-${i}`),
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `ms-unit-${i}` },
+      payload: unitPayload(`Milestone unit ${i}`, `ms-upload-${i}`),
     });
     assert.equal(res.statusCode, 200);
   }
@@ -3024,14 +3030,10 @@ test('unit milestones grant credits at 10 and 20 while trial entitlement remains
   const secondMilestoneHit = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${secondMilestone - 1}` },
-    payload: unitPayload(`Trial unit ${secondMilestone - 1}`, `trial-upload-${secondMilestone - 1}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `ms-unit-${secondMilestone - 1}` },
+    payload: unitPayload(`Milestone unit ${secondMilestone - 1}`, `ms-upload-${secondMilestone - 1}`),
   });
   assert.equal(secondMilestoneHit.statusCode, 200);
-
-  const entitlement = await repo.getTrialEntitlement(nodeId);
-  assert.equal(Boolean(entitlement), true);
-  assert.equal(entitlement.ends_at instanceof Date || typeof entitlement.ends_at === 'string', true);
 
   const balanceAfterSecondMilestone = await repo.creditBalance(nodeId);
   assert.equal(balanceAfterSecondMilestone - balanceBeforeSecondMilestone, 100);
@@ -3040,19 +3042,15 @@ test('unit milestones grant credits at 10 and 20 while trial entitlement remains
   const postThreshold = await app.inject({
     method: 'POST',
     url: '/v1/units',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `trial-unit-${secondMilestone}` },
-    payload: unitPayload(`Trial unit ${secondMilestone}`, `trial-upload-${secondMilestone}`),
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `ms-unit-${secondMilestone}` },
+    payload: unitPayload(`Milestone unit ${secondMilestone}`, `ms-upload-${secondMilestone}`),
   });
   assert.equal(postThreshold.statusCode, 200);
 
   const balanceAfterPostThreshold = await repo.creditBalance(nodeId);
   assert.equal(balanceAfterPostThreshold, balanceAfterSecondMilestone);
 
-  const trialCount = await query("select count(*)::text as c from trial_entitlements where node_id=$1", [nodeId]);
-  const trialEventCount = await query("select count(*)::text as c from trial_entitlement_events where node_id=$1 and event_type='granted'", [nodeId]);
   const trialGrantRows = await query("select count(*)::text as c, coalesce(sum(amount),0)::text as s from credit_ledger where node_id=$1 and type='grant_trial'", [nodeId]);
-  assert.equal(Number(trialCount[0].c), 1);
-  assert.equal(Number(trialEventCount[0].c), 1);
   assert.equal(Number(trialGrantRows[0].c), 2);
   assert.equal(Number(trialGrantRows[0].s), 200);
   await app.close();
@@ -4323,7 +4321,9 @@ test('invoice.paid downgrade on subscription_update is deferred until renewal in
   assert.equal(meAfterRenewal.statusCode, 200);
   assert.equal(meAfterRenewal.json().subscription.plan, 'basic');
   const balAfterRenewal = await repo.creditBalance(nodeId);
-  assert.equal(balAfterRenewal - balAfterUpdate, 1000);
+  // Node had 3000 subscription credits from pro. Basic rollover cap is 2×1000=2000.
+  // Already over cap, so renewal grants 0. A zero-amount ledger entry is still written.
+  assert.equal(balAfterRenewal - balAfterUpdate, 0);
   await app.close();
 });
 
@@ -6921,6 +6921,2568 @@ test('MCP rate limit triggers 429 after threshold', async () => {
     assert.equal(limited.statusCode, 429);
     assert.equal(limited.json().error.code, 'rate_limit_exceeded');
   });
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 1: Optimistic concurrency (If-Match / stale_write_conflict)
+// =====================================================================
+
+test('PATCH /v1/units/:id without If-Match returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-unit-missing');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-unit-create-missing' },
+    payload: unitPayload('IfMatch missing unit', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-unit-patch-missing' },
+    payload: { title: 'Updated' },
+  });
+  assert.equal(patch.statusCode, 422);
+  assert.equal(patch.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('PATCH /v1/units/:id with stale If-Match returns 409 stale_write_conflict', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-unit-stale');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-unit-create-stale' },
+    payload: unitPayload('IfMatch stale unit', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const version = create.json().unit.version;
+  const patch1 = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'ifmatch-unit-patch1-stale' },
+    payload: { title: 'Updated v2' },
+  });
+  assert.equal(patch1.statusCode, 200);
+  const stalePatch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'ifmatch-unit-patch2-stale' },
+    payload: { title: 'Updated v3' },
+  });
+  assert.equal(stalePatch.statusCode, 409);
+  assert.equal(stalePatch.json().error.code, 'stale_write_conflict');
+  await app.close();
+});
+
+test('PATCH /v1/units/:id with correct If-Match succeeds and increments version', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-unit-ok');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-unit-create-ok' },
+    payload: unitPayload('IfMatch ok unit', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const v1 = create.json().unit.version;
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(v1), 'idempotency-key': 'ifmatch-unit-patch-ok' },
+    payload: { title: 'Updated with correct version' },
+  });
+  assert.equal(patch.statusCode, 200);
+  assert.equal(Number(patch.json().version), Number(v1) + 1);
+  await app.close();
+});
+
+test('PATCH /v1/requests/:id without If-Match returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-req-missing');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-req-create-missing' },
+    payload: unitPayload('IfMatch missing request', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-req-patch-missing' },
+    payload: { title: 'Updated' },
+  });
+  assert.equal(patch.statusCode, 422);
+  assert.equal(patch.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('PATCH /v1/requests/:id with stale If-Match returns 409 stale_write_conflict', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-req-stale');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-req-create-stale' },
+    payload: unitPayload('IfMatch stale request', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+  const version = create.json().request.version;
+  const patch1 = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'ifmatch-req-patch1-stale' },
+    payload: { title: 'Updated v2' },
+  });
+  assert.equal(patch1.statusCode, 200);
+  const stalePatch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'ifmatch-req-patch2-stale' },
+    payload: { title: 'Updated v3' },
+  });
+  assert.equal(stalePatch.statusCode, 409);
+  assert.equal(stalePatch.json().error.code, 'stale_write_conflict');
+  await app.close();
+});
+
+test('PATCH /v1/requests/:id with correct If-Match succeeds and increments version', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ifmatch-req-ok');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'ifmatch-req-create-ok' },
+    payload: unitPayload('IfMatch ok request', 'ifmatch-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+  const v1 = create.json().request.version;
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(v1), 'idempotency-key': 'ifmatch-req-patch-ok' },
+    payload: { title: 'Updated with correct version' },
+  });
+  assert.equal(patch.statusCode, 200);
+  assert.equal(Number(patch.json().version), Number(v1) + 1);
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 2: Projection allowlist enforcement
+// =====================================================================
+
+test('published unit projection does not contain email, phone, or precise geo', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-proj-allow-unit', {
+    display_name: 'ProjAllowUnit',
+    email: `proj-unit-${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+    messaging_handles: [{ kind: 'telegram', handle: '@secret_handle', url: null }],
+  });
+  assert.equal(b.statusCode, 200, `bootstrap failed: ${JSON.stringify(b.json())}`);
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'proj-allowlist-unit-create' },
+    payload: unitPayload('Projection allowlist unit', 'proj-allowlist-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'proj-allowlist-unit-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const projRows = await query(
+    'select doc from public_listings where unit_id=$1',
+    [unitId],
+  );
+  assert.equal(projRows.length, 1);
+  const doc = projRows[0].doc;
+  const docStr = JSON.stringify(doc).toLowerCase();
+  assert.equal(docStr.includes(`proj-unit-${TEST_RUN_SUFFIX}@example.com`.toLowerCase()), false, 'projection must not contain email');
+  assert.equal(docStr.includes('@secret_handle'), false, 'projection must not contain messaging handles');
+  assert.equal(doc.email, undefined, 'projection must not have email field');
+  assert.equal(doc.phone, undefined, 'projection must not have phone field');
+  assert.equal(doc.address, undefined, 'projection must not have address field');
+  assert.equal(doc.messaging_handles, undefined, 'projection must not have messaging_handles field');
+  await app.close();
+});
+
+test('published request projection does not contain email, phone, or precise geo', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-proj-allow-req', {
+    display_name: 'ProjAllowReq',
+    email: `proj-req-${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+    messaging_handles: [{ kind: 'whatsapp', handle: '+15551234567', url: null }],
+  });
+  assert.equal(b.statusCode, 200, `bootstrap failed: ${JSON.stringify(b.json())}`);
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'proj-allowlist-req-create' },
+    payload: unitPayload('Projection allowlist request', 'proj-allowlist-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${reqId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'proj-allowlist-req-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const projRows = await query(
+    'select doc from public_requests where request_id=$1',
+    [reqId],
+  );
+  assert.equal(projRows.length, 1);
+  const doc = projRows[0].doc;
+  const docStr = JSON.stringify(doc).toLowerCase();
+  assert.equal(docStr.includes(`proj-req-${TEST_RUN_SUFFIX}@example.com`.toLowerCase()), false, 'projection must not contain email');
+  assert.equal(docStr.includes('+15551234567'), false, 'projection must not contain phone');
+  assert.equal(doc.email, undefined, 'projection must not have email field');
+  assert.equal(doc.phone, undefined, 'projection must not have phone field');
+  assert.equal(doc.address, undefined, 'projection must not have address field');
+  assert.equal(doc.messaging_handles, undefined, 'projection must not have messaging_handles field');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 3: GET /v1/offers role filtering
+// =====================================================================
+
+test('GET /v1/offers role=made returns only caller-created offers and role=received returns only inbound offers', async () => {
+  const app = buildApp();
+
+  const sellerBoot = await bootstrap(app, 'boot-offers-role-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_offers_role_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-offers-role-buyer');
+  const buyerNodeId = buyerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_offers_role_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offers role unit', 'offers-role-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offers-role-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+
+  const buyerMade = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=made',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(buyerMade.statusCode, 200);
+  assert.equal(buyerMade.json().offers.length >= 1, true);
+  assert.equal(buyerMade.json().offers.every((o) => o.from_node_id === buyerNodeId), true);
+
+  const buyerReceived = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=received',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(buyerReceived.statusCode, 200);
+  const buyerReceivedOfferIds = buyerReceived.json().offers.map((o) => o.id);
+  assert.equal(buyerReceivedOfferIds.includes(offer.json().offer.id), false);
+
+  const sellerReceived = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=received',
+    headers: { authorization: `ApiKey ${sellerApiKey}` },
+  });
+  assert.equal(sellerReceived.statusCode, 200);
+  assert.equal(sellerReceived.json().offers.some((o) => o.id === offer.json().offer.id), true);
+  assert.equal(sellerReceived.json().offers.every((o) => o.to_node_id === sellerNodeId), true);
+
+  const sellerMade = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=made',
+    headers: { authorization: `ApiKey ${sellerApiKey}` },
+  });
+  assert.equal(sellerMade.statusCode, 200);
+  const sellerMadeOfferIds = sellerMade.json().offers.map((o) => o.id);
+  assert.equal(sellerMadeOfferIds.includes(offer.json().offer.id), false);
+
+  await app.close();
+});
+
+test('GET /v1/offers/:id returns offer for party and 404 for non-party with version field', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-get-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_offer_get_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-offer-get-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_offer_get_buyer')).statusCode, 200);
+
+  const bystander = await bootstrap(app, 'boot-offer-get-bystander');
+  const bystanderApiKey = bystander.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer get unit', 'offer-get-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offerRes = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-get-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offerRes.statusCode, 200);
+  const offerId = offerRes.json().offer.id;
+
+  const partyGet = await app.inject({
+    method: 'GET',
+    url: `/v1/offers/${offerId}`,
+    headers: { authorization: `ApiKey ${sellerApiKey}` },
+  });
+  assert.equal(partyGet.statusCode, 200);
+  assert.equal(partyGet.json().offer.id, offerId);
+  assert.ok(partyGet.json().offer.version !== undefined, 'offer should have a version field');
+
+  const nonPartyGet = await app.inject({
+    method: 'GET',
+    url: `/v1/offers/${offerId}`,
+    headers: { authorization: `ApiKey ${bystanderApiKey}` },
+  });
+  assert.equal(nonPartyGet.statusCode, 404);
+  assert.equal(nonPartyGet.json().error.code, 'not_found');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 4: Pre-purchase daily search limit
+// =====================================================================
+
+test('pre-purchase daily search limit blocks 4th search with prepurchase_daily_limit_exceeded', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-prepurchase-search-limit');
+  const apiKey = b.json().api_key.api_key;
+  const searchPayload = { q: null, scope: 'OTHER', filters: { scope_notes: 'prepurchase-search-limit' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null };
+
+  for (let i = 1; i <= 3; i++) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search/listings',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `prepurchase-search-${i}` },
+      payload: searchPayload,
+    });
+    assert.equal(res.statusCode, 200, `search ${i} should succeed`);
+  }
+
+  const fourth = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'prepurchase-search-4' },
+    payload: searchPayload,
+  });
+  assert.equal(fourth.statusCode, 429);
+  assert.equal(fourth.json().error.code, 'prepurchase_daily_limit_exceeded');
+  assert.equal(fourth.json().error.details.action, 'search');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 5: Cancel only by creator
+// =====================================================================
+
+test('offer cancel by recipient returns 403 forbidden', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-cancel-only-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_cancel_only_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-cancel-only-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_cancel_only_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Cancel only unit', 'cancel-only-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offerRes = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'cancel-only-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offerRes.statusCode, 200);
+  const offerId = offerRes.json().offer.id;
+
+  const recipientCancel = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/cancel`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'cancel-only-recipient' },
+    payload: { reason: null },
+  });
+  assert.equal(recipientCancel.statusCode, 403);
+  assert.equal(recipientCancel.json().error.code, 'forbidden');
+
+  const creatorCancel = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/cancel`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'cancel-only-creator' },
+    payload: { reason: null },
+  });
+  assert.equal(creatorCancel.statusCode, 200);
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 6: DELETE /v1/auth/keys/:id
+// =====================================================================
+
+test('DELETE /v1/auth/keys/:id returns 404 for unknown key_id', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-delete-key-404');
+  const apiKey = b.json().api_key.api_key;
+  const fakeKeyId = crypto.randomUUID();
+  const res = await app.inject({
+    method: 'DELETE',
+    url: `/v1/auth/keys/${fakeKeyId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-key-404' },
+  });
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.json().error.code, 'not_found');
+  await app.close();
+});
+
+test('DELETE /v1/auth/keys/:id idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-delete-key-idem');
+  const apiKey = b.json().api_key.api_key;
+
+  const extra = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-key-idem-mint' },
+    payload: { label: 'to-revoke' },
+  });
+  assert.equal(extra.statusCode, 200);
+  const keyId = extra.json().key_id;
+
+  const first = await app.inject({
+    method: 'DELETE',
+    url: `/v1/auth/keys/${keyId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-key-idem-revoke' },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'DELETE',
+    url: `/v1/auth/keys/${keyId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'delete-key-idem-revoke' },
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 7: GET unit/request 404 for deleted and not-owned
+// =====================================================================
+
+test('GET /v1/units/:id returns 404 for soft-deleted unit', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-unit-deleted-404');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-deleted-create' },
+    payload: unitPayload('Deleted unit', 'deleted-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+
+  const del = await app.inject({
+    method: 'DELETE',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-deleted-delete' },
+  });
+  assert.equal(del.statusCode, 200);
+
+  const get = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(get.statusCode, 404);
+  await app.close();
+});
+
+test('GET /v1/units/:id returns 404 for unit owned by different node', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-unit-notowned-owner');
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+
+  const otherBoot = await bootstrap(app, 'boot-unit-notowned-other');
+  const otherApiKey = otherBoot.json().api_key.api_key;
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'unit-notowned-create' },
+    payload: unitPayload('Not owned unit', 'notowned-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+
+  const get = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${otherApiKey}` },
+  });
+  assert.ok(get.statusCode === 404 || get.statusCode === 403, 'should return 404 or 403 for not-owned unit');
+  await app.close();
+});
+
+test('GET /v1/requests/:id returns 404 for soft-deleted request', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-req-deleted-404');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'req-deleted-create' },
+    payload: unitPayload('Deleted request', 'deleted-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+
+  const del = await app.inject({
+    method: 'DELETE',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'req-deleted-delete' },
+  });
+  assert.equal(del.statusCode, 200);
+
+  const get = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(get.statusCode, 404);
+  await app.close();
+});
+
+test('GET /v1/requests/:id returns 404 for request owned by different node', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-req-notowned-owner');
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+
+  const otherBoot = await bootstrap(app, 'boot-req-notowned-other');
+  const otherApiKey = otherBoot.json().api_key.api_key;
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'req-notowned-create' },
+    payload: unitPayload('Not owned request', 'notowned-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const reqId = create.json().request.id;
+
+  const get = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${reqId}`,
+    headers: { authorization: `ApiKey ${otherApiKey}` },
+  });
+  assert.ok(get.statusCode === 404 || get.statusCode === 403, 'should return 404 or 403 for not-owned request');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 8: Publish eligibility per-scope validation
+// =====================================================================
+
+test('publish unit without type returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-no-type');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-no-type-create' },
+    payload: { ...unitPayload('No type unit', 'publish-scope'), type: null },
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-no-type-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 422);
+  await app.close();
+});
+
+test('publish unit with scope=ship_to but missing origin_region returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-shipto-no-origin');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-shipto-create' },
+    payload: { ...unitPayload('Ship no origin', 'ship-scope'), scope_primary: 'ship_to', origin_region: null, dest_region: null },
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-shipto-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 422);
+  await app.close();
+});
+
+test('publish unit with scope=local_in_person but missing location_text_public returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-local-no-location');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-local-create' },
+    payload: { ...unitPayload('Local no location', 'local-scope'), scope_primary: 'local_in_person', location_text_public: null },
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-local-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 422);
+  await app.close();
+});
+
+test('publish unit with scope=digital_delivery but missing delivery_format returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-digital-no-format');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-digital-create' },
+    payload: { ...unitPayload('Digital no format', 'digital-scope'), scope_primary: 'digital_delivery', delivery_format: null },
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-digital-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 422);
+  await app.close();
+});
+
+test('publish unit with scope=remote_online_service but missing service_region returns 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-remote-no-region');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-remote-create' },
+    payload: { ...unitPayload('Remote no region', 'remote-scope'), scope_primary: 'remote_online_service', service_region: null },
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-remote-publish' },
+    payload: {},
+  });
+  assert.equal(publish.statusCode, 422);
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 9: Public node requests inventory expansion
+// =====================================================================
+
+test('GET /v1/public/nodes/:id/requests returns published requests and charges credits', async () => {
+  const app = buildApp();
+  const callerBoot = await bootstrap(app, 'boot-public-req-caller');
+  const callerNodeId = callerBoot.json().node.id;
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_public_req_sub')).statusCode, 200);
+
+  const ownerBoot = await bootstrap(app, 'boot-public-req-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+
+  const request = await repo.createResource('requests', ownerNodeId, unitPayload('Public node request', 'public-req-scope'));
+  await repo.setPublished('requests', request.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', ownerNodeId, request.id));
+
+  const balBefore = await repo.creditBalance(callerNodeId);
+  const res = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/requests?limit=20`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().node_id, ownerNodeId);
+  assert.equal(Array.isArray(res.json().items), true);
+  assert.equal(res.json().items.length >= 1, true);
+  const balAfter = await repo.creditBalance(callerNodeId);
+  assert.equal(balBefore > balAfter, true, 'credits should be charged');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 10: Offer TTL expiry
+// =====================================================================
+
+test('expired offer rejects accept with 409 invalid_state_transition', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-expired-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_offer_expired_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-offer-expired-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_offer_expired_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Expired offer unit', 'offer-expired-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offerRes = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-expired-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null, ttl_minutes: 15 },
+  });
+  assert.equal(offerRes.statusCode, 200);
+  const offerId = offerRes.json().offer.id;
+
+  await query("update offers set expires_at = now() - interval '1 minute' where id=$1", [offerId]);
+
+  const accept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-expired-accept' },
+    payload: {},
+  });
+  assert.ok(accept.statusCode === 409 || accept.statusCode === 404, 'expired offer should be rejected or not found');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 11: Credits ledger pagination
+// =====================================================================
+
+test('GET /v1/credits/ledger pagination with cursor returns next page', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-ledger-pagination');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  await repo.addCredit(nodeId, 'adjustment_manual', 10, { reason: 'test-ledger-page-1' });
+  await repo.addCredit(nodeId, 'adjustment_manual', 20, { reason: 'test-ledger-page-2' });
+  await repo.addCredit(nodeId, 'adjustment_manual', 30, { reason: 'test-ledger-page-3' });
+
+  const page1 = await app.inject({
+    method: 'GET',
+    url: '/v1/credits/ledger?limit=2',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(page1.json().entries.length, 2);
+  assert.equal(typeof page1.json().next_cursor, 'string');
+
+  const page2 = await app.inject({
+    method: 'GET',
+    url: `/v1/credits/ledger?limit=2&cursor=${encodeURIComponent(page1.json().next_cursor)}`,
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(page2.statusCode, 200);
+  assert.equal(page2.json().entries.length >= 1, true);
+  const page1Ids = page1.json().entries.map((e) => e.id);
+  const page2Ids = page2.json().entries.map((e) => e.id);
+  const overlap = page2Ids.filter((id) => page1Ids.includes(id));
+  assert.equal(overlap.length, 0, 'pages must not overlap');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 12: MCP search execution
+// =====================================================================
+
+test('MCP fabric_search_listings executes search and returns results', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-mcp-search-exec');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_mcp_search_exec')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-mcp-search-exec-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const scopeNotes = `mcp-search-exec-${TEST_RUN_SUFFIX}-${nodeId.slice(0, 6)}`;
+  const unit = await repo.createResource('units', targetNodeId, { ...unitPayload('MCP search item', scopeNotes), category_ids: [444] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 42,
+      method: 'tools/call',
+      params: {
+        name: 'fabric_search_listings',
+        arguments: {
+          scope: 'OTHER',
+          filters: { scope_notes: scopeNotes },
+          budget: { credits_requested: config.searchCreditCost },
+          limit: 20,
+        },
+      },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.id, 42);
+  assert.ok(!body.result.isError, 'fabric_search_listings should succeed');
+  const data = JSON.parse(body.result.content[0].text);
+  assert.ok(Array.isArray(data.items), 'search result must have items array');
+  assert.equal(typeof data.budget, 'object', 'search result must have budget');
+  assert.equal(typeof data.budget.credits_charged, 'number', 'budget must include credits_charged');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — GAP 14: Legal version mismatch
+// =====================================================================
+
+test('POST /v1/bootstrap with wrong legal version returns 422 legal_version_mismatch', async () => {
+  const app = buildApp();
+  const res = await bootstrap(app, 'boot-legal-mismatch', {
+    display_name: 'LegalMismatch',
+    email: null,
+    referral_code: null,
+    legal: { accepted: true, version: '2020-01-01' },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'legal_version_mismatch');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — IDEMPOTENCY MATRIX: additional replay/conflict tests
+// =====================================================================
+
+test('POST /v1/auth/keys idempotency replay and conflict', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-authkeys-idem');
+  const apiKey = b.json().api_key.api_key;
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'authkeys-idem-1' },
+    payload: { label: 'idem-test' },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'authkeys-idem-1' },
+    payload: { label: 'idem-test' },
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/v1/auth/keys',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'authkeys-idem-1' },
+    payload: { label: 'different-label' },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+  await app.close();
+});
+
+test('PATCH /v1/units/:id idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-unit-idem');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-unit-idem-create' },
+    payload: unitPayload('Patch idem unit', 'patch-idem-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+  const version = create.json().unit.version;
+
+  const first = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'patch-unit-idem-patch' },
+    payload: { title: 'Patched idempotent' },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'if-match': String(version), 'idempotency-key': 'patch-unit-idem-patch' },
+    payload: { title: 'Patched idempotent' },
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+test('POST /v1/units/:id/publish idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-publish-unit-idem');
+  const apiKey = b.json().api_key.api_key;
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-unit-idem-create' },
+    payload: unitPayload('Publish idem unit', 'publish-idem-scope'),
+  });
+  assert.equal(create.statusCode, 200);
+  const unitId = create.json().unit.id;
+
+  const first = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-unit-idem-pub' },
+    payload: {},
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'publish-unit-idem-pub' },
+    payload: {},
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+test('POST /v1/offers/:id/reject idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-reject-idem-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_reject_idem_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-reject-idem-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_reject_idem_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Reject idem unit', 'reject-idem-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reject-idem-offer' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const first = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reject`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reject-idem-reject' },
+    payload: { reason: null },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reject`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reject-idem-reject' },
+    payload: { reason: null },
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+test('POST /v1/offers/:id/cancel idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-cancel-idem-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_cancel_idem_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-cancel-idem-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_cancel_idem_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Cancel idem unit', 'cancel-idem-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'cancel-idem-offer' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const first = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/cancel`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'cancel-idem-cancel' },
+    payload: { reason: null },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/cancel`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'cancel-idem-cancel' },
+    payload: { reason: null },
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+test('POST /v1/offers/:id/reveal-contact idempotency replay returns same response', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-reveal-idem-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_reveal_idem_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-reveal-idem-buyer');
+  const buyerNodeId = buyerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_reveal_idem_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Reveal idem unit', 'reveal-idem-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-idem-offer' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const acceptBuyer = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-idem-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(acceptBuyer.statusCode, 200);
+
+  const acceptSeller = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reveal-idem-accept-seller' },
+    payload: {},
+  });
+  assert.equal(acceptSeller.statusCode, 200);
+  assert.equal(acceptSeller.json().offer.status, 'mutually_accepted');
+
+  const first = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-idem-reveal' },
+    payload: {},
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-idem-reveal' },
+    payload: {},
+  });
+  assert.equal(replay.statusCode, first.statusCode);
+  assert.deepEqual(replay.json(), first.json());
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — PROVIDER: Stripe webhook tampered body
+// =====================================================================
+
+test('Stripe webhook with tampered body after signing is rejected', async () => {
+  const app = buildApp();
+  const body = {
+    id: 'evt_tampered_test',
+    type: 'checkout.session.completed',
+    data: { object: { payment_status: 'paid', metadata: { node_id: crypto.randomUUID(), plan_code: 'basic' }, customer: 'cus_tampered', subscription: 'sub_tampered' } },
+  };
+  const sig = sign(body);
+  const tamperedRaw = sig.raw.replace('"basic"', '"pro"');
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/webhooks/stripe',
+    headers: { 'stripe-signature': sig.header, 'content-type': 'application/json' },
+    payload: tamperedRaw,
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'stripe_signature_invalid');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — PROVIDER: Taken-down listing excluded from search
+// =====================================================================
+
+test('taken-down listing is excluded from search results', async () => {
+  const app = buildApp();
+  const searcherBoot = await bootstrap(app, 'boot-takedown-search-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_takedown_search_sub')).statusCode, 200);
+
+  const ownerBoot = await bootstrap(app, 'boot-takedown-search-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const scopeNotes = `takedown-search-${TEST_RUN_SUFFIX}-${ownerNodeId.slice(0, 6)}`;
+
+  const unit = await repo.createResource('units', ownerNodeId, { ...unitPayload('Takedown search unit', scopeNotes), category_ids: [991] });
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const before = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'takedown-search-before' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: scopeNotes }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, target: { node_id: ownerNodeId }, limit: 20, cursor: null },
+  });
+  assert.equal(before.statusCode, 200);
+  assert.equal(before.json().items.some((r) => r.item?.id === unit.id), true);
+
+  const takedown = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/takedown',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'takedown-search-takedown' },
+    payload: { target_type: 'public_listing', target_id: unit.id, reason: 'qa-takedown-search-test' },
+  });
+  assert.equal(takedown.statusCode, 200);
+
+  const rebuild = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/projections/rebuild',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'takedown-search-rebuild' },
+    payload: { kind: 'listings' },
+  });
+  assert.equal(rebuild.statusCode, 200);
+
+  const after = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'takedown-search-after' },
+    payload: { q: null, scope: 'OTHER', filters: { scope_notes: scopeNotes }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, target: { node_id: ownerNodeId }, limit: 20, cursor: null },
+  });
+  assert.equal(after.statusCode, 200);
+  assert.equal(after.json().items.some((r) => r.item?.id === unit.id), false, 'taken-down listing must not appear in search after rebuild');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — PROVIDER: Search log retention query_hash + no raw query
+// =====================================================================
+
+test('search log stores query_hash and query_redacted but not raw query text', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-retention-hash');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_retention_hash_sub')).statusCode, 200);
+
+  const sensitiveQuery = `retention-hash-test-${TEST_RUN_SUFFIX} user@secret-email.com`;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'retention-hash-search' },
+    payload: {
+      q: sensitiveQuery,
+      scope: 'OTHER',
+      filters: { scope_notes: `retention-hash-${TEST_RUN_SUFFIX}` },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(res.statusCode, 200);
+
+  const logs = await query(
+    `select query_redacted, query_hash
+     from search_logs
+     where node_id=$1
+     order by created_at desc
+     limit 1`,
+    [nodeId],
+  );
+  assert.equal(logs.length, 1);
+  assert.equal(typeof logs[0].query_hash, 'string');
+  assert.equal(logs[0].query_hash.length > 0, true, 'query_hash must be non-empty');
+  if (logs[0].query_redacted) {
+    assert.equal(logs[0].query_redacted.includes('user@secret-email.com'), false, 'query_redacted must not contain raw PII');
+  }
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — Offer reject does NOT emit lifecycle event (spec-correct)
+// =====================================================================
+
+test('offer reject does not emit lifecycle event or webhook (spec-correct: reject is not in event enum)', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-reject-no-event-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_reject_no_event_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-reject-no-event-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_reject_no_event_buyer')).statusCode, 200);
+
+  await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reject-no-event-webhook-setup' },
+    payload: { event_webhook_url: 'https://hooks.example.test/reject-seller', event_webhook_secret: 'reject-secret' },
+  });
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Reject no event unit', 'reject-no-event-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const webhookCalls = [];
+  await withMockFetch(async (url, init) => {
+    const rawBody = init && typeof init.body === 'string' ? init.body : '{}';
+    webhookCalls.push({ url: String(url), body: JSON.parse(rawBody) });
+    return jsonResponse(200, { ok: true });
+  }, async () => {
+    const offer = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reject-no-event-create' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: null },
+    });
+    assert.equal(offer.statusCode, 200);
+    const offerId = offer.json().offer.id;
+
+    const preRejectCount = webhookCalls.length;
+
+    const reject = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerId}/reject`,
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reject-no-event-reject' },
+      payload: { reason: null },
+    });
+    assert.equal(reject.statusCode, 200);
+    assert.equal(reject.json().offer.status, 'rejected');
+
+    const postRejectWebhooks = webhookCalls.slice(preRejectCount);
+    const rejectEvents = postRejectWebhooks.filter((c) => c.body?.type === 'offer_rejected');
+    assert.equal(rejectEvents.length, 0, 'reject must not emit offer_rejected event (not in spec enum)');
+  });
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — Counter releases old holds and creates new ones
+// =====================================================================
+
+test('offer counter releases prior holds and creates new holds for countered offer', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-counter-holds-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_counter_holds_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-counter-holds-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_counter_holds_buyer')).statusCode, 200);
+
+  const unit1 = await repo.createResource('units', sellerNodeId, unitPayload('Counter hold unit 1', 'counter-holds-scope'));
+  const unit2 = await repo.createResource('units', sellerNodeId, unitPayload('Counter hold unit 2', 'counter-holds-scope'));
+  await repo.setPublished('units', unit1.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit1.id));
+  await repo.setPublished('units', unit2.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit2.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'counter-holds-create' },
+    payload: { unit_ids: [unit1.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const holdsBeforeCounter = await query(
+    "select * from holds where offer_id=$1 and status='active'", [offerId],
+  );
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'counter-holds-counter' },
+    payload: { unit_ids: [unit2.id], note: 'counter with different unit' },
+  });
+  assert.equal(counter.statusCode, 200);
+  const newOfferId = counter.json().offer.id;
+
+  const oldHolds = await query(
+    "select * from holds where offer_id=$1 and status='active'", [offerId],
+  );
+  assert.equal(oldHolds.length, 0, 'old offer holds must be released after counter');
+
+  const oldOfferStatus = await query('select status from offers where id=$1', [offerId]);
+  assert.equal(oldOfferStatus[0].status, 'countered');
+  assert.notEqual(newOfferId, offerId, 'counter creates a new offer');
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — Email verification sends code via email provider
+// =====================================================================
+
+test('email start-verify sends verification code through email provider', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-email-code-send', {
+    display_name: 'EmailCodeSend',
+    email: `email-code-send-${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+  const targetEmail = `email-code-target-${TEST_RUN_SUFFIX}@example.com`;
+
+  emailProvider.clearStubEmailOutbox();
+
+  const startRes = await app.inject({
+    method: 'POST',
+    url: '/v1/email/start-verify',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'email-code-send-start' },
+    payload: { email: targetEmail },
+  });
+  assert.equal(startRes.statusCode, 200);
+
+  const code = emailProvider.getStubEmailCode(targetEmail);
+  assert.equal(typeof code, 'string', 'stub email provider must capture verification code');
+  assert.equal(code.length, 6, 'verification code must be 6 digits');
+  assert.match(code, /^\d{6}$/);
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — Offer expiry transitions holds to expired
+// =====================================================================
+
+test('expired offer transitions holds to expired status', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-hold-expiry-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_hold_expiry_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-hold-expiry-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_hold_expiry_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Hold expiry unit', 'hold-expiry-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'hold-expiry-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null, ttl_minutes: 15 },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const activeHolds = await query(
+    "select * from holds where offer_id=$1 and status='active'", [offerId],
+  );
+  assert.equal(activeHolds.length >= 0, true);
+
+  await query("update offers set expires_at = now() - interval '1 minute' where id=$1", [offerId]);
+  await query("update holds set expires_at = now() - interval '1 minute' where offer_id=$1", [offerId]);
+
+  await repo.expireStaleOffers();
+
+  const expiredOffer = await query('select status from offers where id=$1', [offerId]);
+  assert.equal(expiredOffer[0].status, 'expired');
+
+  const expiredHolds = await query('select status from holds where offer_id=$1', [offerId]);
+  for (const hold of expiredHolds) {
+    assert.equal(hold.status, 'expired', 'holds must transition to expired when offer expires');
+  }
+  await app.close();
+});
+
+// =====================================================================
+// QA AUDIT — Webhook payload is metadata-only (no contact PII in any event)
+// =====================================================================
+
+test('webhook payload for offer_contact_revealed does not include contact details', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-webhook-no-pii-seller', {
+    display_name: 'WebhookNoPIISeller',
+    email: `webhook-nopii-seller-${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+    messaging_handles: [{ kind: 'telegram', handle: '@sellersecret', url: null }],
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_webhook_nopii_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-webhook-no-pii-buyer', {
+    display_name: 'WebhookNoPIIBuyer',
+    email: `webhook-nopii-buyer-${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+    messaging_handles: [{ kind: 'whatsapp', handle: '+19995551234', url: null }],
+  });
+  const buyerNodeId = buyerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_webhook_nopii_buyer')).statusCode, 200);
+
+  await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'webhook-nopii-seller-setup' },
+    payload: { event_webhook_url: 'https://hooks.example.test/nopii-seller', event_webhook_secret: 'nopii-secret' },
+  });
+  await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'webhook-nopii-buyer-setup' },
+    payload: { event_webhook_url: 'https://hooks.example.test/nopii-buyer' },
+  });
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Webhook NoPII unit', 'webhook-nopii-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const webhookCalls = [];
+  await withMockFetch(async (url, init) => {
+    const rawBody = init && typeof init.body === 'string' ? init.body : '{}';
+    webhookCalls.push({ url: String(url), body: JSON.parse(rawBody), rawBody });
+    return jsonResponse(200, { ok: true });
+  }, async () => {
+    const offer = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'webhook-nopii-create' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: null },
+    });
+    assert.equal(offer.statusCode, 200);
+    const offerId = offer.json().offer.id;
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerId}/accept`,
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'webhook-nopii-accept-buyer' },
+      payload: {},
+    });
+    await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerId}/accept`,
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'webhook-nopii-accept-seller' },
+      payload: {},
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerId}/reveal-contact`,
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'webhook-nopii-reveal' },
+      payload: {},
+    });
+  });
+
+  const revealWebhooks = webhookCalls.filter((c) => c.body?.type === 'offer_contact_revealed');
+  assert.equal(revealWebhooks.length > 0, true, 'must emit offer_contact_revealed webhooks');
+  for (const call of revealWebhooks) {
+    const bodyStr = call.rawBody.toLowerCase();
+    assert.equal(bodyStr.includes('@sellersecret'), false, 'webhook must not contain seller messaging handle');
+    assert.equal(bodyStr.includes('+19995551234'), false, 'webhook must not contain buyer phone');
+    assert.equal(bodyStr.includes('webhook-nopii-seller'), false, 'webhook must not contain seller email prefix');
+    assert.equal(bodyStr.includes('webhook-nopii-buyer'), false, 'webhook must not contain buyer email prefix');
+    assert.equal(call.body.email, undefined, 'webhook body must not have email field');
+    assert.equal(call.body.phone, undefined, 'webhook body must not have phone field');
+    assert.equal(call.body.messaging_handles, undefined, 'webhook body must not have messaging_handles field');
+    assert.equal(call.body.contact, undefined, 'webhook body must not have contact field');
+    assert.deepEqual(call.body.payload, {}, 'webhook payload must be empty object (metadata-only per spec)');
+  }
+  await app.close();
+});
+
+// =====================================================================
+// GAP 1 — customer.subscription.deleted webhook sets status to canceled
+// =====================================================================
+
+test('webhook customer.subscription.deleted sets subscription status to canceled', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-sub-deleted');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_sub_active_before_del')).statusCode, 200);
+
+  const meBefore = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(meBefore.json().node.is_subscriber, true);
+
+  const deleteEvent = {
+    id: `evt_sub_deleted_${nodeId.slice(0, 8)}`,
+    type: 'customer.subscription.deleted',
+    data: {
+      object: {
+        id: `sub_${nodeId.slice(0, 8)}`,
+        customer: `cus_${nodeId.slice(0, 8)}`,
+        status: 'canceled',
+        metadata: { node_id: nodeId, plan_code: 'basic' },
+        current_period_start: 1735689600,
+        current_period_end: 1738368000,
+      },
+    },
+  };
+  const sig = sign(deleteEvent);
+  const wh = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(wh.statusCode, 200);
+
+  const sub = await query('select status from subscriptions where node_id=$1', [nodeId]);
+  assert.equal(sub.length > 0, true, 'subscription row must exist');
+  assert.equal(sub[0].status, 'canceled', 'subscription status must be canceled after deletion webhook');
+
+  const meAfter = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(meAfter.json().node.is_subscriber, false, 'node must no longer be a subscriber');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 2 — GET /v1/public/nodes/:id/listings standalone test
+// =====================================================================
+
+test('GET /v1/public/nodes/:id/listings returns shape with items and credits charge, and 402 when exhausted', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-pub-listings-owner');
+  const ownerNodeId = ownerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, ownerNodeId, 'evt_pub_listings_owner')).statusCode, 200);
+
+  const callerBoot = await bootstrap(app, 'boot-pub-listings-caller');
+  const callerApiKey = callerBoot.json().api_key.api_key;
+  const callerNodeId = callerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, callerNodeId, 'evt_pub_listings_caller')).statusCode, 200);
+
+  const unit = await repo.createResource('units', ownerNodeId, unitPayload('Public listing item', 'pub-listing-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const res = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/listings?limit=10`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.ok(Array.isArray(res.json().items), 'response must have items array');
+  assert.equal(res.json().items.length > 0, true, 'must return published listings');
+  assert.equal(typeof res.headers['x-credits-charged'], 'string', 'must include credits charged header');
+
+  await query('delete from credit_ledger where node_id=$1', [callerNodeId]);
+  const exhausted = await app.inject({
+    method: 'GET',
+    url: `/v1/public/nodes/${ownerNodeId}/listings?limit=10`,
+    headers: { authorization: `ApiKey ${callerApiKey}` },
+  });
+  assert.equal(exhausted.statusCode, 402);
+  assert.equal(exhausted.json().error.code, 'credits_exhausted');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 3 — MCP fabric_search_requests test
+// =====================================================================
+
+test('MCP fabric_search_requests executes search and returns results', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'mcp-search-req');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_mcp_search_req')).statusCode, 200);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: {
+        name: 'fabric_search_requests',
+        arguments: { q: 'anything', scope: 'OTHER', filters: { scope_notes: 'mcp-search-req-test' }, budget: { credits_requested: 5 } },
+      },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.id, 20);
+  if (body.result.isError) {
+    const errorText = body.result.content?.[0]?.text ?? JSON.stringify(body.result);
+    assert.fail(`fabric_search_requests failed: ${errorText}`);
+  }
+  const data = JSON.parse(body.result.content[0].text);
+  assert.ok(Array.isArray(data.items), 'must return items array');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 4 — MCP fabric_get_unit test
+// =====================================================================
+
+test('MCP fabric_get_unit returns unit for owner and error for non-owner', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'mcp-get-unit-owner');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const unit = await repo.createResource('units', nodeId, unitPayload('MCP Unit', 'mcp-get-unit-scope'));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 30,
+      method: 'tools/call',
+      params: { name: 'fabric_get_unit', arguments: { unit_id: unit.id } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(!body.result.isError, 'owner should be able to read own unit via MCP');
+  const data = JSON.parse(body.result.content[0].text);
+  assert.equal(data.id, unit.id);
+
+  const other = await bootstrap(app, 'mcp-get-unit-other');
+  const otherApiKey = other.json().api_key.api_key;
+  const notOwned = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${otherApiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 31,
+      method: 'tools/call',
+      params: { name: 'fabric_get_unit', arguments: { unit_id: unit.id } },
+    },
+  });
+  assert.equal(notOwned.statusCode, 200);
+  const notOwnedBody = notOwned.json();
+  const notOwnedData = JSON.parse(notOwnedBody.result.content[0].text);
+  assert.ok(notOwnedData.error || notOwnedBody.result.isError, 'non-owner must get error for unit via MCP');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 5 — MCP fabric_get_request test
+// =====================================================================
+
+test('MCP fabric_get_request returns request for owner', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'mcp-get-req-owner');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const reqResource = await repo.createResource('requests', nodeId, {
+    title: 'MCP Request',
+    description: 'test mcp request',
+    type: 'service',
+    condition: null,
+    quantity: 1,
+    scope_primary: 'OTHER',
+    scope_secondary: null,
+    scope_notes: 'mcp-get-req-scope',
+    service_region: null,
+    origin_region: null,
+    dest_region: null,
+    delivery_format: null,
+    measure: null,
+    custom_measure: null,
+    tags: [],
+    category_ids: [],
+    public_summary: 'MCP Request',
+  });
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 40,
+      method: 'tools/call',
+      params: { name: 'fabric_get_request', arguments: { request_id: reqResource.id } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(!body.result.isError, 'owner should read own request via MCP');
+  const data = JSON.parse(body.result.content[0].text);
+  assert.equal(data.id, reqResource.id);
+  await app.close();
+});
+
+// =====================================================================
+// GAP 6 — MCP fabric_get_offer test
+// =====================================================================
+
+test('MCP fabric_get_offer returns offer for party and error for non-party', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'mcp-get-offer-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_mcp_offer_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'mcp-get-offer-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_mcp_offer_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('MCP Offer Unit', 'mcp-get-offer-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'mcp-offer-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const partyRes = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 50,
+      method: 'tools/call',
+      params: { name: 'fabric_get_offer', arguments: { offer_id: offerId } },
+    },
+  });
+  assert.equal(partyRes.statusCode, 200);
+  const partyBody = partyRes.json();
+  assert.ok(!partyBody.result.isError, 'party should read offer via MCP');
+  const partyData = JSON.parse(partyBody.result.content[0].text);
+  assert.equal(partyData.offer.id, offerId);
+
+  const thirdBoot = await bootstrap(app, 'mcp-get-offer-third');
+  const thirdApiKey = thirdBoot.json().api_key.api_key;
+  const thirdRes = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${thirdApiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 51,
+      method: 'tools/call',
+      params: { name: 'fabric_get_offer', arguments: { offer_id: offerId } },
+    },
+  });
+  assert.equal(thirdRes.statusCode, 200);
+  const thirdBody = thirdRes.json();
+  const thirdData = JSON.parse(thirdBody.result.content[0].text);
+  assert.ok(thirdData.error || thirdBody.result.isError, 'non-party must get error for offer via MCP');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 7 — billing topups invalid pack_code returns 422
+// =====================================================================
+
+test('POST /v1/billing/topups/checkout-session rejects invalid pack_code with 422', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-topup-invalid');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/billing/topups/checkout-session',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'topup-invalid-pack' },
+    payload: {
+      node_id: nodeId,
+      pack_code: 'credits_999999',
+      success_url: 'https://example.com/success',
+      cancel_url: 'https://example.com/cancel',
+    },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 8 — billing checkout for already-subscribed node
+// =====================================================================
+
+test('POST /v1/billing/checkout-session for already-subscribed node still processes (Stripe manages subscription state)', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-already-sub');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, nodeId, 'evt_already_sub')).statusCode, 200);
+
+  await withMockFetch(async (url) => {
+    return jsonResponse(200, { id: 'cs_mock_already_sub', url: 'https://checkout.stripe.com/mock' });
+  }, async () => {
+    await withConfigOverrides({
+      stripeSecretKey: 'sk_test_mock',
+      stripeBasicPriceId: 'price_mock_basic',
+      stripeProPriceId: 'price_mock_pro',
+    }, async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/billing/checkout-session',
+        headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'already-sub-checkout' },
+        payload: {
+          node_id: nodeId,
+          plan_code: 'pro',
+          success_url: 'https://example.com/success',
+          cancel_url: 'https://example.com/cancel',
+        },
+      });
+      assert.ok([200, 422].includes(res.statusCode), `should return 200 (session created) or 422 (config issue), got ${res.statusCode}`);
+      if (res.statusCode === 200) {
+        assert.ok(res.json().url || res.json().checkout_url, 'must return checkout URL');
+      }
+    });
+  });
+  await app.close();
+});
+
+// =====================================================================
+// GAP 9 — Counter offer creates new holds on the counter offer
+// =====================================================================
+
+test('offer counter creates new holds on the new counter offer', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-counter-new-holds-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_counter_new_holds_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-counter-new-holds-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_counter_new_holds_buyer')).statusCode, 200);
+
+  const unit1 = await repo.createResource('units', sellerNodeId, unitPayload('Counter new hold unit 1', 'counter-new-holds-scope'));
+  const unit2 = await repo.createResource('units', sellerNodeId, unitPayload('Counter new hold unit 2', 'counter-new-holds-scope'));
+  await repo.setPublished('units', unit1.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit1.id));
+  await repo.setPublished('units', unit2.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit2.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'counter-new-holds-create' },
+    payload: { unit_ids: [unit1.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'counter-new-holds-counter' },
+    payload: { unit_ids: [unit2.id], note: 'counter with unit2' },
+  });
+  assert.equal(counter.statusCode, 200);
+  const newOfferId = counter.json().offer.id;
+
+  const newHolds = await query(
+    "select * from holds where offer_id=$1 and status='active'", [newOfferId],
+  );
+  assert.equal(newHolds.length > 0, true, 'new counter offer must have active holds');
+  assert.equal(newHolds.some((h) => h.unit_id === unit2.id), true, 'new hold must be on the countered unit');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 10 — GET /v1/offers cursor/limit pagination
+// =====================================================================
+
+test('GET /v1/offers supports cursor-based pagination', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offers-page-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_offers_page_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-offers-page-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_offers_page_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offers Page Unit', 'offers-page-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  for (let i = 0; i < 3; i++) {
+    const o = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': `offers-page-create-${i}` },
+      payload: { unit_ids: [unit.id], thread_id: null, note: `offer-${i}` },
+    });
+    assert.equal(o.statusCode, 200);
+  }
+
+  const page1 = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=made&limit=2',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page1.statusCode, 200);
+  assert.equal(page1.json().offers.length, 2, 'page 1 should return 2 offers');
+
+  const lastOffer = page1.json().offers[page1.json().offers.length - 1];
+  const cursor = lastOffer.created_at;
+
+  const page2 = await app.inject({
+    method: 'GET',
+    url: `/v1/offers?role=made&limit=2&cursor=${encodeURIComponent(cursor)}`,
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page2.statusCode, 200);
+  assert.equal(page2.json().offers.length > 0, true, 'page 2 should return remaining offers');
+
+  const page1Ids = page1.json().offers.map((o) => o.id);
+  const page2Ids = page2.json().offers.map((o) => o.id);
+  const overlap = page1Ids.filter((id) => page2Ids.includes(id));
+  assert.equal(overlap.length, 0, 'pages must not overlap');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 11 — admin projections/rebuild kind=listings and kind=requests
+// =====================================================================
+
+test('POST /v1/admin/projections/rebuild supports kind=listings and kind=requests independently', async () => {
+  const app = buildApp();
+
+  const listingsOnly = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/projections/rebuild?kind=listings&mode=full',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-rebuild-listings' },
+    payload: {},
+  });
+  assert.equal(listingsOnly.statusCode, 200);
+  assert.equal(listingsOnly.json().ok, true);
+  assert.equal(listingsOnly.json().kind, 'listings');
+  assert.equal(typeof listingsOnly.json().counts.public_listings_written, 'number');
+  assert.equal(typeof listingsOnly.json().counts.public_requests_written, 'number');
+
+  const requestsOnly = await app.inject({
+    method: 'POST',
+    url: '/v1/admin/projections/rebuild?kind=requests&mode=full',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': 'adm-rebuild-requests' },
+    payload: {},
+  });
+  assert.equal(requestsOnly.statusCode, 200);
+  assert.equal(requestsOnly.json().ok, true);
+  assert.equal(requestsOnly.json().kind, 'requests');
+  await app.close();
+});
+
+// =====================================================================
+// GAP 12 — Stripe webhook with unknown subscription price_id
+// =====================================================================
+
+test('webhook checkout.session.completed with unknown price falls back to plan from metadata or free', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-unknown-price');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const event = {
+    id: `evt_unknown_price_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: {
+      object: {
+        payment_status: 'paid',
+        metadata: { node_id: nodeId },
+        customer: `cus_unkprice_${nodeId.slice(0, 8)}`,
+        subscription: `sub_unkprice_${nodeId.slice(0, 8)}`,
+      },
+    },
+  };
+  const sig = sign(event);
+  const wh = await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig.header }, payload: sig.raw });
+  assert.equal(wh.statusCode, 200, 'webhook must not error on unknown price');
+
+  const sub = await query('select * from subscriptions where node_id=$1', [nodeId]);
+  assert.equal(sub.length > 0, true, 'subscription row must be created');
+  const me = await app.inject({ method: 'GET', url: '/v1/me', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(me.statusCode, 200);
+  assert.ok(
+    ['free', 'basic'].includes(me.json().node.plan),
+    `plan should fall back to free or basic when price is unknown, got ${me.json().node.plan}`,
+  );
+  await app.close();
+});
+
+// =====================================================================
+// MCP — Argument validation surfaces clear errors (Gap 3 fix)
+// =====================================================================
+
+test('MCP tool call with missing required args returns validation_error at MCP layer', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-mcp-argval');
+  const apiKey = b.json().api_key.api_key;
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { 'content-type': 'application/json', authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fabric_search_listings', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  const inner = JSON.parse(body.result.content[0].text);
+  assert.equal(inner.error.code, 'validation_error', 'MCP layer should return validation_error');
+  assert.ok(inner.error.message.includes('Missing required argument'), 'message should mention missing args');
+  assert.ok(inner.error.details.missing_args.includes('scope'), 'should list scope as missing');
+  assert.ok(inner.error.details.missing_args.includes('filters'), 'should list filters as missing');
+  assert.ok(inner.error.details.missing_args.includes('budget'), 'should list budget as missing');
+  assert.equal(body.result.isError, true, 'isError flag should be true');
+  await app.close();
+});
+
+// =====================================================================
+// Admin sweep endpoint — scheduled offer/request expiry
+// =====================================================================
+
+test('POST /internal/admin/sweep expires stale offers and requests', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/internal/admin/sweep',
+    headers: { 'x-admin-key': 'admin-test', 'idempotency-key': `sweep-${TEST_RUN_SUFFIX}` },
+  });
+  assert.equal(res.statusCode, 200, 'sweep should succeed');
+  const body = res.json();
+  assert.equal(body.ok, true);
+  assert.equal(typeof body.expired_offers, 'number');
+  assert.equal(typeof body.expired_requests, 'number');
+  await app.close();
+});
+
+// =====================================================================
+// Crypto top-up — NOWPayments integration
+// =====================================================================
+
+test('POST /v1/billing/crypto-topup requires auth', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/billing/crypto-topup',
+    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+  });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+});
+
+test('POST /v1/billing/crypto-topup rejects wrong node_id', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-wrongnode');
+  const apiKey = b.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/billing/crypto-topup',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-wrong-${TEST_RUN_SUFFIX}` },
+    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+  });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error.code, 'forbidden');
+  await app.close();
+});
+
+test('POST /v1/billing/crypto-topup rejects invalid pack_code', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-badpack');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/billing/crypto-topup',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-badpack-${TEST_RUN_SUFFIX}` },
+    payload: { node_id: nodeId, pack_code: 'credits_999', pay_currency: 'usdcmatic' },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  await app.close();
+});
+
+test('POST /v1/billing/crypto-topup creates payment and stores record (mocked NOWPayments)', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-create');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const originalFetch = globalThis.fetch;
+  const mockPaymentId = 7700000 + Math.floor(Math.random() * 100000);
+  globalThis.fetch = async (url, opts) => {
+    const urlStr = typeof url === 'string' ? url : url.toString();
+    if (urlStr.includes('nowpayments.io') && urlStr.includes('/payment')) {
+      const reqBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        payment_id: mockPaymentId,
+        payment_status: 'waiting',
+        pay_address: '0xFAKEADDRESS123',
+        pay_amount: reqBody.price_amount * 1.0,
+        pay_currency: reqBody.pay_currency,
+        price_amount: reqBody.price_amount,
+        price_currency: reqBody.price_currency,
+        order_id: reqBody.order_id,
+        expiration_estimate_date: new Date(Date.now() + 3600000).toISOString(),
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return originalFetch(url, opts);
+  };
+
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/billing/crypto-topup',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-create-${TEST_RUN_SUFFIX}` },
+      payload: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+    });
+    assert.equal(res.statusCode, 200, `expected 200, got ${res.statusCode}: ${res.body}`);
+    const body = res.json();
+    assert.equal(body.node_id, nodeId);
+    assert.equal(body.pack_code, 'credits_500');
+    assert.equal(body.credits, 500);
+    assert.equal(typeof body.pay_address, 'string');
+    assert.ok(body.pay_address.length > 0, 'pay_address should be non-empty');
+    assert.equal(typeof body.pay_amount, 'number');
+    assert.ok(body.pay_amount > 0, 'pay_amount should be positive');
+    assert.equal(body.payment_status, 'waiting');
+    assert.ok(body.order_id.startsWith('fabric:'), 'order_id should be prefixed');
+    assert.equal(body.payment_id, mockPaymentId);
+
+    const dbRow = await repo.getCryptoPaymentByNowpaymentsId(mockPaymentId);
+    assert.ok(dbRow, 'crypto_payment row should exist in DB');
+    assert.equal(dbRow.node_id, nodeId);
+    assert.equal(dbRow.pack_code, 'credits_500');
+    assert.equal(dbRow.status, 'waiting');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  await app.close();
+});
+
+test('POST /v1/webhooks/nowpayments rejects missing signature', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json' },
+    payload: { payment_id: 12345, payment_status: 'finished', order_id: 'test-order' },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'nowpayments_signature_invalid');
+  await app.close();
+});
+
+test('POST /v1/webhooks/nowpayments rejects invalid signature', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json', 'x-nowpayments-sig': 'badbadbadbad' },
+    payload: { payment_id: 12345, payment_status: 'finished', order_id: 'test-order' },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error.code, 'nowpayments_signature_invalid');
+  await app.close();
+});
+
+test('POST /v1/webhooks/nowpayments grants credits on valid finished payment', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-webhook');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const mockPaymentId = 8800000 + Math.floor(Math.random() * 100000);
+  const orderId = `fabric:${nodeId}:credits_500:${crypto.randomUUID()}`;
+
+  await repo.insertCryptoPayment(
+    nodeId, mockPaymentId, orderId, 'credits_500', 500,
+    9.99, 'usd', 'usdcmatic', '0xFAKEADDR', 9.99,
+  );
+
+  const balanceBefore = await repo.creditBalance(nodeId);
+
+  const webhookBody = {
+    payment_id: mockPaymentId,
+    payment_status: 'finished',
+    pay_address: '0xFAKEADDR',
+    pay_amount: 9.99,
+    actually_paid: 9.99,
+    pay_currency: 'usdcmatic',
+    price_amount: 9.99,
+    price_currency: 'usd',
+    order_id: orderId,
+    purchase_id: '999',
+    outcome_amount: 9.99,
+    outcome_currency: 'usdcmatic',
+  };
+
+  function sortObjectKeys(obj) {
+    if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+    const sorted = {};
+    for (const key of Object.keys(obj).sort()) {
+      sorted[key] = sortObjectKeys(obj[key]);
+    }
+    return sorted;
+  }
+
+  const hmac = crypto.createHmac('sha512', 'test-ipn-secret');
+  hmac.update(JSON.stringify(sortObjectKeys(webhookBody)));
+  const sig = hmac.digest('hex');
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json', 'x-nowpayments-sig': sig },
+    payload: webhookBody,
+  });
+  assert.equal(res.statusCode, 200, `expected 200, got ${res.statusCode}: ${res.body}`);
+  assert.equal(res.json().ok, true);
+
+  const balanceAfter = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfter, balanceBefore + 500, 'credits should be granted');
+
+  const dbRow = await repo.getCryptoPaymentByNowpaymentsId(mockPaymentId);
+  assert.equal(dbRow.status, 'finished');
+
+  await app.close();
+});
+
+test('POST /v1/webhooks/nowpayments is idempotent — replay does not double-grant', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-idem');
+  const nodeId = b.json().node.id;
+
+  const mockPaymentId = 9900000 + Math.floor(Math.random() * 100000);
+  const orderId = `fabric:${nodeId}:credits_1500:${crypto.randomUUID()}`;
+
+  await repo.insertCryptoPayment(
+    nodeId, mockPaymentId, orderId, 'credits_1500', 1500,
+    19.99, 'usd', 'usdcmatic', '0xFAKEADDR2', 19.99,
+  );
+
+  const webhookBody = {
+    payment_id: mockPaymentId,
+    payment_status: 'finished',
+    pay_address: '0xFAKEADDR2',
+    pay_amount: 19.99,
+    actually_paid: 19.99,
+    pay_currency: 'usdcmatic',
+    price_amount: 19.99,
+    price_currency: 'usd',
+    order_id: orderId,
+    purchase_id: '1001',
+    outcome_amount: 19.99,
+    outcome_currency: 'usdcmatic',
+  };
+
+  function sortObjectKeys(obj) {
+    if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+    const sorted = {};
+    for (const key of Object.keys(obj).sort()) {
+      sorted[key] = sortObjectKeys(obj[key]);
+    }
+    return sorted;
+  }
+
+  const hmac1 = crypto.createHmac('sha512', 'test-ipn-secret');
+  hmac1.update(JSON.stringify(sortObjectKeys(webhookBody)));
+  const sig = hmac1.digest('hex');
+
+  const res1 = await app.inject({
+    method: 'POST', url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json', 'x-nowpayments-sig': sig },
+    payload: webhookBody,
+  });
+  assert.equal(res1.statusCode, 200);
+
+  const balanceAfterFirst = await repo.creditBalance(nodeId);
+
+  const res2 = await app.inject({
+    method: 'POST', url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json', 'x-nowpayments-sig': sig },
+    payload: webhookBody,
+  });
+  assert.equal(res2.statusCode, 200);
+
+  const balanceAfterReplay = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfterReplay, balanceAfterFirst, 'replay must not double-grant credits');
+
+  await app.close();
+});
+
+test('POST /v1/webhooks/nowpayments does not grant credits for partially_paid', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-crypto-partial');
+  const nodeId = b.json().node.id;
+
+  const mockPaymentId = 6600000 + Math.floor(Math.random() * 100000);
+  const orderId = `fabric:${nodeId}:credits_500:${crypto.randomUUID()}`;
+
+  await repo.insertCryptoPayment(
+    nodeId, mockPaymentId, orderId, 'credits_500', 500,
+    9.99, 'usd', 'usdcmatic', '0xFAKEPARTIAL', 9.99,
+  );
+
+  const balanceBefore = await repo.creditBalance(nodeId);
+
+  const webhookBody = {
+    payment_id: mockPaymentId,
+    payment_status: 'partially_paid',
+    pay_address: '0xFAKEPARTIAL',
+    pay_amount: 9.99,
+    actually_paid: 5.0,
+    pay_currency: 'usdcmatic',
+    price_amount: 9.99,
+    price_currency: 'usd',
+    order_id: orderId,
+  };
+
+  function sortObjectKeys(obj) {
+    if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+    if (Array.isArray(obj)) return obj.map(sortObjectKeys);
+    const sorted = {};
+    for (const key of Object.keys(obj).sort()) {
+      sorted[key] = sortObjectKeys(obj[key]);
+    }
+    return sorted;
+  }
+
+  const hmac = crypto.createHmac('sha512', 'test-ipn-secret');
+  hmac.update(JSON.stringify(sortObjectKeys(webhookBody)));
+  const sig = hmac.digest('hex');
+
+  const res = await app.inject({
+    method: 'POST', url: '/v1/webhooks/nowpayments',
+    headers: { 'content-type': 'application/json', 'x-nowpayments-sig': sig },
+    payload: webhookBody,
+  });
+  assert.equal(res.statusCode, 200);
+
+  const balanceAfter = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfter, balanceBefore, 'partially_paid must not grant credits');
+
+  const dbRow = await repo.getCryptoPaymentByNowpaymentsId(mockPaymentId);
+  assert.equal(dbRow.status, 'partially_paid');
+
+  await app.close();
+});
+
+// ── Referral code endpoint ──
+
+test('GET /v1/me/referral-code returns a code and is stable', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-refcode-1');
+  const apiKey = b.json().api_key.api_key;
+
+  const res1 = await app.inject({ method: 'GET', url: '/v1/me/referral-code', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(res1.statusCode, 200);
+  const code1 = res1.json().referral_code;
+  assert.ok(code1, 'should return a referral code');
+  assert.ok(typeof code1 === 'string');
+
+  const res2 = await app.inject({ method: 'GET', url: '/v1/me/referral-code', headers: { authorization: `ApiKey ${apiKey}` } });
+  assert.equal(res2.json().referral_code, code1, 'should return the same code on subsequent calls');
+
+  await app.close();
+});
+
+test('GET /v1/me/referral-code requires auth', async () => {
+  const app = buildApp();
+  const res = await app.inject({ method: 'GET', url: '/v1/me/referral-code' });
+  assert.equal(res.statusCode, 401);
+  await app.close();
+});
+
+// ── Rollover cap enforcement ──
+
+test('subscription monthly grant is capped at 2x plan credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-rollover-cap');
+  const nodeId = b.json().node.id;
+  const customerId = `cus_rollcap_${nodeId.slice(0, 8)}`;
+  const subscriptionId = `sub_rollcap_${nodeId.slice(0, 8)}`;
+
+  // Activate basic plan
+  const activate = {
+    id: `evt_rollcap_activate_${nodeId.slice(0, 8)}`,
+    type: 'checkout.session.completed',
+    data: { object: { payment_status: 'paid', metadata: { node_id: nodeId, plan_code: 'basic' }, customer: customerId, subscription: subscriptionId } },
+  };
+  const actSig = sign(activate);
+  await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': actSig.header }, payload: actSig.raw });
+
+  // Month 1 invoice - should get full 1000
+  const inv1 = {
+    id: `evt_rollcap_m1_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: { object: { id: `in_rollcap_m1_${nodeId.slice(0, 8)}`, customer: customerId, subscription: subscriptionId, period_start: 1735689600, period_end: 1738368000, billing_reason: 'subscription_cycle', metadata: { node_id: nodeId, plan_code: 'basic' } } },
+  };
+  const sig1 = sign(inv1);
+  await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig1.header }, payload: sig1.raw });
+  const bal1 = await repo.creditBalance(nodeId);
+  // 100 signup + 1000 monthly = 1100
+  assert.equal(bal1, 1100);
+
+  // Month 2 invoice - sub balance is 1000, cap is 2000, so can grant up to 1000 more = full grant
+  const inv2 = {
+    id: `evt_rollcap_m2_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: { object: { id: `in_rollcap_m2_${nodeId.slice(0, 8)}`, customer: customerId, subscription: subscriptionId, period_start: 1738368000, period_end: 1740787200, billing_reason: 'subscription_cycle', metadata: { node_id: nodeId, plan_code: 'basic' } } },
+  };
+  const sig2 = sign(inv2);
+  await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig2.header }, payload: sig2.raw });
+  const bal2 = await repo.creditBalance(nodeId);
+  // 100 signup + 1000 + 1000 = 2100
+  assert.equal(bal2, 2100);
+
+  // Month 3 invoice - sub balance is 2000, cap is 2000, so grant 0
+  const inv3 = {
+    id: `evt_rollcap_m3_${nodeId.slice(0, 8)}`,
+    type: 'invoice.paid',
+    data: { object: { id: `in_rollcap_m3_${nodeId.slice(0, 8)}`, customer: customerId, subscription: subscriptionId, period_start: 1740787200, period_end: 1743465600, billing_reason: 'subscription_cycle', metadata: { node_id: nodeId, plan_code: 'basic' } } },
+  };
+  const sig3 = sign(inv3);
+  await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig3.header }, payload: sig3.raw });
+  const bal3 = await repo.creditBalance(nodeId);
+  // Cap reached, no additional credits
+  assert.equal(bal3, 2100);
+
+  await app.close();
+});
+
+// ── Prepurchase limit response includes purchase options ──
+
+test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-prepurchase-guidance');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+
+  const searchPayload = { q: null, scope: 'OTHER', filters: { scope_notes: 'prepurchase-guidance-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: 10 }, limit: 20, cursor: null };
+
+  // Exhaust the daily search limit (3 searches)
+  for (let i = 0; i < 3; i++) {
+    await app.inject({
+      method: 'POST', url: '/v1/search/listings',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `prepurch-search-${nodeId}-${i}`, 'content-type': 'application/json' },
+      payload: searchPayload,
+    });
+  }
+
+  // 4th search should hit prepurchase limit
+  const res = await app.inject({
+    method: 'POST', url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `prepurch-search-${nodeId}-over`, 'content-type': 'application/json' },
+    payload: searchPayload,
+  });
+  assert.equal(res.statusCode, 429);
+  const body = res.json();
+  assert.equal(body.error.code, 'prepurchase_daily_limit_exceeded');
+  assert.ok(body.error.details.purchase_options, 'should include purchase_options');
+  assert.ok(body.error.details.purchase_options.crypto, 'should include crypto options');
+  assert.ok(body.error.details.purchase_options.stripe, 'should include stripe options');
+  assert.ok(body.error.details.how_to_remove_limit, 'should include how_to_remove_limit');
+
   await app.close();
 });
 

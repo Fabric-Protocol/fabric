@@ -993,7 +993,8 @@ Response 200
     "kind": "listing",
     "source_unit_id": "uuid",
     "published_at": "iso"
-  }
+  },
+  "disclaimer": "string"
 }
 
 POST /v1/units/{unit_id}/unpublish
@@ -1039,7 +1040,8 @@ Response 200
     "kind": "request",
     "source_request_id": "uuid",
     "published_at": "iso"
-  }
+  },
+  "disclaimer": "string"
 }
 
 POST /v1/requests/{request_id}/unpublish
@@ -1322,6 +1324,8 @@ Response 200
 
 Errors
 
+402 budget_cap_exceeded (computed cost exceeds budget.credits_max)
+
 402 credits_exhausted
 
 422 validation_error
@@ -1415,7 +1419,7 @@ Request
 }
 
 Response 200
-{ "offer": { /* OfferObject */ } }
+{ "offer": { /* OfferObject */ }, "disclaimer": "string" }
 
 Rules / side effects
 
@@ -1701,7 +1705,8 @@ Response 200
         "url": "https://example.com|null"
       }
     ]
-  }
+  },
+  "disclaimer": "string"
 }
 
 Disclaimer (normative)
@@ -1760,7 +1765,7 @@ Response 200
   "events": [
     {
       "id": "uuid",
-      "type": "offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed",
+      "type": "offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed|subscription_changed",
       "offer_id": "uuid",
       "actor_node_id": "uuid",
       "recipient_node_id": "uuid",
@@ -1804,6 +1809,46 @@ Request
 
 Response 200
 { "ok": true, "referrer_node_id": "uuid" }
+
+GET /v1/me/referral-code
+Auth
+
+Required
+
+Metering
+
+None
+
+Purpose
+
+Get or create the node's own referral code.
+
+Response 200
+{ "referral_code": "string" }
+
+GET /v1/me/referral-stats
+Auth
+
+Required
+
+Metering
+
+None
+
+Purpose
+
+Get referral statistics for the authenticated node.
+
+Response 200
+{
+  "referral_code": "string",
+  "total_referrals": 0,
+  "awarded": 0,
+  "pending": 0,
+  "credits_earned": 0,
+  "cap": 50,
+  "remaining": 50
+}
 
 14) Billing checkout session (subscription onboarding)
 POST /v1/billing/checkout-session
@@ -2007,6 +2052,119 @@ Response 200
 Errors
 
 422 validation_error (invalid node_ids or kind)
+
+15c) Crypto billing (NOWPayments)
+
+POST /v1/billing/crypto-topup
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Create a NOWPayments invoice for a credit pack purchase. Returns a payment address agents send crypto to directly (no browser needed).
+
+Request
+{
+  "node_id": "uuid",
+  "pack_code": "credits_500|credits_1500|credits_4500",
+  "pay_currency": "string (e.g. usdcmatic)"
+}
+
+Response 200
+{
+  "node_id": "uuid",
+  "pack_code": "string",
+  "credits": 500,
+  "payment_id": "string",
+  "pay_address": "string",
+  "pay_amount": 9.99,
+  "pay_currency": "usdcmatic",
+  "price_amount": 9.99,
+  "price_currency": "usd",
+  "order_id": "string",
+  "valid_until": "iso"
+}
+
+Errors
+
+403 forbidden (node_id mismatch)
+
+422 validation_error
+
+GET /v1/billing/crypto-currencies
+Auth
+
+Required
+
+Metering
+
+None
+
+Purpose
+
+List available NOWPayments crypto currencies that agents can use for top-ups.
+
+Response 200
+{ "currencies": ["usdcmatic", "btc", "eth", ...] }
+
+POST /v1/webhooks/nowpayments
+Auth
+
+None; IPN signature verified (HMAC-SHA512 with IPN secret)
+
+Idempotency-Key
+
+N/A (idempotency by order_id unique constraint)
+
+Metering
+
+None
+
+Purpose
+
+Handle NOWPayments IPN callbacks. Grant credits when payment is confirmed.
+
+Rules / side effects
+
+- Verify HMAC-SHA512 signature using configured IPN secret.
+- Grant credits only when `payment_status` is `finished` or `confirmed`.
+- Idempotent by `order_id`.
+- Enforce daily velocity limit per node.
+
+Response 200
+{ "ok": true }
+
+15d) Regions discovery
+
+GET /v1/regions
+Auth
+
+None (public)
+
+Metering
+
+None
+
+Purpose
+
+Return the supported region codes for the MVP.
+
+Response 200
+{
+  "country": "US",
+  "regions": ["US", "US-AL", "US-AK", ...],
+  "format": "CC or CC-AA (ISO 3166-1 alpha-2 country code, optionally followed by admin1 subdivision)",
+  "note": "MVP supports US regions only."
+}
 
 ---
 

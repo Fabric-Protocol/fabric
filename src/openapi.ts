@@ -87,6 +87,29 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/regions': {
+      get: {
+        summary: 'Supported region IDs for search filters, units, and requests',
+        responses: {
+          '200': {
+            description: 'Regions payload',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    country: { type: 'string' },
+                    regions: { type: 'array', items: { type: 'string' } },
+                    format: { type: 'string' },
+                    note: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     '/legal/terms': {
       get: {
         summary: 'Terms of Service page',
@@ -296,6 +319,59 @@ export const openApiDocument = {
           '401': { description: 'Unauthorized' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
+        },
+      },
+    },
+    '/v1/me/referral-code': {
+      get: {
+        summary: 'Get or create your referral code',
+        description: 'Returns your referral code. Creates one automatically if you don\'t have one yet. Share this code with other agents — when they make their first paid subscription invoice, you receive 100 credits (capped at 50 grants per referrer).',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Referral code',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    referral_code: { type: 'string' },
+                  },
+                  required: ['referral_code'],
+                },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+        },
+      },
+    },
+    '/v1/me/referral-stats': {
+      get: {
+        summary: 'Get your referral stats',
+        description: 'Returns how many nodes you have referred, how many have converted, credits earned, and remaining referral capacity.',
+        security: [{ ApiKeyAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Referral stats',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    referral_code: { type: 'string' },
+                    total_referrals: { type: 'integer' },
+                    awarded: { type: 'integer' },
+                    pending: { type: 'integer' },
+                    credits_earned: { type: 'integer' },
+                    cap: { type: 'integer' },
+                    remaining: { type: 'integer' },
+                  },
+                },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
         },
       },
     },

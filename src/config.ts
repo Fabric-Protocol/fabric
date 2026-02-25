@@ -34,6 +34,7 @@ export const config = {
   host: process.env.HOST ?? '0.0.0.0',
   databaseUrl: process.env.DATABASE_URL ?? '',
   databaseSslCa: process.env.DATABASE_SSL_CA ?? '',
+  // TODO: Move ADMIN_KEY to GCP Secret Manager instead of env var for production.
   adminKey: process.env.ADMIN_KEY ?? '',
   defaultRateLimitLimit: Number(process.env.DEFAULT_RATE_LIMIT_LIMIT ?? 1000),
   searchCreditCost: Number(process.env.SEARCH_CREDIT_COST ?? 5),
@@ -48,9 +49,6 @@ export const config = {
   searchPageProhibitiveFrom: Number(process.env.SEARCH_PAGE_PROHIBITIVE_FROM ?? 6),
   searchPageProhibitiveCost: Number(process.env.SEARCH_PAGE_PROHIBITIVE_COST ?? 100),
   signupGrantCredits: Number(process.env.SIGNUP_GRANT_CREDITS ?? 100),
-  uploadTrialThreshold: Number(process.env.UPLOAD_TRIAL_THRESHOLD ?? 20),
-  uploadTrialDurationDays: Number(process.env.UPLOAD_TRIAL_DURATION_DAYS ?? 7),
-  uploadTrialCreditGrant: Number(process.env.UPLOAD_TRIAL_CREDIT_GRANT ?? 200),
   requestMilestoneThreshold: Number(process.env.REQUEST_MILESTONE_THRESHOLD ?? 20),
   requestMilestoneCreditGrant: Number(process.env.REQUEST_MILESTONE_CREDIT_GRANT ?? 200),
   referralMaxGrantsPerReferrer: Number(process.env.REFERRAL_MAX_GRANTS_PER_REFERRER ?? 50),
@@ -106,4 +104,9 @@ export const config = {
   rateLimitMcpPerMinute: Number(process.env.RATE_LIMIT_MCP_PER_MINUTE ?? 60),
   checkoutRedirectAllowlist: parseCsv(process.env.CHECKOUT_REDIRECT_ALLOWLIST),
   apiKeyPepper: process.env.API_KEY_PEPPER ?? '',
+  nowpaymentsApiKey: process.env.NOWPAYMENTS_API_KEY ?? '',
+  nowpaymentsIpnSecret: process.env.NOWPAYMENTS_IPN_SECRET ?? '',
+  nowpaymentsApiBase: process.env.NOWPAYMENTS_API_BASE ?? 'https://api.nowpayments.io/v1',
+  cryptoTopupEnabled: parseBoolean(process.env.CRYPTO_TOPUP_ENABLED, true),
+  rateLimitCryptoTopupPerDay: Number(process.env.RATE_LIMIT_CRYPTO_TOPUP_PER_DAY ?? 10),
 };

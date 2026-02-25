@@ -2,6 +2,19 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-02-25 - Remove Bcon (crypto pay-in rail)
+Decision:
+- Bcon integration fully removed from MVP. No crypto pay-in endpoints, no Bcon webhook handler, no bcon_invoices/bcon_txns tables.
+- Supersedes decision "2026-02-24 - Document Bcon billing endpoints and categories-summary" (the Bcon portions only; categories-summary remains).
+Rationale:
+- Bcon was descoped from MVP to reduce integration surface area and focus on Stripe-only billing.
+Scope/impact:
+- Code: all Bcon routes, service methods, and repo functions removed from src/.
+- Specs: Bcon sections (old 15b/15c) removed from `20__api-contracts.md`.
+- DB: `bcon_invoices` and `bcon_txns` tables dropped from live Supabase.
+- Orphaned migration files deleted from `supabase_migrations/`.
+- `todo.md` Phase 1.5 Bcon item marked cancelled.
+
 ## 2026-02-24 - Remove subscriber gate; credits-only search with pre-purchase daily limits
 Decision:
 - Search no longer requires active subscription or trial. Credits are sufficient for access.

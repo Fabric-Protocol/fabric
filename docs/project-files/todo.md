@@ -25,21 +25,38 @@ Last updated: 2026-02-24
   - strict allowlist + rate limits
   - publish `mcp_url` via GET /v1/meta
   - document briefly in /docs/agents
-- [ ] Improve 402 credits-exhausted response:
-  - replace “not enough credits” with actionable message
-  - include direct “get credits” URL (Stripe Checkout)
-  - keep response machine-readable for agents  
+- [x] Improve 402 credits-exhausted response (Done 2026-02-25: purchaseGuidance() added to 402/429/was_capped with Stripe + crypto instructions)
 
 ### Phase 0.5 — Workflow hardening (latest thread notes)
 - [ ] Update `AGENTS.md` DB/DDL wording:
   - explicitly state generated SQL scripts are for manual Supabase execution, not agent execution
 
 ### Phase 0.5 — Pricing + grants + acceptance fee (latest thread notes)
-- [ ] Create `supabase_migrations/2026-02-23__apply_credit_ledger_types.sql` for the new credit-ledger constraint migration, and run APPLY+VERIFY in Supabase before go-live (manual step).
+- [x] Create `supabase_migrations/2026-02-23__apply_credit_ledger_types.sql` for the new credit-ledger constraint migration, and run APPLY+VERIFY in Supabase before go-live (manual step). (Verified applied 2026-02-25)
 
 ### Phase 0.5 — Current phase (latest thread notes)
 - [ ] Add/maintain `agent_toc` schema in OpenAPI + regression tests.
 - [ ] Enforce "no contact info in item content" across all relevant text-bearing objects (verify future objects don't bypass validation).
+
+### Agent-readiness improvements (from QA audit 2026-02-24)
+- [ ] Move rate limiting from per-instance in-memory to a shared store (Redis/Upstash) so limits are consistent across horizontally scaled Cloud Run instances.
+- [ ] Reduce Cloud Run cold-start latency: set `--min-instances=1` in production, evaluate startup profile for lazy-init opportunities, and consider `--cpu-boost` flag.
+
+### Conformance audit findings (2026-02-25)
+- [x] **G2** (fixed): Cloud Scheduler setup script created covering projections rebuild at :07/:37 America/Los_Angeles.
+- [ ] **G3** (low): Add global burst rate limit (30 req/10s) and daily backstop (10,000/day non-search). Currently only per-endpoint limits exist.
+- [ ] **G4** (low): Add referral fraud controls and clawback mechanism (spec says MUST include). No reversal/clawback code for referral grants exists.
+- [ ] **G5** (low): Add Stripe `charge.dispute.created` / `charge.dispute.closed` webhook handler to auto-suspend or adjust credits on chargebacks. Terms describe the policy but no automation exists.
+- [x] **G6** (fixed): Dead `trial_entitlements` write removed from unit creation CTE. Trial read functions and `has_active_trial` join in `findApiKey` also cleaned up.
+- [x] **G7** (fixed): `display_name` now included in search result `nodes[]` array via batch lookup.
+- [x] **C1** (fixed): `30__mvp-scope.md` signup grant changed from 200 → 100 to match code and `10__invariants.md`.
+- [x] **G1** (fixed): Safety disclaimers added to publish, offer-create, and reveal-contact responses.
+- [x] **D1** (fixed): `GET /v1/regions` discovery endpoint added (public, unauthenticated).
+- [ ] **D2** (medium, future): International region support beyond US.
+- [ ] **D3** (nice to have someday): Credit balance change webhooks to nodes. Not urgent — agents already get `X-Credits-Remaining` on every metered response and can poll `GET /v1/credits/balance`. Only revisit if users report confusion about balance changes.
+- [x] **D4** (done): `GET /v1/me/referral-stats` endpoint implemented (referral count, credits earned, cap, remaining).
+- [x] **D5** (done): Subscription status change webhook notifications to nodes (`subscription_changed` event type on `invoice.paid` and `invoice.payment_failed`). DB migration to allow nullable `offer_id` and new event types in `offer_events` table.
+- [x] **D7** (done): Cloud Scheduler setup script created (`scripts/setup-cloud-scheduler.ps1`) covering all 3 jobs: projections rebuild (30min), sweep (5min), retention (daily). Internal `POST /internal/admin/retention` endpoint added.
 
 ### Next Phase (ranked by likelihood)
 High likelihood:
@@ -83,7 +100,7 @@ Low likelihood:
 - [ ] Provide machine-readable "content_rules" block as a separately versioned artifact (if `/v1/meta` grows too large).
 - [ ] Remove `broadening_cost` from breakdown in a versioned API bump (currently retained for compatibility).
 - [ ] Add optional webhook receiver helper snippet/library in SDK (signature verification plus dedupe scaffolding).
-- [ ] Add regions catalog / stricter ISO 3166-2 validation endpoint; keep current regex as format-only until catalog exists.
+- [x] Add regions catalog / stricter ISO 3166-2 validation endpoint (Done 2026-02-25: `GET /v1/regions` added).
 
 ### Decisions locked
 - Offer/deal progression is not subscriber-gated; use suspension/legal/rate-limit controls.
@@ -91,12 +108,7 @@ Low likelihood:
 ## Phase 1 — Near-term product completeness
 
 ### Phase 1.5 (High Priority After Go Live)
-- [ ] Crypto pay-ins via Bcon (agent-first rail):
-  - default: USDC on Base
-  - create invoice → return pay-to address + amount
-  - reconcile via webhook/tx hash
-  - persist node ↔ invoice ↔ tx hash mapping
-  - grant credits idempotently on confirmed payment
+- [x] ~~Crypto pay-ins via Bcon~~ — CANCELLED (Bcon removed; see decision-log 2026-02-25)
 
 ## Phase 2 — Agent adoption acceleration
 

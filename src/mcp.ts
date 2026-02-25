@@ -28,8 +28,8 @@ const searchInputSchema = {
     },
     budget: {
       type: 'object' as const,
-      properties: { credits_max: { type: 'number' as const, description: 'Maximum credits to spend.' } },
-      required: ['credits_max'],
+      properties: { credits_requested: { type: 'number' as const, description: 'Maximum credits to spend.' } },
+      required: ['credits_requested'],
     },
     target: {
       type: 'object' as const,
@@ -126,12 +126,27 @@ function toolContent(payload: unknown, isError = false) {
   };
 }
 
+function validateToolArgs(toolName: string, args: Record<string, unknown>): string | null {
+  const tool = TOOLS.find((t) => t.name === toolName);
+  if (!tool) return null;
+  const required = (tool.inputSchema as any).required;
+  if (!Array.isArray(required)) return null;
+  const missing = required.filter((field: string) => args[field] === undefined || args[field] === null);
+  if (missing.length === 0) return null;
+  return `Missing required argument(s): ${missing.join(', ')}`;
+}
+
 async function executeTool(
   app: AppInstance,
   authHeader: string,
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ status: number; body: unknown }> {
+  const argError = validateToolArgs(name, args);
+  if (argError) {
+    return { status: 422, body: errorEnvelope('validation_error', argError, { missing_args: (TOOLS.find((t) => t.name === name)?.inputSchema as any)?.required?.filter((f: string) => args[f] === undefined || args[f] === null) }) };
+  }
+
   if (name === 'fabric_search_listings' || name === 'fabric_search_requests') {
     const route = name === 'fabric_search_listings' ? '/v1/search/listings' : '/v1/search/requests';
     const res = await app.inject({
@@ -147,7 +162,7 @@ async function executeTool(
         scope: args.scope,
         filters: args.filters ?? {},
         broadening: args.broadening ?? { level: 0, allow: false },
-        budget: args.budget ?? { credits_max: 5 },
+        budget: args.budget ?? { credits_requested: 5 },
         target: args.target,
         limit: typeof args.limit === 'number' ? args.limit : 20,
         cursor: typeof args.cursor === 'string' ? args.cursor : null,

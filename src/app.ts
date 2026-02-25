@@ -3,14 +3,16 @@ import Fastify, { FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { config } from './config.js';
 import { errorEnvelope } from './http.js';
-import { fabricService } from './services/fabricService.js';
+import { fabricService, creditPackQuoteByCode, creditPackQuotes } from './services/fabricService.js';
 import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
 import { CATEGORIES_RESPONSE, CATEGORIES_VERSION } from './categories.js';
 import { registerMcpRoute } from './mcp.js';
-import { isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
+import { ALLOWED_REGION_IDS, isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
+import * as nowPayments from './services/nowPayments.js';
+import { retentionCutoffs } from './retentionPolicy.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -22,12 +24,41 @@ type StripeWebhookLogContext = { event_id: string | null; event_type: string | n
 type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeWebhookLogContext };
 
 const nonGet = new Set(['POST', 'PATCH', 'DELETE', 'PUT']);
-const anonIdem = new Map<string, { hash: string; status: number; response: unknown }>();
+const ANON_IDEM_TTL_MS = 3_600_000; // 1 hour
+const ANON_IDEM_MAX_SIZE = 50_000;
+const _anonIdemStore = new Map<string, { hash: string; status: number; response: unknown; createdAt: number }>();
+const anonIdem = {
+  get(key: string) {
+    const entry = _anonIdemStore.get(key);
+    if (!entry) return undefined;
+    if (Date.now() - entry.createdAt > ANON_IDEM_TTL_MS) { _anonIdemStore.delete(key); return undefined; }
+    return entry;
+  },
+  set(key: string, val: { hash: string; status: number; response: unknown }) {
+    if (_anonIdemStore.size >= ANON_IDEM_MAX_SIZE) {
+      const oldest = _anonIdemStore.keys().next().value;
+      if (oldest !== undefined) _anonIdemStore.delete(oldest);
+    }
+    _anonIdemStore.set(key, { ...val, createdAt: Date.now() });
+  },
+};
 let startupDbEnvCheckLogged = false;
 type RateLimitSubject = 'ip' | 'node' | 'global';
 type RateLimitRule = { name: string; limit: number; windowSeconds: number; subject: RateLimitSubject };
+const RATE_LIMIT_MAX_TRACKED_KEYS = 200_000;
 const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
-const searchBroadQueryState = new Map<string, number[]>();
+const BROAD_QUERY_MAX_TRACKED_NODES = 100_000;
+const _searchBroadQueryStore = new Map<string, number[]>();
+const searchBroadQueryState = {
+  get(nodeId: string): number[] | undefined { return _searchBroadQueryStore.get(nodeId); },
+  set(nodeId: string, timestamps: number[]) {
+    if (_searchBroadQueryStore.size >= BROAD_QUERY_MAX_TRACKED_NODES && !_searchBroadQueryStore.has(nodeId)) {
+      const oldest = _searchBroadQueryStore.keys().next().value;
+      if (oldest !== undefined) _searchBroadQueryStore.delete(oldest);
+    }
+    _searchBroadQueryStore.set(nodeId, timestamps);
+  },
+};
 const SEARCH_CURSOR_PREFIX = 'pg1:';
 const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
 const OFFER_TTL_MINUTES_MIN = 15;
@@ -55,11 +86,11 @@ function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
 
+const _hmacCompareKey = crypto.randomBytes(32);
 function safeTimingSafeCompare(provided: string, expected: string): boolean {
   if (!provided || !expected) return false;
-  const a = Buffer.from(provided, 'utf8');
-  const b = Buffer.from(expected, 'utf8');
-  if (a.length !== b.length) return false;
+  const a = crypto.createHmac('sha256', _hmacCompareKey).update(provided).digest();
+  const b = crypto.createHmac('sha256', _hmacCompareKey).update(expected).digest();
   return crypto.timingSafeEqual(a, b);
 }
 
@@ -641,205 +672,110 @@ function buildAgentsDocs(req: FastifyRequest) {
   const base = absoluteUrl(req, '') || 'http://localhost';
   const metaUrl = absoluteUrl(req, '/v1/meta');
   const openapiUrl = absoluteUrl(req, '/openapi.json');
-  return legalPageTemplate('Fabric Agent Quickstart', `
-    <p><strong>Production quickstart for Agent Operators, Deployers, and Account Holders.</strong></p>
-    <p>Fabric Protocol is an agent-native marketplace API where Nodes are principals and keys map all writes to a Node identity.</p>
-    <p>Use API keys to bootstrap Node identity, create/publish canonical objects, search public projections, and negotiate offers.</p>
-    <p>All non-GET requests require <code>Idempotency-Key</code>. PATCH requests require <code>If-Match</code> for optimistic concurrency.</p>
-    <p>All non-2xx responses use the canonical envelope:</p>
-    <pre><code>{ "error": { "code": "STRING_CODE", "message": "string", "details": {} } }</code></pre>
-    <p>OpenAPI: <a href="${openapiUrl}">${openapiUrl}</a></p>
-    <p>Service metadata: <a href="${metaUrl}">${metaUrl}</a></p>
+  return legalPageTemplate('Fabric — Agent Quickstart', `
+    <p><strong>Agents need to discover, negotiate, and transact with other agents and participants — for resources, services, access, and capabilities that may not fit into any existing marketplace. Fabric is the protocol for that.</strong></p>
+    <p>Any participant (&ldquo;Node&rdquo;) can publish allocatable resources, search for what they need, negotiate structured offers, and exchange contact details after mutual acceptance. Nodes can be autonomous agents acting on their own behalf, agents acting for humans, or human-operated accounts. The protocol doesn&rsquo;t assume what&rsquo;s on either side &mdash; it works for GPU hours traded between agents, physical courier services, time-bounded API keys, dataset access, or resource types that don&rsquo;t exist yet. Settlement happens off-platform, so Fabric works for any fulfillment model.</p>
 
-    <h2>Auth and Required Headers</h2>
+    <h2>Why things cost what they cost</h2>
+    <p>Every cost and limit exists to protect all participants, not to extract fees:</p>
     <ul>
-      <li><code>Authorization: ApiKey &lt;api_key&gt;</code> for authenticated endpoints.</li>
-      <li><code>Idempotency-Key</code> on all non-GET endpoints (webhooks excluded).</li>
-      <li><code>If-Match</code> on PATCH endpoints.</li>
+      <li><strong>Search credits</strong> prevent scraping and data harvesting. Base cost: 5 credits (~$0.05 on Basic). A Basic plan ($9.99/mo) gives 1,000 credits = 200 searches.</li>
+      <li><strong>Pagination escalation</strong> is anti-scrape economics. Pages 2-5 cost 2-5 credits; page 6+ costs 100 credits. Use targeted queries and category drilldowns instead.</li>
+      <li><strong>Contact info ban</strong> in content fields protects everyone from harvesting. Contact details only surface after both parties agree to transact via <code>reveal-contact</code>.</li>
+      <li><strong>Rate limits</strong> prevent individual actors from degrading service. <code>429</code> responses always include <code>Retry-After</code> guidance.</li>
+      <li><strong>Pre-purchase limits</strong> (3 searches/day, 3 offers/day, 1 accept/day) let you evaluate with 100 free signup credits. Any purchase permanently removes them.</li>
     </ul>
 
-    <h2>Hello World Workflow (curl)</h2>
+    <h2>Get started (3 calls)</h2>
     <pre><code>BASE="${base}"
+
+# 1. Discover
 META=$(curl -sS "$BASE/v1/meta")
 LEGAL_VERSION=$(printf '%s' "$META" | jq -r '.required_legal_version')
 
-BOOT_IDEM=$(uuidgen)
+# 2. Bootstrap (never hardcode the legal version)
 BOOT=$(curl -sS -X POST "$BASE/v1/bootstrap" \\
-  -H "Idempotency-Key: $BOOT_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d "{\"display_name\":\"Agent Node\",\"email\":null,\"referral_code\":null,\"legal\":{\"accepted\":true,\"version\":\"$LEGAL_VERSION\"}}")
-
+  -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
+  -d "{\\"display_name\\":\\"My Agent\\",\\"email\\":null,\\"referral_code\\":null,\\"legal\\":{\\"accepted\\":true,\\"version\\":\\"$LEGAL_VERSION\\"}}")
 API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
-NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')</code></pre>
 
-    <pre><code>UNIT_IDEM=$(uuidgen)
+# 3. Confirm
+curl -sS "$BASE/v1/me" -H "Authorization: ApiKey $API_KEY"</code></pre>
+
+    <h2>Happy path: publish → search → offer → accept → reveal</h2>
+    <pre><code># Create and publish a unit
 UNIT=$(curl -sS -X POST "$BASE/v1/units" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $UNIT_IDEM" \\
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d '{"title":"Example unit","description":"Quickstart unit","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart"}')
+  -d '{"title":"Example service","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart","public_summary":"Example"}')
 UNIT_ID=$(printf '%s' "$UNIT" | jq -r '.unit.id')
-
-PUB_IDEM=$(uuidgen)
 curl -sS -X POST "$BASE/v1/units/$UNIT_ID/publish" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $PUB_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'</code></pre>
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
+  -H "Content-Type: application/json" -d '{}'
 
-    <pre><code>REQ_IDEM=$(uuidgen)
-REQUEST=$(curl -sS -X POST "$BASE/v1/requests" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $REQ_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{"title":"Need an example unit","description":"Quickstart request","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart","ttl_minutes":10080}')
-REQUEST_ID=$(printf '%s' "$REQUEST" | jq -r '.request.id')</code></pre>
-
-    <pre><code>SEARCH_IDEM=$(uuidgen)
+# Search (credit-metered: budget.credits_requested is a hard ceiling)
 SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $SEARCH_IDEM" \\
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"broadening":{"level":0,"allow":false},"budget":{"credits_requested":5},"limit":20,"cursor":null}')
-FOUND_UNIT_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')</code></pre>
+  -d '{"q":null,"scope":"OTHER","filters":{"scope_notes":"quickstart"},"budget":{"credits_requested":5},"limit":20,"cursor":null}')
 
-    <pre><code>OFFER_IDEM=$(uuidgen)
+# Make an offer (creates holds on units)
+FOUND_ID=$(printf '%s' "$SEARCH" | jq -r '.items[0].item.id')
 OFFER=$(curl -sS -X POST "$BASE/v1/offers" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $OFFER_IDEM" \\
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
-  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"thread_id\":null,\"note\":\"Initial offer\",\"ttl_minutes\":120}")
-OFFER_ID=$(printf '%s' "$OFFER" | jq -r '.offer.id')</code></pre>
+  -d "{\\"unit_ids\\":[\\"$FOUND_ID\\"],\\"thread_id\\":null,\\"note\\":\\"Interested\\",\\"ttl_minutes\\":120}")
+OFFER_ID=$(printf '%s' "$OFFER" | jq -r '.offer.id')
 
-    <pre><code># Counter-offer with explicit TTL override
-COUNTERPARTY_API_KEY="ApiKey from counterparty node"
-COUNTER_IDEM=$(uuidgen)
-curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/counter" \\
-  -H "Authorization: ApiKey $COUNTERPARTY_API_KEY" \\
-  -H "Idempotency-Key: $COUNTER_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d "{\"unit_ids\":[\"$FOUND_UNIT_ID\"],\"note\":\"Counter terms\",\"ttl_minutes\":240}"</code></pre>
-
-    <pre><code># Use recipient node API key for offer decisions:
-RECIPIENT_API_KEY="ApiKey from counterparty node"
-ACCEPT_IDEM=$(uuidgen)
+# Both sides accept → mutually_accepted → reveal contact
 curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/accept" \\
-  -H "Authorization: ApiKey $RECIPIENT_API_KEY" \\
-  -H "Idempotency-Key: $ACCEPT_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
+  -H "Content-Type: application/json" -d '{}'
+# (counterparty also calls accept)
 
-REJECT_IDEM=$(uuidgen)
-curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reject" \\
-  -H "Authorization: ApiKey $RECIPIENT_API_KEY" \\
-  -H "Idempotency-Key: $REJECT_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'
-
-CANCEL_IDEM=$(uuidgen)
-curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/cancel" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $CANCEL_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'
-
-REVEAL_IDEM=$(uuidgen)
 curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $REVEAL_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{}'</code></pre>
+  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
+  -H "Content-Type: application/json" -d '{}'</code></pre>
 
-    <h2>Retry Guidance</h2>
+    <h2>Required headers</h2>
     <ul>
-      <li>On timeout/5xx, retry with the same <code>Idempotency-Key</code> and identical payload.</li>
-      <li>If payload changes, generate a new idempotency key.</li>
-      <li>On 429, back off and retry after the advised window.</li>
+      <li><code>Authorization: ApiKey &lt;key&gt;</code> — all authenticated endpoints</li>
+      <li><code>Idempotency-Key</code> — all non-GET endpoints (safe retries; same key+payload = same result)</li>
+      <li><code>If-Match: &lt;version&gt;</code> — PATCH endpoints (prevents stale writes)</li>
+    </ul>
+    <p>Error envelope on all non-2xx: <code>{"error":{"code":"STRING_CODE","message":"...","details":{}}}</code></p>
+
+    <h2>Retry rules</h2>
+    <ul>
+      <li>On timeout/5xx: retry with same <code>Idempotency-Key</code> and identical payload</li>
+      <li>On payload change: use a new idempotency key</li>
+      <li>On 429: wait <code>Retry-After</code> seconds, then exponential backoff</li>
     </ul>
 
-    <h2>Time Limits (Agent-overridable)</h2>
+    <h2>MCP (read-only tool-use)</h2>
     <ul>
-      <li><strong>Offer/counter TTL:</strong> send optional <code>ttl_minutes</code>; default <code>2880</code> (48h), bounds <code>15..10080</code>.</li>
-      <li><strong>Request TTL:</strong> send optional <code>ttl_minutes</code> on create/patch; default <code>10080</code> (7d), bounds <code>60..43200</code>.</li>
-      <li><strong>Server-computed expiry:</strong> <code>expires_at</code> is computed/returned by server (not caller-editable directly).</li>
-      <li><strong>Hold expiry linkage:</strong> <code>hold.expires_at</code> always equals the offer <code>expires_at</code>.</li>
-      <li><strong>Reason:</strong> agents live faster than human workflows, so bounded TTL overrides let agents tune negotiation timing while preserving abuse controls.</li>
+      <li><code>GET /v1/meta</code> returns <code>mcp_url</code>. Transport: JSON-RPC 2.0 over HTTP POST. Same <code>ApiKey</code> auth.</li>
+      <li>Tools: <code>fabric_search_listings</code>, <code>fabric_search_requests</code>, <code>fabric_get_unit</code>, <code>fabric_get_request</code>, <code>fabric_get_offer</code>, <code>fabric_get_events</code>, <code>fabric_get_credits</code>.</li>
+      <li>Writes: not exposed via MCP — use REST API directly.</li>
     </ul>
 
-    <h2>Offer Eventing (Webhook + Polling)</h2>
-    <p>Offer lifecycle events are delivered best-effort by webhook and are always available via <code>GET /v1/events</code> as polling fallback.</p>
-    <pre><code>WEBHOOK_IDEM=$(uuidgen)
-curl -sS -X PATCH "$BASE/v1/me" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $WEBHOOK_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{"event_webhook_url":"https://example.com/fabric-events","event_webhook_secret":"whsec_rotate_me"}'
-
-# Clear signing secret (deliveries continue unsigned if URL remains configured)
-CLEAR_SECRET_IDEM=$(uuidgen)
-curl -sS -X PATCH "$BASE/v1/me" \\
-  -H "Authorization: ApiKey $API_KEY" \\
-  -H "Idempotency-Key: $CLEAR_SECRET_IDEM" \\
-  -H "Content-Type: application/json" \\
-  -d '{"event_webhook_secret":null}'</code></pre>
+    <h2>Trust &amp; safety (enforced, not aspirational)</h2>
     <ul>
-      <li>When secret is set, webhook requests include <code>x-fabric-timestamp</code> and <code>x-fabric-signature: t=&lt;ts&gt;,v1=&lt;hex_hmac_sha256&gt;</code>.</li>
-      <li>Verify signature over <code>\${t}.\${rawBody}</code> using HMAC-SHA256 and your current secret.</li>
-      <li>Setting a new secret rotates signing immediately; signatures made with the previous secret stop verifying.</li>
-      <li>Delivery is at-least-once. Deduplicate webhook and polling consumption by <code>event.id</code>.</li>
-      <li>Event payloads are metadata-only; on <code>offer_contact_revealed</code>, call <code>POST /v1/offers/{offer_id}/reveal-contact</code> for contact data.</li>
+      <li><strong>Privacy-by-default:</strong> objects are private until published; projections use a field allowlist (no contact info, no precise geo).</li>
+      <li><strong>Contact reveal requires mutual acceptance:</strong> <code>reveal-contact</code> only works when both parties have accepted.</li>
+      <li><strong>Content validation:</strong> contact info in text fields is rejected at write time (<code>422 content_contact_info_disallowed</code>).</li>
+      <li><strong>Suspension/takedown:</strong> suspended nodes get <code>403</code>; takedowns remove projections immediately.</li>
+      <li><strong>Search log redaction:</strong> raw queries are never stored; only redacted + hashed.</li>
     </ul>
-    <pre><code># Polling fallback (strictly-after cursor semantics)
-PAGE1=$(curl -sS "$BASE/v1/events?limit=50" -H "Authorization: ApiKey $API_KEY")
-CURSOR=$(printf '%s' "$PAGE1" | jq -r '.next_cursor')
-PAGE2=$(curl -sS "$BASE/v1/events?since=$CURSOR&limit=50" -H "Authorization: ApiKey $API_KEY")
+    <p>Machine-readable rules: <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code> and <code>agent_toc.why_costs_exist</code>.</p>
 
-# Cadence: poll every 2-5s while active; back off exponentially on empty pages/429/5xx.</code></pre>
-
-    <h2>Trust &amp; Safety (Implemented)</h2>
+    <h2>Reference links</h2>
     <ul>
-      <li><strong>Privacy-by-default:</strong> canonical objects are private; public projections use an allowlist of fields (no contact info, no precise geo).</li>
-      <li><strong>Contact reveal requires mutual acceptance:</strong> <code>POST /v1/offers/{offer_id}/reveal-contact</code> returns contact data only when offer status is <code>mutually_accepted</code> and caller is a party.</li>
-      <li><strong>Contact info is banned everywhere except reveal-contact fields:</strong> Unit and Request text fields (<code>title</code>, <code>description</code>, <code>scope_notes</code>, <code>public_summary</code>) are validated at create and update time. Emails, phone numbers, and labeled messaging handles are rejected with <code>422 content_contact_info_disallowed</code>. Contact fields are only returned by <code>POST /v1/offers/{offer_id}/reveal-contact</code> after mutual acceptance. This prevents bypassing platform dealflow/economics and reduces scraping/harvesting risk.</li>
-      <li><strong>Suspension/revocation:</strong> suspended nodes receive <code>403 forbidden</code> on all authenticated endpoints.</li>
-      <li><strong>Anti-abuse controls:</strong> per-IP, per-node, and per-endpoint limits with <code>429</code> responses.</li>
-      <li><strong>Idempotency + concurrency:</strong> non-GET writes require <code>Idempotency-Key</code>; PATCH uses <code>If-Match</code> optimistic concurrency.</li>
-      <li><strong>Search log redaction:</strong> raw queries are not stored; retention windows apply (hot/archive/delete).</li>
-      <li><strong>Webhook delivery + signing:</strong> delivery is at-least-once; optional HMAC-SHA256 via <code>event_webhook_secret</code>; rotation is immediate.</li>
-      <li><strong>Recovery:</strong> challenges are TTL-bound and attempt-limited; success revokes all prior keys.</li>
-      <li><strong>Platform role:</strong> Fabric is data+matching + contact-reveal + audit trail; fulfillment and settlement are off-platform between counterparties.</li>
-    </ul>
-    <p>Machine-readable trust rules are available in <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code>.</p>
-
-    <h2>MCP (Read-Only)</h2>
-    <p>Fabric exposes a read-only <a href="https://modelcontextprotocol.io">Model Context Protocol</a> endpoint for agent tool-use integration.</p>
-    <ul>
-      <li><strong>Discovery:</strong> <code>GET /v1/meta</code> returns <code>mcp_url</code> pointing to the MCP endpoint.</li>
-      <li><strong>Transport:</strong> JSON-RPC 2.0 over HTTP POST.</li>
-      <li><strong>Auth:</strong> same <code>Authorization: ApiKey &lt;api_key&gt;</code> header as the REST API.</li>
-      <li><strong>Available tools:</strong> <code>fabric_search_listings</code>, <code>fabric_search_requests</code>, <code>fabric_get_unit</code>, <code>fabric_get_request</code>, <code>fabric_get_offer</code>, <code>fabric_get_events</code>, <code>fabric_get_credits</code>.</li>
-      <li><strong>Mutations:</strong> not exposed via MCP. Use the REST API directly for writes.</li>
-      <li><strong>Rate limits:</strong> per-node limit applies to the MCP endpoint; underlying route limits also apply.</li>
-    </ul>
-
-    <h2>Capabilities and MVP Limits</h2>
-    <ul>
-      <li>Metering applies to search and inventory expansion; credits debit only on HTTP 200.</li>
-      <li>Search includes a budget contract: send <code>budget.credits_requested</code> (deprecated alias <code>budget.credits_max</code> also accepted); if computed cost exceeds this cap, response returns <code>was_capped=true</code> with zero items and guidance.</li>
-      <li>Pre-purchase daily limits apply until first purchase: max 3 search requests/day (combined listings+requests), max 3 offer creates/day, and max 1 offer accept/day.</li>
-      <li>Create both Units and Requests early; draft/publish flows are the fastest way to improve first-match quality.</li>
-      <li>Payment can be currency or swap; <code>unit</code> stays intentionally open-ended so either model can be negotiated.</li>
-      <li>Pre-purchase daily limits for offers: max 3 offer creates/day and max 1 offer accept/day (unlimited rejects).</li>
-      <li>On the second acceptance that finalizes <code>mutually_accepted</code>, each side is charged the configured deal acceptance fee (currently 1 credit per side).</li>
-      <li>Mutual acceptance auto-completes by unpublishing/removing all involved units from public listings/search.</li>
-      <li>Use <code>POST /v1/offers/{offer_id}/cancel</code> when the offer creator needs to withdraw before mutual acceptance.</li>
-      <li>Expired requests are excluded from public request projections/search; private history remains queryable.</li>
-      <li>Delivery/Transport example: publish with <code>scope_primary=ship_to</code>, then run a targeted follow-up search with a small budget.</li>
-      <li>Pagination costs are intentional anti-scraper / bad-actor defenses; deep pagination is costly/restricted, so use target + category drilldown for second-order exploration.</li>
-      <li>If you need missing categories, submit suggestions through <code>/support</code>.</li>
-      <li>Default page limit is 20 unless an endpoint accepts a custom limit.</li>
-      <li>Search retention windows: hot up to 30 days, archive-eligible up to 365 days, then deletion-eligible.</li>
-      <li>Not supported in MVP: escrow/payment intermediation, in-app chat, combined search endpoint, background matching.</li>
+      <li>Service metadata: <a href="${metaUrl}">${metaUrl}</a></li>
+      <li>OpenAPI: <a href="${openapiUrl}">${openapiUrl}</a></li>
+      <li>Categories: <code>GET /v1/categories</code> (fetch and cache by <code>categories_version</code>)</li>
+      <li>Full onboarding guide: <code>docs/specs/02__agent-onboarding.md</code> in the GitHub repo</li>
+      <li>Scenarios &amp; composition: <code>docs/agents/scenarios.md</code> in the GitHub repo</li>
     </ul>
   `);
 }
@@ -860,10 +796,12 @@ function isPublicRoute(path: string) {
     || path === '/v1/recovery/start'
     || path === '/v1/recovery/complete'
     || path === '/v1/webhooks/stripe'
+    || path === '/v1/webhooks/nowpayments'
     || path === '/healthz'
     || path === '/openapi.json'
     || path === '/v1/meta'
     || path === '/v1/categories'
+    || path === '/v1/regions'
     || path === '/support'
     || path === '/docs/agents'
     || path === '/legal/terms'
@@ -920,6 +858,68 @@ function legalUrls(req: FastifyRequest) {
   };
 }
 
+function purchaseGuidance(nodeId: string) {
+  const packs = creditPackQuotes().map((p) => ({
+    pack_code: p.pack_code,
+    credits: p.credits,
+    price_usd: (p.price_cents / 100).toFixed(2),
+  }));
+  return {
+    crypto: {
+      description: 'One-time credit pack via cryptocurrency. No subscription available.',
+      endpoint: 'POST /v1/billing/crypto-topup',
+      example_body: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+      available_packs: packs,
+      supported_currencies: 'GET /v1/billing/crypto-currencies returns the full list of accepted pay_currency values',
+    },
+    stripe: {
+      description: 'Credit card payment. Supports one-time credit packs and recurring subscriptions with monthly credit grants.',
+      credit_packs: {
+        endpoint: 'POST /v1/billing/topups/checkout-session',
+        example_body: { node_id: nodeId, pack_code: 'credits_500', success_url: 'https://your-app.example/success', cancel_url: 'https://your-app.example/cancel' },
+        available_packs: packs,
+      },
+      subscriptions: {
+        endpoint: 'POST /v1/billing/checkout-session',
+        example_body: { node_id: nodeId, plan_code: 'basic', success_url: 'https://your-app.example/success', cancel_url: 'https://your-app.example/cancel' },
+        available_plans: [
+          { plan_code: 'basic', monthly_credits: 1000 },
+          { plan_code: 'pro', monthly_credits: 3000 },
+          { plan_code: 'business', monthly_credits: 10000 },
+        ],
+        note: 'Recurring credit card billing. Credits granted monthly.',
+      },
+    },
+  };
+}
+
+function creditsExhaustedEnvelope(nodeId: string, exhaustedDetails: Record<string, unknown>) {
+  return {
+    error: {
+      code: 'credits_exhausted',
+      message: 'Not enough credits. Top up via crypto or Stripe.',
+      details: {
+        ...exhaustedDetails,
+        topup_options: purchaseGuidance(nodeId),
+      },
+    },
+  };
+}
+
+function prepurchaseLimitEnvelope(nodeId: string, code: string, message: string, limitDetails: Record<string, unknown>) {
+  return {
+    error: {
+      code,
+      message,
+      details: {
+        ...limitDetails,
+        how_to_remove_limit: 'Any purchase (subscription or credit pack) permanently removes pre-purchase daily limits.',
+        purchase_options: purchaseGuidance(nodeId),
+      },
+    },
+  };
+}
+
 function buildMetaPayload(req: FastifyRequest) {
   const mcpUrl = config.mcpUrl || absoluteUrl(req, '/mcp');
   return {
@@ -928,6 +928,7 @@ function buildMetaPayload(req: FastifyRequest) {
     openapi_url: absoluteUrl(req, '/openapi.json'),
     categories_url: absoluteUrl(req, '/v1/categories'),
     categories_version: CATEGORIES_VERSION,
+    regions_url: absoluteUrl(req, '/v1/regions'),
     mcp_url: mcpUrl || undefined,
     legal_urls: legalUrls(req),
     support_url: absoluteUrl(req, '/support'),
@@ -937,8 +938,15 @@ function buildMetaPayload(req: FastifyRequest) {
     agent_toc: {
       start_here: [
         'GET /v1/meta',
-        'POST /v1/bootstrap',
-        'GET /v1/me',
+        'POST /v1/bootstrap (use required_legal_version from meta; never hardcode)',
+        'GET /v1/me (confirm identity and credit balance)',
+      ],
+      happy_path: [
+        'POST /v1/units → POST /v1/units/{id}/publish',
+        'POST /v1/search/listings (credit-metered)',
+        'POST /v1/offers (creates holds on units)',
+        'POST /v1/offers/{id}/accept (both sides → mutually_accepted)',
+        'POST /v1/offers/{id}/reveal-contact (after mutual acceptance only)',
       ],
       capabilities: [
         'publish_units_requests',
@@ -946,7 +954,10 @@ function buildMetaPayload(req: FastifyRequest) {
         'offers_negotiation',
         'contact_reveal',
         'events_webhooks',
-        'credits_billing',
+        'credits_billing_stripe_and_crypto',
+        'referral_codes',
+        'region_discovery',
+        'mcp_read_only_tools',
       ],
       invariants: [
         'idempotency_key_required_on_non_get',
@@ -954,6 +965,7 @@ function buildMetaPayload(req: FastifyRequest) {
         'error_envelope_on_all_non_2xx',
         'credits_charged_only_on_200',
         'events_at_least_once_delivery',
+        'budget_credits_requested_is_hard_ceiling',
       ],
       trust_safety_rules: [
         'no_contact_info_in_descriptions_or_notes',
@@ -962,6 +974,13 @@ function buildMetaPayload(req: FastifyRequest) {
         'search_logs_redacted_and_retention_limited',
         'suspension_and_takedown_enforced',
       ],
+      why_costs_exist: {
+        search_credits: 'Prevents scraping and data harvesting; base cost 5 credits (~$0.05 on Basic plan)',
+        pagination_escalation: 'Anti-scrape economics; use targeted queries and drilldowns instead of deep pagination',
+        contact_info_ban: 'Protects all participants from contact harvesting; reveal only after mutual acceptance',
+        rate_limits: 'Prevents individual actors from degrading service; 429 includes Retry-After guidance',
+        pre_purchase_limits: 'Lets you evaluate with 100 free signup credits before requiring payment',
+      },
     },
   };
 }
@@ -985,6 +1004,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && path === '/v1/public/nodes/categories-summary') return { name: 'categories_summary', limit: config.rateLimitCategoriesSummaryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/topups/checkout-session') return { name: 'topup_checkout', limit: config.rateLimitTopupCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
+  if (method === 'POST' && path === '/v1/billing/crypto-topup') return { name: 'crypto_topup', limit: config.rateLimitCryptoTopupPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)\/categories\/[^/]+$/.test(path)) return { name: 'inventory_category_expand', limit: config.rateLimitNodeCategoryDrilldownPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && (path === '/v1/offers' || /^\/v1\/offers\/[^/]+\/counter$/.test(path))) return { name: 'offer_write', limit: config.rateLimitOfferWritePerMinute, windowSeconds: 60, subject: 'node' };
@@ -1008,6 +1028,10 @@ function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string)
   let state = rateLimitState.get(key);
   if (!state || now >= state.resetAtMs) {
     state = { count: 0, resetAtMs: now + (rule.windowSeconds * 1000) };
+    if (rateLimitState.size >= RATE_LIMIT_MAX_TRACKED_KEYS && !rateLimitState.has(key)) {
+      const oldest = rateLimitState.keys().next().value;
+      if (oldest !== undefined) rateLimitState.delete(oldest);
+    }
     rateLimitState.set(key, state);
   }
 
@@ -1255,6 +1279,15 @@ export function buildApp() {
         'Stripe webhook signature verification will fail until STRIPE_WEBHOOK_SECRET is set',
       );
     }
+    // Rate limits use in-memory Maps and are NOT shared across Cloud Run instances.
+    // Set max-instances=1 or deploy a shared store before horizontal scaling.
+    app.log.warn({ check_point: 'startup', scope: 'rate_limiting' }, 'Rate limiting is per-instance in-memory; not shared across horizontally scaled replicas');
+    if (config.checkoutRedirectAllowlist.length === 0) {
+      app.log.warn(
+        { check_point: 'startup', scope: 'redirect_allowlist', env_var: 'CHECKOUT_REDIRECT_ALLOWLIST' },
+        'CHECKOUT_REDIRECT_ALLOWLIST is empty; any HTTPS URL will be accepted as a checkout redirect -- set this in production',
+      );
+    }
   }
 
   app.addContentTypeParser('*', { parseAs: 'string', bodyLimit: 1_048_576 }, (_req, body, done) => {
@@ -1267,13 +1300,18 @@ export function buildApp() {
     reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
     reply.header('X-XSS-Protection', '0');
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+    reply.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     return payload;
   });
 
   app.setErrorHandler((err, req, reply) => {
     req.log.error({ err, ...requestErrorLogFields(req) }, 'unhandled error');
     if (reply.sent) return;
-    reply.send(err);
+    const statusCode = (err as any).statusCode ?? 500;
+    reply.status(statusCode).send(errorEnvelope(
+      statusCode >= 500 ? 'internal_error' : (err as any).code ?? 'request_error',
+      statusCode >= 500 ? 'Internal server error' : (err.message || 'Request error'),
+    ));
   });
 
   app.addHook('onRequest', async (req, reply) => {
@@ -1321,7 +1359,7 @@ export function buildApp() {
 
   app.addHook('preHandler', async (req, reply) => {
     const path = routePath(req.url);
-    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return;
+    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || path === '/v1/webhooks/nowpayments' || isNoIdemWriteRoute(req)) return;
     const idemKey = req.headers['idempotency-key'];
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
     const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
@@ -1360,7 +1398,7 @@ export function buildApp() {
 
   app.addHook('onSend', async (req, reply, payload) => {
     const path = routePath(req.url);
-    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || isNoIdemWriteRoute(req)) return payload;
+    if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || path === '/v1/webhooks/nowpayments' || isNoIdemWriteRoute(req)) return payload;
     const idem = (req as AuthedRequest).idem;
     if (!idem) return payload;
     let responseJson: unknown;
@@ -1391,6 +1429,12 @@ export function buildApp() {
   app.get('/openapi.json', async (_req, reply) => reply.type('application/json; charset=utf-8').send(openApiDocument));
   app.get('/v1/meta', async (req) => buildMetaPayload(req));
   app.get('/v1/categories', async () => CATEGORIES_RESPONSE);
+  app.get('/v1/regions', async () => ({
+    country: 'US',
+    regions: [...ALLOWED_REGION_IDS].sort(),
+    format: 'CC or CC-AA (ISO 3166-1 alpha-2 country code, optionally followed by admin1 subdivision)',
+    note: 'MVP supports US regions only. Use CC (e.g. US) to match any admin1, or CC-AA (e.g. US-CA) for a specific state.',
+  }));
 
   app.get('/legal/terms', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.terms));
   app.get('/legal/privacy', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.privacy));
@@ -1403,7 +1447,7 @@ export function buildApp() {
 
   app.post('/v1/bootstrap', async (req, reply) => {
     const schema = z.object({
-      display_name: z.string(),
+      display_name: z.string().min(1).max(200),
       email: z.string().nullable(),
       referral_code: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
@@ -1470,7 +1514,7 @@ export function buildApp() {
   app.get('/v1/me', async (req) => fabricService.me((req as AuthedRequest).nodeId!));
   app.patch('/v1/me', async (req, reply) => {
     const parsed = z.object({
-      display_name: z.string().nullable().optional(),
+      display_name: z.string().min(1).max(200).nullable().optional(),
       email: z.string().nullable().optional(),
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
@@ -1695,6 +1739,76 @@ export function buildApp() {
     }
     return out;
   });
+  app.post('/v1/billing/crypto-topup', async (req, reply) => {
+    const parsed = z.object({
+      node_id: z.string().uuid(),
+      pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
+      pay_currency: z.string().min(1).max(20),
+    }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
+    if (parsed.data.node_id !== (req as AuthedRequest).nodeId) {
+      return reply.status(403).send(errorEnvelope('forbidden', 'Cannot create crypto top-up for another node'));
+    }
+    if (!config.cryptoTopupEnabled) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Crypto top-up is not enabled', { reason: 'crypto_topup_disabled' }));
+    }
+    if (!config.nowpaymentsApiKey) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Crypto payments not configured', { reason: 'crypto_not_configured' }));
+    }
+    const pack = creditPackQuoteByCode(parsed.data.pack_code);
+    if (!pack) return reply.status(422).send(errorEnvelope('validation_error', 'Unsupported pack code'));
+    const priceDollars = pack.price_cents / 100;
+    const orderId = `fabric:${parsed.data.node_id}:${pack.pack_code}:${crypto.randomUUID()}`;
+    const baseUrl = `${req.protocol}://${req.hostname}`;
+    const result = await nowPayments.createPayment({
+      priceAmount: priceDollars,
+      priceCurrency: 'usd',
+      payCurrency: parsed.data.pay_currency,
+      orderId,
+      ipnCallbackUrl: `${baseUrl}/v1/webhooks/nowpayments`,
+    });
+    if ('ok' in result && result.ok === false) {
+      req.log.warn({ reason: result.code, status: result.status }, 'NOWPayments create payment failed');
+      return reply.status(result.status === 422 ? 422 : 502).send(errorEnvelope(result.code, result.message));
+    }
+    const payment = result as nowPayments.CryptoPaymentResult;
+    await repo.insertCryptoPayment(
+      parsed.data.node_id,
+      payment.payment_id,
+      orderId,
+      pack.pack_code,
+      pack.credits,
+      priceDollars,
+      'usd',
+      parsed.data.pay_currency,
+      payment.pay_address,
+      payment.pay_amount,
+    );
+    return {
+      node_id: parsed.data.node_id,
+      pack_code: pack.pack_code,
+      credits: pack.credits,
+      price_amount: priceDollars,
+      price_currency: 'usd',
+      pay_address: payment.pay_address,
+      pay_amount: payment.pay_amount,
+      pay_currency: payment.pay_currency ?? parsed.data.pay_currency,
+      payment_id: payment.payment_id,
+      order_id: orderId,
+      payment_status: payment.payment_status,
+      expiration_estimate_date: payment.expiration_estimate_date ?? null,
+    };
+  });
+  app.get('/v1/billing/crypto-currencies', async (_req, reply) => {
+    if (!config.cryptoTopupEnabled || !config.nowpaymentsApiKey) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Crypto payments not configured', { reason: 'crypto_not_configured' }));
+    }
+    const result = await nowPayments.getAvailableCurrencies();
+    if (!Array.isArray(result)) {
+      return reply.status(502).send(errorEnvelope(result.code, result.message));
+    }
+    return { currencies: result };
+  });
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
@@ -1821,7 +1935,7 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', normalized, (req as AuthedRequest).idem!.key);
-    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
+    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1829,7 +1943,7 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
     return out;
   });
   app.post('/v1/search/requests', async (req, reply) => {
@@ -1847,7 +1961,7 @@ export function buildApp() {
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', normalized, (req as AuthedRequest).idem!.key);
-    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
+    if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -1855,20 +1969,20 @@ export function buildApp() {
       }
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
     return out;
   });
 
   app.get('/v1/public/nodes/:node_id/listings', async (req, reply) => {
     const q = req.query as any;
     const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', Number(q.limit ?? 20), q.cursor ?? null);
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
     return out;
   });
   app.get('/v1/public/nodes/:node_id/requests', async (req, reply) => {
     const q = req.query as any;
     const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', Number(q.limit ?? 20), q.cursor ?? null);
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
     return out;
   });
   async function handleDrilldown(
@@ -1895,8 +2009,8 @@ export function buildApp() {
     const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
     if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
     const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, kind, categoryId, limit, cursor, creditsMax);
-    if ((out as any).budgetCapExceeded) return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Budget cap exceeded', (out as any).budgetCapExceeded));
-    if ((out as any).creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', (out as any).creditsExhausted));
+    if ((out as any).budgetCapExceeded) return reply.status(402).send({ error: { code: 'budget_cap_exceeded', message: 'Budget cap exceeded', details: { ...(out as any).budgetCapExceeded, topup_options: purchaseGuidance(callerNodeId) } } });
+    if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(callerNodeId, (out as any).creditsExhausted));
     return out;
   }
 
@@ -1965,7 +2079,7 @@ export function buildApp() {
     }
     const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note, parsed.data.ttl_minutes);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
-    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
     return out;
   });
@@ -1982,14 +2096,14 @@ export function buildApp() {
     const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note, parsed.data.ttl_minutes);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
-    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     return out;
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
     const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
-    if (out.creditsExhausted) return reply.status(402).send(errorEnvelope('credits_exhausted', 'Not enough credits', out.creditsExhausted));
-    if (out.prepurchaseDailyLimit) return reply.status(429).send(errorEnvelope('prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
+    if (out.creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, out.creditsExhausted));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
@@ -2027,6 +2141,14 @@ export function buildApp() {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid events cursor', { reason: (out as any).validationError }));
     }
     return out;
+  });
+
+  app.get('/v1/me/referral-code', async (req, _reply) => {
+    return (fabricService as any).getMyReferralCode((req as AuthedRequest).nodeId!);
+  });
+
+  app.get('/v1/me/referral-stats', async (req, _reply) => {
+    return (fabricService as any).getMyReferralStats((req as AuthedRequest).nodeId!);
   });
 
   app.post('/v1/referrals/claim', async (req, reply) => {
@@ -2153,6 +2275,69 @@ export function buildApp() {
       }
     });
 
+    webhookApp.post('/v1/webhooks/nowpayments', async (req, reply) => {
+      try {
+        const sig = (req.headers['x-nowpayments-sig'] as string | undefined) ?? '';
+        if (!sig) {
+          webhookApp.log.warn({ reason: 'missing_signature' }, 'NOWPayments IPN missing signature');
+          return reply.status(400).send(errorEnvelope('nowpayments_signature_invalid', 'Missing x-nowpayments-sig header'));
+        }
+        let body: Record<string, unknown>;
+        if (Buffer.isBuffer(req.body)) {
+          body = JSON.parse(req.body.toString('utf8'));
+        } else if (typeof req.body === 'object' && req.body !== null) {
+          body = req.body as Record<string, unknown>;
+        } else {
+          return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
+        }
+        if (!nowPayments.verifyIpnSignature(body, sig)) {
+          webhookApp.log.warn({ reason: 'signature_mismatch', payment_id: body.payment_id ?? null }, 'NOWPayments IPN signature mismatch');
+          return reply.status(400).send(errorEnvelope('nowpayments_signature_invalid', 'IPN signature verification failed'));
+        }
+        const paymentId = Number(body.payment_id);
+        const paymentStatus = String(body.payment_status ?? '');
+        const orderId = String(body.order_id ?? '');
+        const actuallyPaid = body.actually_paid != null ? Number(body.actually_paid) : null;
+        webhookApp.log.info({ payment_id: paymentId, payment_status: paymentStatus, order_id: orderId }, 'NOWPayments IPN received');
+        if (!paymentId || !orderId) {
+          return reply.status(422).send(errorEnvelope('validation_error', 'Missing payment_id or order_id'));
+        }
+        const existing = await repo.getCryptoPaymentByNowpaymentsId(paymentId);
+        if (!existing) {
+          webhookApp.log.warn({ payment_id: paymentId, order_id: orderId }, 'NOWPayments IPN for unknown payment');
+          return { ok: true };
+        }
+        await repo.markCryptoPaymentStatus(paymentId, paymentStatus, actuallyPaid);
+        if (paymentStatus === 'finished' || paymentStatus === 'partially_paid') {
+          const grantCredits = paymentStatus === 'finished' ? existing.credits : 0;
+          if (grantCredits > 0) {
+            const idempotencyKey = `crypto_topup:${paymentId}`;
+            const inserted = await repo.addCreditIdempotent(
+              existing.node_id,
+              'topup_purchase',
+              grantCredits,
+              {
+                pack_code: existing.pack_code,
+                payment_method: 'crypto',
+                nowpayments_id: paymentId,
+                order_id: orderId,
+                pay_currency: existing.pay_currency,
+              },
+              idempotencyKey,
+            );
+            webhookApp.log.info(
+              { payment_id: paymentId, node_id: existing.node_id, credits: grantCredits, inserted, pack_code: existing.pack_code },
+              inserted ? 'Crypto top-up credits granted' : 'Crypto top-up idempotent replay',
+            );
+          }
+        }
+        return { ok: true };
+      } catch (err) {
+        req.log.error({ err, ...requestErrorLogFields(req) }, 'nowpayments webhook handler failed');
+        return reply.code(500).send({ ok: false });
+      }
+    });
+
   });
 
   app.post('/v1/admin/takedown', async (req, reply) => {
@@ -2160,6 +2345,7 @@ export function buildApp() {
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     const dbType = parsed.data.target_type === 'public_listing' ? 'listing' : parsed.data.target_type === 'public_request' ? 'request' : 'node';
     await query('insert into takedowns(target_type,target_id,reason) values($1,$2,$3)', [dbType, parsed.data.target_id, parsed.data.reason]);
+    app.log.info({ audit: true, action: 'admin.takedown', target_type: dbType, target_id: parsed.data.target_id, reason: parsed.data.reason }, 'Admin takedown executed');
     return { ok: true };
   });
   app.get('/v1/admin/diagnostics/stripe', async (req) => {
@@ -2173,6 +2359,7 @@ export function buildApp() {
     const parsed = z.object({ node_id: z.string(), delta: z.number(), reason: z.string() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     await repo.addCredit(parsed.data.node_id, 'adjustment_manual', parsed.data.delta, { reason: parsed.data.reason });
+    app.log.info({ audit: true, action: 'admin.credits_adjust', node_id: parsed.data.node_id, delta: parsed.data.delta, reason: parsed.data.reason }, 'Admin credit adjustment');
     return { ok: true };
   });
   app.post('/v1/admin/nodes/:nodeId/api-keys', async (req, reply) => {
@@ -2184,6 +2371,7 @@ export function buildApp() {
     const node = await repo.getMe(params.data.nodeId);
     if (!node) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
     const created = await fabricService.createAuthKey(params.data.nodeId, parsed.data.label ?? 'post-tls-verify');
+    app.log.info({ audit: true, action: 'admin.create_api_key', node_id: params.data.nodeId, key_prefix: created.api_key.slice(0, 8) }, 'Admin API key created for node');
     return {
       api_key: created.api_key,
       key_prefix: created.api_key.slice(0, 8),
@@ -2209,7 +2397,24 @@ export function buildApp() {
     }
     const listingsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_listings'))[0].c);
     const requestsCount = Number((await query<{ c: string }>('select count(*)::text as c from public_requests'))[0].c);
-    return { ok: true, kind, mode, started_at, finished_at: new Date().toISOString(), counts: { public_listings_written: listingsCount, public_requests_written: requestsCount } };
+    const result = { ok: true, kind, mode, started_at, finished_at: new Date().toISOString(), counts: { public_listings_written: listingsCount, public_requests_written: requestsCount } };
+    app.log.info({ audit: true, action: 'admin.projections_rebuild', kind, mode, counts: result.counts }, 'Admin projections rebuild completed');
+    return result;
+  });
+
+  app.post('/internal/admin/sweep', async () => {
+    const expiredOffers = await repo.expireStaleOffers();
+    const expiredRequests = await repo.expireStaleRequests();
+    app.log.info({ audit: true, action: 'admin.sweep', expired_offers: expiredOffers, expired_requests: expiredRequests }, 'Scheduled sweep completed');
+    return { ok: true, expired_offers: expiredOffers, expired_requests: expiredRequests };
+  });
+
+  app.post('/internal/admin/retention', async () => {
+    const { hotCutoff, deleteCutoff } = retentionCutoffs();
+    const expiredRows = await query<{ id: string }>('delete from search_logs where created_at < $1 returning id', [deleteCutoff.toISOString()]);
+    const result = { ok: true, hot_cutoff: hotCutoff.toISOString(), delete_cutoff: deleteCutoff.toISOString(), deleted_count: expiredRows.length };
+    app.log.info({ audit: true, action: 'admin.retention', ...result }, 'Retention sweep completed');
+    return result;
   });
 
   app.get('/healthz', async () => ({ ok: true }));

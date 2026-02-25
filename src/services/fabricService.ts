@@ -20,6 +20,12 @@ webhookIpBlockList.addAddress('::1', 'ipv6');
 webhookIpBlockList.addSubnet('fe80::', 10, 'ipv6');
 webhookIpBlockList.addSubnet('fc00::', 7, 'ipv6');
 
+const SAFETY_DISCLAIMERS = {
+  publish: 'By publishing, you confirm that the content does not include contact information, precise location, or anything that violates the Terms of Service. Published content is visible to all authenticated nodes on the marketplace.',
+  offer: 'By creating or countering an offer, you agree to the Terms of Service. Contact information is only revealed after both parties accept. Settlement and fulfillment happen off-platform between participants. Fabric does not hold funds, intermediate payment, or provide escrow.',
+  reveal: 'Contact information shown here is user-provided and unverified. Settlement and fulfillment happen entirely off-platform between participants. Fabric does not hold funds, intermediate payment, or guarantee fulfillment. Exercise appropriate due diligence.',
+};
+
 export function __setWebhookDnsLookupForTests(lookupFn: DnsLookupAll | null | undefined) {
   webhookDnsLookup = lookupFn ?? (dnsLookup as DnsLookupAll);
 }
@@ -361,10 +367,7 @@ export const fabricService = {
   },
   async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); return { entries, next_cursor: entries.length === limit ? entries[entries.length - 1].created_at : null }; },
   async createUnit(nodeId: string, payload: any) {
-    const created = await repo.createUnitWithUploadTrial(nodeId, payload, {
-      threshold: config.uploadTrialThreshold,
-      trialDays: config.uploadTrialDurationDays,
-    });
+    const created = await repo.createUnitWithMilestoneCredits(nodeId, payload);
     return {
       unit: {
         id: created.id,
@@ -412,7 +415,9 @@ export const fabricService = {
     await repo.setPublished(kind, id, true);
     const updated = await repo.getResource(kind, nodeId, id);
     await repo.upsertProjection(kind, updated);
-    return kind === 'units' ? { projection: { kind: 'listing', source_unit_id: id, published_at: new Date().toISOString() } } : { projection: { kind: 'request', source_request_id: id, published_at: new Date().toISOString() } };
+    return kind === 'units'
+      ? { projection: { kind: 'listing', source_unit_id: id, published_at: new Date().toISOString() }, disclaimer: SAFETY_DISCLAIMERS.publish }
+      : { projection: { kind: 'request', source_request_id: id, published_at: new Date().toISOString() }, disclaimer: SAFETY_DISCLAIMERS.publish };
   },
   async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
   async search(nodeId: string, kind: 'listings' | 'requests', body: any, idemKey: string) {
@@ -465,6 +470,7 @@ export const fabricService = {
           was_capped: true,
           cap_reason: `Needed ${totalCost} credits but budget cap is ${creditsRequested}`,
           guidance: `Increase budget.credits_requested to at least ${totalCost} to execute this search page.`,
+          topup_hint: 'If your balance is low, top up via POST /v1/billing/crypto-topup (crypto) or POST /v1/billing/topups/checkout-session (Stripe credit pack) or POST /v1/billing/checkout-session (subscription). Check GET /v1/credits/balance for current balance.',
         },
         items: [],
         nodes: [],
@@ -571,7 +577,7 @@ export const fabricService = {
         guidance: null,
       },
       items,
-      nodes: summarizeSearchNodes(rows),
+      nodes: await summarizeSearchNodes(rows),
       has_more: hasMore,
     };
   },
@@ -760,7 +766,7 @@ const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
     toNodeId: offer.to_node_id,
     payload: { status: offer.status, thread_id: offer.thread_id },
   });
-  return { offer: sum };
+  return { offer: sum, disclaimer: SAFETY_DISCLAIMERS.offer };
 };
 
 (fabricService as any).counterOffer = async (
@@ -932,7 +938,26 @@ const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
     toNodeId: offer.to_node_id,
     payload: { status: offer.status, thread_id: offer.thread_id },
   });
-  return { contact: { email: revealNode.email ?? '', phone: revealNode.phone ?? null, messaging_handles: messagingHandles } };
+  return { contact: { email: revealNode.email ?? '', phone: revealNode.phone ?? null, messaging_handles: messagingHandles }, disclaimer: SAFETY_DISCLAIMERS.reveal };
+};
+
+(fabricService as any).getMyReferralCode = async (nodeId: string) => {
+  const code = await repo.getOrCreateReferralCode(nodeId);
+  return { referral_code: code };
+};
+
+(fabricService as any).getMyReferralStats = async (nodeId: string) => {
+  const code = await repo.getOrCreateReferralCode(nodeId);
+  const stats = await repo.getReferralStats(nodeId);
+  return {
+    referral_code: code,
+    total_referrals: Number(stats?.total_claims ?? 0),
+    awarded: Number(stats?.awarded_claims ?? 0),
+    pending: Number(stats?.pending_claims ?? 0),
+    credits_earned: Number(stats?.total_credits_earned ?? 0),
+    cap: config.referralMaxGrantsPerReferrer,
+    remaining: Math.max(0, config.referralMaxGrantsPerReferrer - Number(stats?.awarded_claims ?? 0)),
+  };
 };
 
 (fabricService as any).claimReferral = async (nodeId: string, referralCode: string) => {
@@ -958,7 +983,7 @@ type CreditPackQuote = {
   stripe_price_id: string | null;
 };
 
-function creditPackQuotes(): CreditPackQuote[] {
+export function creditPackQuotes(): CreditPackQuote[] {
   return [
     {
       pack_code: 'credits_500',
@@ -987,7 +1012,7 @@ function creditPackQuotes(): CreditPackQuote[] {
   ];
 }
 
-function creditPackQuoteByCode(packCode: string | null | undefined) {
+export function creditPackQuoteByCode(packCode: string | null | undefined) {
   if (!packCode) return null;
   const normalized = packCode.trim().toLowerCase();
   return creditPackQuotes().find((pack) => pack.pack_code === normalized) ?? null;
@@ -1188,7 +1213,7 @@ async function resolveSearchTargetNode(rawTarget: any): Promise<{ targetNodeId: 
   return { targetNodeId: nodeById?.id ?? nodeByUsername?.id ?? null };
 }
 
-function summarizeSearchNodes(rows: any[]) {
+async function summarizeSearchNodes(rows: any[]) {
   const perNode = new Map<string, Map<string, number>>();
 
   for (const row of rows) {
@@ -1214,9 +1239,13 @@ function summarizeSearchNodes(rows: any[]) {
     }
   }
 
+  const nodeIds = [...perNode.keys()];
+  const displayNames = await repo.getNodeDisplayNames(nodeIds);
+
   return [...perNode.entries()]
     .map(([nodeId, categoryCounts]) => ({
       node_id: nodeId,
+      display_name: displayNames.get(nodeId) ?? null,
       category_counts_nonzero: Object.fromEntries([...categoryCounts.entries()].filter(([, count]) => count > 0)),
     }))
     .sort((a, b) => a.node_id.localeCompare(b.node_id));
@@ -2018,7 +2047,15 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     await repo.upsertSubscription(nodeId, storedPlanCode, 'active', periodStart, periodEnd, stripeCustomerId, stripeSubscriptionId);
 
     if (!(await repo.monthlyCreditGranted(nodeId, periodStart))) {
-      await repo.addCredit(nodeId, 'grant_subscription_monthly', planCredits[effectivePlan] ?? 0, { period_start: periodStart });
+      const monthlyAmount = planCredits[effectivePlan] ?? 0;
+      const rolloverCap = monthlyAmount * 2;
+      const subCreditBalance = await repo.subscriptionCreditBalance(nodeId);
+      const grantAmount = rolloverCap > 0 ? Math.max(0, Math.min(monthlyAmount, rolloverCap - subCreditBalance)) : monthlyAmount;
+      if (grantAmount > 0) {
+        await repo.addCredit(nodeId, 'grant_subscription_monthly', grantAmount, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: grantAmount < monthlyAmount });
+      } else {
+        await repo.addCredit(nodeId, 'grant_subscription_monthly', 0, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: true, reason: 'rollover_cap_reached' });
+      }
     }
 
     const isUpgradeProration = planRank(effectivePlan) > planRank(existingPlan)
@@ -2046,6 +2083,13 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
       invoice_id: invoiceId ?? null,
       stripe_subscription_id: stripeSubscriptionId ?? null,
     });
+    await emitNodeEvent(nodeId, 'subscription_changed', {
+      plan_code: effectivePlan,
+      status: 'active',
+      invoice_id: invoiceId,
+      stripe_subscription_id: stripeSubscriptionId,
+    });
+
     return {
       mapped: true,
       node_id: nodeId,
@@ -2064,6 +2108,12 @@ async function applyTopupGrant(nodeId: string, eventType: string, eventObject: a
     const planCode = await resolvePlanCode(nodeId, event, 'free');
     const storedPlanCode = planCodeForStorage(planCode);
     await repo.upsertSubscription(nodeId, storedPlanCode, 'past_due', stripeTimeToIso(object.current_period_start), stripeTimeToIso(object.current_period_end), stripeCustomerId, stripeSubscriptionId);
+    await emitNodeEvent(nodeId, 'subscription_changed', {
+      plan_code: storedPlanCode,
+      status: 'past_due',
+      invoice_id: String(object?.id ?? '') || null,
+      stripe_subscription_id: stripeSubscriptionId ?? null,
+    });
     return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type };
   }
 
@@ -2201,6 +2251,15 @@ function decodeEventCursor(cursor: string | null | undefined): { created_at: str
     return { created_at: createdAt, id };
   } catch {
     return null;
+  }
+}
+
+async function emitNodeEvent(nodeId: string, eventType: string, payload: Record<string, unknown> = {}) {
+  try {
+    const eventRow = await repo.addNodeEvent(eventType, nodeId, payload);
+    if (eventRow) await deliverOfferLifecycleWebhook(eventRow);
+  } catch (err) {
+    console.error(JSON.stringify({ msg: 'emitNodeEvent failed (non-fatal)', event_type: eventType, node_id: nodeId, error: String(err) }));
   }
 }
 

@@ -16,20 +16,13 @@ function hashApiKey(rawKey: string): string {
 
 export async function findApiKey(rawKey: string) {
   const keyHash = hashApiKey(rawKey);
-  const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean; is_revoked: boolean; has_active_trial: boolean }>(
+  const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean; is_revoked: boolean }>(
     `select
        ak.node_id,
        coalesce(s.plan_code, 'free') as plan_code,
        coalesce(s.status, 'none') as status,
        (n.status <> 'ACTIVE' or n.suspended_at is not null) as is_suspended,
-       (ak.revoked_at is not null) as is_revoked,
-       exists (
-         select 1
-         from trial_entitlements te
-         where te.node_id = ak.node_id
-           and te.starts_at <= now()
-           and te.ends_at > now()
-       ) as has_active_trial
+       (ak.revoked_at is not null) as is_revoked
      from api_keys ak
      join nodes n on n.id = ak.node_id and n.deleted_at is null
      left join subscriptions s on s.node_id = ak.node_id
@@ -133,6 +126,15 @@ export async function getMe(nodeId: string) {
   return rows[0] ?? null;
 }
 
+export async function getNodeDisplayNames(nodeIds: string[]): Promise<Map<string, string>> {
+  if (nodeIds.length === 0) return new Map();
+  const rows = await query<{ id: string; display_name: string }>(
+    `select id, display_name from nodes where id = any($1::uuid[]) and deleted_at is null`,
+    [nodeIds],
+  );
+  return new Map(rows.map((r) => [r.id, r.display_name]));
+}
+
 export async function findActiveNodeById(nodeId: string) {
   const rows = await query<{ id: string }>(
     `select id
@@ -178,22 +180,6 @@ export async function getNodeRecoveryProfile(nodeId: string) {
   return rows[0] ?? null;
 }
 
-export async function hasActiveTrialEntitlement(nodeId: string) {
-  const rows = await query<{ c: string }>(
-    `select count(*)::text as c
-     from trial_entitlements
-     where node_id = $1
-       and starts_at <= now()
-       and ends_at > now()`,
-    [nodeId],
-  );
-  return Number(rows[0]?.c ?? 0) > 0;
-}
-
-export async function getTrialEntitlement(nodeId: string) {
-  const rows = await query<any>('select * from trial_entitlements where node_id=$1 limit 1', [nodeId]);
-  return rows[0] ?? null;
-}
 
 export async function updateMe(
   nodeId: string,
@@ -434,6 +420,14 @@ export async function creditBalance(nodeId: string) {
   return Number(rows[0]?.balance ?? 0);
 }
 
+export async function subscriptionCreditBalance(nodeId: string) {
+  const rows = await query<{ balance: string }>(
+    `select coalesce(sum(amount),0)::text as balance from credit_ledger where node_id=$1 and type='grant_subscription_monthly'`,
+    [nodeId],
+  );
+  return Number(rows[0]?.balance ?? 0);
+}
+
 export async function listKeys(nodeId: string) {
   return query<any>(
     `select id as key_id,label,last_used_at,created_at,(key_prefix || '...') as prefix
@@ -471,10 +465,9 @@ export async function createResource(kind: 'units'|'requests', nodeId: string, p
   return rows[0];
 }
 
-export async function createUnitWithUploadTrial(
+export async function createUnitWithMilestoneCredits(
   nodeId: string,
   payload: any,
-  options: { threshold: number; trialDays: number },
 ) {
   const rows = await query<any>(`
     with inserted_unit as (
@@ -497,20 +490,6 @@ export async function createUnitWithUploadTrial(
       from units
       where node_id = $1
     ),
-    insert_trial as (
-      insert into trial_entitlements(node_id, source, threshold_count, upload_count_at_grant, starts_at, ends_at)
-      select
-        $1,
-        'unit_upload_count',
-        $22,
-        upload_count.c,
-        now(),
-        now() + make_interval(days => $23::int)
-      from upload_count
-      where upload_count.c >= $22
-      on conflict (node_id) do nothing
-      returning node_id, starts_at, ends_at, upload_count_at_grant
-    ),
     insert_milestone_credits as (
       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
       select
@@ -527,22 +506,6 @@ export async function createUnitWithUploadTrial(
       join (values (10), (20)) as milestones(threshold) on upload_count.c >= milestones.threshold
       on conflict (node_id, idempotency_key) where idempotency_key is not null do nothing
       returning amount
-    ),
-    insert_trial_event as (
-      insert into trial_entitlement_events(node_id, event_type, meta)
-      select
-        $1,
-        'granted',
-        jsonb_build_object(
-          'source', 'unit_upload_count',
-          'threshold', $22,
-          'upload_count', insert_trial.upload_count_at_grant,
-          'trial_starts_at', insert_trial.starts_at,
-          'trial_ends_at', insert_trial.ends_at,
-          'credits_granted', coalesce((select sum(amount)::int from insert_milestone_credits), 0)
-        )
-      from insert_trial
-      returning id
     )
     select
       iu.id,
@@ -551,9 +514,7 @@ export async function createUnitWithUploadTrial(
       iu.created_at,
       iu.updated_at,
       iu.version,
-      (select c from upload_count) as upload_count,
-      exists(select 1 from insert_trial) as trial_granted,
-      (select ends_at from insert_trial limit 1) as trial_ends_at
+      (select c from upload_count) as upload_count
     from inserted_unit iu
   `, [
     nodeId,
@@ -577,8 +538,6 @@ export async function createUnitWithUploadTrial(
     payload.tags,
     payload.category_ids,
     payload.public_summary,
-    options.threshold,
-    options.trialDays,
   ]);
   return rows[0];
 }
@@ -1378,6 +1337,20 @@ export async function addOfferLifecycleEvents(
   );
 }
 
+export async function addNodeEvent(
+  eventType: string,
+  recipientNodeId: string,
+  payload: Record<string, unknown> = {},
+) {
+  const rows = await query<any>(
+    `insert into offer_events(offer_id,event_type,actor_node_id,recipient_node_id,payload)
+     values(null,$1,$2,$2,$3::jsonb)
+     returning id,offer_id,event_type,actor_node_id,recipient_node_id,payload,created_at`,
+    [eventType, recipientNodeId, JSON.stringify(payload)],
+  );
+  return rows[0];
+}
+
 export async function listOfferLifecycleEvents(nodeId: string, limit: number, cursor: OfferEventCursor | null) {
   if (cursor) {
     return query<any>(
@@ -1456,6 +1429,30 @@ export async function ensureReferralCode(code: string, issuerNodeId: string) {
   await query('insert into referral_codes(code, issuer_node_id, active) values($1,$2,true) on conflict (code) do nothing', [code, issuerNodeId]);
 }
 
+export async function getReferralStats(nodeId: string) {
+  const rows = await query<{
+    total_claims: string;
+    awarded_claims: string;
+    pending_claims: string;
+    total_credits_earned: string;
+  }>(`select
+    (select count(*)::text from referral_claims where issuer_node_id=$1) as total_claims,
+    (select count(*)::text from referral_claims where issuer_node_id=$1 and status='awarded') as awarded_claims,
+    (select count(*)::text from referral_claims where issuer_node_id=$1 and status='claimed') as pending_claims,
+    coalesce((select sum(amount)::text from credit_ledger where node_id=$1 and type='grant_referral'), '0') as total_credits_earned`,
+    [nodeId],
+  );
+  return rows[0];
+}
+
+export async function getOrCreateReferralCode(nodeId: string): Promise<string> {
+  const existing = await query<{ code: string }>('select code from referral_codes where issuer_node_id=$1 and active=true order by created_at asc limit 1', [nodeId]);
+  if (existing[0]) return existing[0].code;
+  const code = `ref_${nodeId.replace(/-/g, '').slice(0, 12)}`;
+  await query('insert into referral_codes(code, issuer_node_id, active) values($1,$2,true) on conflict (code) do nothing', [code, nodeId]);
+  return code;
+}
+
 export async function hasReferralClaim(nodeId: string) {
   const rows = await query<{ c: string }>('select count(*)::text as c from referral_claims where claimer_node_id=$1', [nodeId]);
   return Number(rows[0].c) > 0;
@@ -1488,10 +1485,27 @@ export async function stripeEventExists(id: string) {
   return !!rows[0];
 }
 
+const STRIPE_REDACT_KEYS = new Set([
+  'email', 'name', 'phone', 'address', 'shipping',
+  'payment_method_details', 'billing_details', 'card',
+  'bank_account', 'iban_last4', 'last4', 'fingerprint',
+]);
+
+function redactStripePayload(obj: unknown): unknown {
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactStripePayload);
+  const out: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+    out[key] = STRIPE_REDACT_KEYS.has(key) ? '[REDACTED]' : redactStripePayload(val);
+  }
+  return out;
+}
+
 export async function insertStripeEvent(id: string, type: string, payload: any): Promise<boolean> {
+  const redacted = redactStripePayload(payload);
   const rows = await query<{ id: string }>(
     'INSERT INTO stripe_events(id, type, payload) VALUES($1, $2, $3) ON CONFLICT(id) DO NOTHING RETURNING id',
-    [id, type, payload],
+    [id, type, redacted],
   );
   return rows.length > 0;
 }
@@ -1769,6 +1783,49 @@ export async function awardReferralFirstPaid(
 
 export async function markReferralAwarded(claimId: string) {
   await query("update referral_claims set status='awarded', awarded_at=now() where id=$1", [claimId]);
+}
+
+export async function insertCryptoPayment(
+  nodeId: string,
+  paymentId: number,
+  orderId: string,
+  packCode: string,
+  credits: number,
+  priceAmount: number,
+  priceCurrency: string,
+  payCurrency: string,
+  payAddress: string,
+  payAmount: number,
+) {
+  await query(
+    `insert into crypto_payments(node_id,nowpayments_id,order_id,pack_code,credits,price_amount,price_currency,pay_currency,pay_address,pay_amount,status)
+     values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'waiting')
+     on conflict (nowpayments_id) do nothing`,
+    [nodeId, paymentId, orderId, packCode, credits, priceAmount, priceCurrency, payCurrency, payAddress, payAmount],
+  );
+}
+
+export async function getCryptoPaymentByOrderId(orderId: string) {
+  const rows = await query<any>(
+    'select * from crypto_payments where order_id=$1 limit 1',
+    [orderId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function getCryptoPaymentByNowpaymentsId(nowpaymentsId: number) {
+  const rows = await query<any>(
+    'select * from crypto_payments where nowpayments_id=$1 limit 1',
+    [nowpaymentsId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function markCryptoPaymentStatus(nowpaymentsId: number, status: string, actuallyPaid: number | null = null) {
+  await query(
+    `update crypto_payments set status=$2, actually_paid=coalesce($3, actually_paid), updated_at=now() where nowpayments_id=$1`,
+    [nowpaymentsId, status, actuallyPaid],
+  );
 }
 
 export async function getDailyMetricsSnapshot(windowHours: number = 24) {
