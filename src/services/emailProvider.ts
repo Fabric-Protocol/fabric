@@ -115,3 +115,21 @@ export async function sendEmail(input: EmailSendInput): Promise<EmailSendResult>
   if (config.emailProvider === 'smtp') return sendViaSmtp(input);
   return sendViaStub(input);
 }
+
+type SlackSendResult = { ok: boolean; reason?: string };
+
+export async function sendSlack(text: string): Promise<SlackSendResult> {
+  const url = config.slackOpsWebhookUrl;
+  if (!url) return { ok: false, reason: 'slack_webhook_url_not_configured' };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) return { ok: false, reason: `slack_http_${res.status}` };
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'slack_network_error' };
+  }
+}

@@ -13,7 +13,7 @@ import { registerMcpRoute } from './mcp.js';
 import { ALLOWED_REGION_IDS, isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
 import * as nowPayments from './services/nowPayments.js';
 import { retentionCutoffs } from './retentionPolicy.js';
-import { sendEmail } from './services/emailProvider.js';
+import { sendEmail, sendSlack } from './services/emailProvider.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
@@ -2385,8 +2385,13 @@ export function buildApp() {
         `Crypto: ${pulse.crypto.pending_payments} pending, ${pulse.crypto.failed_or_expired} failed/expired`,
         `Webhooks: ${pulse.webhooks.pending_retries} retries pending, ${pulse.webhooks.recent_failures} failures, oldest pending ${pulse.webhooks.oldest_pending_minutes}m`,
       ];
+      const text = alertLines.join('\n');
+      const slackText = `:warning: *Fabric Health Alert*\n${pulse.alerts.map(a => `• ${a}`).join('\n')}`;
       const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
-      await sendEmail({ to: digestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text: alertLines.join('\n') });
+      await Promise.all([
+        sendEmail({ to: digestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text }),
+        sendSlack(slackText),
+      ]);
     }
 
     return pulse;
@@ -2422,10 +2427,29 @@ export function buildApp() {
     const text = lines.join('\n');
     app.log.info({ digest: 'daily_metrics', metrics }, 'Daily metrics digest');
 
-    const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
-    const emailResult = await sendEmail({ to: digestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text });
+    const m = metrics;
+    const slackText = [
+      `:bar_chart: *Fabric Daily Digest* — ${m.generated_at.split('T')[0]}`,
+      `*Activity:* ${m.liquidity.public_listings} listings, ${m.liquidity.public_requests} requests, ${m.liquidity.offers_created} offers, ${m.liquidity.offers_mutually_accepted} deals`,
+      `*Growth:* ${m.reliability.active_nodes} nodes, ${m.reliability.searches} searches`,
+      `*Credits:* +${m.stripe_credits_health.credit_grants} / -${m.stripe_credits_health.credit_debits} (net ${m.stripe_credits_health.credit_net})`,
+      m.abuse.suspended_nodes > 0 || m.abuse.active_takedowns > 0
+        ? `*Safety:* ${m.abuse.suspended_nodes} suspended, ${m.abuse.active_takedowns} takedowns`
+        : null,
+    ].filter(Boolean).join('\n');
 
-    return { ok: true, email_sent: emailResult.ok, email_provider: emailResult.provider, email_reason: emailResult.reason ?? null, metrics };
+    const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
+    const [emailResult, slackResult] = await Promise.all([
+      sendEmail({ to: digestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text }),
+      sendSlack(slackText),
+    ]);
+
+    return {
+      ok: true,
+      email_sent: emailResult.ok, email_provider: emailResult.provider, email_reason: emailResult.reason ?? null,
+      slack_sent: slackResult.ok, slack_reason: slackResult.reason ?? null,
+      metrics,
+    };
   });
 
   app.post('/v1/admin/credits/adjust', async (req, reply) => {
