@@ -919,6 +919,7 @@ export const openApiDocument = {
           from_node_id: { type: 'string', format: 'uuid' },
           to_node_id: { type: 'string', format: 'uuid' },
           status: { type: 'string' },
+          note: { type: 'string', nullable: true },
           expires_at: { type: 'string' },
           accepted_by_from_at: { type: 'string', nullable: true },
           accepted_by_to_at: { type: 'string', nullable: true },

@@ -709,6 +709,7 @@ export async function offerSummary(offer: any) {
     from_node_id: offer.from_node_id,
     to_node_id: offer.to_node_id,
     status: offer.status,
+    note: offer.note ?? null,
     accepted_by_from_at: offer.accepted_by_from_at,
     accepted_by_to_at: offer.accepted_by_to_at,
     held_unit_ids: hold.held_unit_ids,
