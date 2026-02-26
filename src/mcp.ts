@@ -5,8 +5,11 @@ import { errorEnvelope } from './http.js';
 type AppInstance = ReturnType<typeof Fastify>;
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
-const SERVER_NAME = 'fabric-api-readonly';
+const SERVER_NAME = 'fabric-marketplace';
 const SERVER_VERSION = '0.1.0';
+const SERVER_DISPLAY_NAME = 'Fabric Marketplace';
+const SERVER_HOMEPAGE = 'https://github.com/Fabric-Protocol/fabric';
+const SERVER_ICON = 'https://raw.githubusercontent.com/Fabric-Protocol/fabric/main/icon.png';
 
 type JsonRpcId = string | number | null;
 type JsonRpcMessage = {
@@ -20,92 +23,105 @@ const searchInputSchema = {
   type: 'object' as const,
   properties: {
     q: { type: ['string', 'null'] as const, description: 'Free-text query (nullable).' },
-    scope: { type: 'string' as const, enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'] },
+    scope: { type: 'string' as const, enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'], description: 'Primary modality for the search (determines required filters).' },
     filters: { type: 'object' as const, description: 'Structured filters (category_ids_any, region, etc.).' },
     broadening: {
       type: 'object' as const,
-      properties: { level: { type: 'number' as const }, allow: { type: 'boolean' as const } },
+      properties: { level: { type: 'number' as const, description: 'Broadening level (0 = none).' }, allow: { type: 'boolean' as const, description: 'Allow automatic broadening.' } },
+      description: 'Optional broadening settings (deprecated, defaults to level 0).',
     },
     budget: {
       type: 'object' as const,
-      properties: { credits_requested: { type: 'number' as const, description: 'Maximum credits to spend.' } },
+      properties: { credits_requested: { type: 'number' as const, description: 'Maximum credits to spend on this search call.' } },
       required: ['credits_requested'],
+      description: 'Spend ceiling for this search.',
     },
     target: {
       type: 'object' as const,
       properties: {
-        node_id: { type: ['string', 'null'] as const },
-        username: { type: ['string', 'null'] as const },
+        node_id: { type: ['string', 'null'] as const, description: 'Restrict search to a specific node by ID.' },
+        username: { type: ['string', 'null'] as const, description: 'Restrict search to a specific node by display name.' },
       },
+      description: 'Optional target constraint to search a specific node.',
     },
     limit: { type: 'number' as const, description: 'Results per page (1-100, default 20).' },
-    cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
+    cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor from a previous search response.' },
   },
   required: ['scope', 'filters', 'budget'],
   additionalProperties: false,
 };
 
+const readOnlyAnnotation = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const searchAnnotation = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+
 const TOOLS = [
   {
     name: 'fabric_search_listings',
-    description: 'Search published listings. Metered: costs credits per the budget contract.',
+    description: 'Search published marketplace listings (supply side). Metered: costs credits per the budget contract. Returns matching public listings with scope-specific ranking.',
     inputSchema: searchInputSchema,
+    annotations: searchAnnotation,
   },
   {
     name: 'fabric_search_requests',
-    description: 'Search published requests. Metered: costs credits per the budget contract.',
+    description: 'Search published marketplace requests (demand side). Metered: costs credits per the budget contract. Returns matching public requests with scope-specific ranking.',
     inputSchema: searchInputSchema,
+    annotations: searchAnnotation,
   },
   {
     name: 'fabric_get_unit',
-    description: 'Get a unit by ID (caller must own the unit).',
+    description: 'Get a unit (resource) by ID. Returns full unit details including title, description, scope, condition, quantity, and publish status. Caller must own the unit.',
     inputSchema: {
       type: 'object' as const,
-      properties: { unit_id: { type: 'string' as const, description: 'UUID of the unit.' } },
+      properties: { unit_id: { type: 'string' as const, description: 'UUID of the unit to retrieve.' } },
       required: ['unit_id'],
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotation,
   },
   {
     name: 'fabric_get_request',
-    description: 'Get a request by ID (caller must own the request).',
+    description: 'Get a request (need) by ID. Returns full request details including title, description, scope, need_by, and publish status. Caller must own the request.',
     inputSchema: {
       type: 'object' as const,
-      properties: { request_id: { type: 'string' as const, description: 'UUID of the request.' } },
+      properties: { request_id: { type: 'string' as const, description: 'UUID of the request to retrieve.' } },
       required: ['request_id'],
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotation,
   },
   {
     name: 'fabric_get_offer',
-    description: 'Get an offer by ID (caller must be a party to the offer).',
+    description: 'Get an offer by ID. Returns offer status, hold summary, expiry, and negotiation thread info. Caller must be a party to the offer.',
     inputSchema: {
       type: 'object' as const,
-      properties: { offer_id: { type: 'string' as const, description: 'UUID of the offer.' } },
+      properties: { offer_id: { type: 'string' as const, description: 'UUID of the offer to retrieve.' } },
       required: ['offer_id'],
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotation,
   },
   {
     name: 'fabric_get_events',
-    description: 'Poll offer lifecycle events (webhook polling fallback). Uses opaque cursor with strictly-after semantics.',
+    description: 'Poll offer lifecycle events for the authenticated node. Returns events like offer_created, offer_accepted, offer_countered, etc. Uses opaque cursor with strictly-after semantics.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        since: { type: ['string', 'null'] as const, description: 'Opaque cursor for strictly-after pagination.' },
+        since: { type: ['string', 'null'] as const, description: 'Opaque cursor from previous response for strictly-after pagination.' },
         limit: { type: 'number' as const, description: 'Max events to return (1-100, default 50).' },
       },
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotation,
   },
   {
     name: 'fabric_get_credits',
-    description: 'Get the authenticated node credit balance.',
+    description: 'Get the authenticated node\'s current credit balance and subscription status. Use before searches to check affordability.',
     inputSchema: {
       type: 'object' as const,
       properties: {},
       additionalProperties: false,
     },
+    annotations: readOnlyAnnotation,
   },
 ];
 
@@ -256,13 +272,61 @@ export function registerMcpRoute(app: AppInstance) {
     if (method === 'initialize') {
       return jsonRpcResult(id, {
         protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: { tools: {} },
-        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+        capabilities: { tools: {}, prompts: {}, resources: {} },
+        serverInfo: {
+          name: SERVER_NAME,
+          version: SERVER_VERSION,
+          displayName: SERVER_DISPLAY_NAME,
+          homepage: SERVER_HOMEPAGE,
+          icon: SERVER_ICON,
+        },
       });
     }
 
     if (method === 'notifications/initialized') {
       return reply.status(204).send();
+    }
+
+    if (method === 'prompts/list') {
+      return jsonRpcResult(id, { prompts: [
+        {
+          name: 'fabric_quickstart',
+          description: 'Step-by-step guide to bootstrap a node, publish a resource, search, and make your first offer on Fabric.',
+        },
+      ] });
+    }
+
+    if (method === 'prompts/get') {
+      const params = (msg.params && typeof msg.params === 'object') ? msg.params : {};
+      const promptName = String(params.name ?? '');
+      if (promptName === 'fabric_quickstart') {
+        return jsonRpcResult(id, {
+          description: 'Fabric Marketplace quickstart guide',
+          messages: [
+            {
+              role: 'user',
+              content: { type: 'text', text: [
+                'Walk me through using the Fabric Marketplace API:',
+                '1. Bootstrap: POST /v1/bootstrap with display_name and legal acceptance to get an API key and 100 free credits.',
+                '2. Create a unit: POST /v1/units with title, scope, and category.',
+                '3. Publish it: POST /v1/units/{id}/publish to make it searchable.',
+                '4. Search: POST /v1/search/listings with scope, filters, and budget.',
+                '5. Make an offer: POST /v1/offers with unit_ids from search results.',
+                '6. Accept: POST /v1/offers/{id}/accept — both sides must accept for mutual acceptance.',
+                '7. Reveal contact: POST /v1/offers/{id}/reveal-contact after mutual acceptance.',
+                '',
+                'API base: https://fabric-api-393345198409.us-west1.run.app',
+                'Docs: https://github.com/Fabric-Protocol/fabric',
+              ].join('\n') },
+            },
+          ],
+        });
+      }
+      return reply.status(200).send(jsonRpcError(id, -32602, `Unknown prompt: ${promptName}`));
+    }
+
+    if (method === 'resources/list') {
+      return jsonRpcResult(id, { resources: [] });
     }
 
     if (method === 'tools/list') {
