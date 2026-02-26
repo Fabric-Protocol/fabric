@@ -283,7 +283,10 @@ export function registerMcpRoute(app: AppInstance) {
         ));
       }
 
-      const authHeader = String(req.headers.authorization ?? '');
+      const rawApiKey = String(req.headers['api_key'] ?? req.headers['api-key'] ?? '');
+      const authHeader = rawApiKey
+        ? `ApiKey ${rawApiKey}`
+        : String(req.headers.authorization ?? '');
       try {
         const result = await executeTool(app, authHeader, toolName, toolArgs);
         const isError = result.status < 200 || result.status >= 300;
