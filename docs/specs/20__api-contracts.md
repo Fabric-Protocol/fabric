@@ -869,7 +869,7 @@ Same as Unit create, plus:
   "ttl_minutes": 10080
 }
 
-`ttl_minutes` is optional. If omitted, default is 10080 minutes (7 days). If provided, it must be an integer in [60, 43200]. `request.expires_at` is server-computed and returned.
+`ttl_minutes` is optional. If omitted, default is 525600 minutes (365 days). If provided, it must be an integer in [60, 525600]. `request.expires_at` is server-computed and returned.
 
 Rules
 

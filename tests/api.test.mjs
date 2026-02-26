@@ -358,10 +358,10 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(offerCounterSchema.properties?.ttl_minutes?.maximum, 10080);
   const requestCreateSchema = body.components?.schemas?.RequestCreateRequest ?? {};
   assert.equal(requestCreateSchema.properties?.ttl_minutes?.minimum, 60);
-  assert.equal(requestCreateSchema.properties?.ttl_minutes?.maximum, 43200);
+  assert.equal(requestCreateSchema.properties?.ttl_minutes?.maximum, 525600);
   const requestPatchSchema = body.components?.schemas?.RequestPatchRequest ?? {};
   assert.equal(requestPatchSchema.properties?.ttl_minutes?.minimum, 60);
-  assert.equal(requestPatchSchema.properties?.ttl_minutes?.maximum, 43200);
+  assert.equal(requestPatchSchema.properties?.ttl_minutes?.maximum, 525600);
   const offerSchema = body.components?.schemas?.Offer ?? {};
   assert.equal(Array.isArray(offerSchema.required), true);
   assert.equal(offerSchema.required.includes('expires_at'), true);
@@ -1641,7 +1641,7 @@ test('request ttl_minutes defaults/overrides are enforced and expired requests a
   assert.equal(created.statusCode, 200);
   const requestId = created.json().request.id;
   const defaultMinutes = (new Date(created.json().request.expires_at).getTime() - Date.now()) / 60000;
-  assert.equal(defaultMinutes >= 10075 && defaultMinutes <= 10085, true);
+  assert.equal(defaultMinutes >= 525595 && defaultMinutes <= 525605, true);
 
   const patched = await app.inject({
     method: 'PATCH',

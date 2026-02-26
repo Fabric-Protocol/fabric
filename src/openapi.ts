@@ -851,7 +851,7 @@ export const openApiDocument = {
           tags: { type: 'array', items: { type: 'string' } },
           category_ids: { type: 'array', items: { type: 'integer' } },
           public_summary: { type: 'string', nullable: true },
-          ttl_minutes: { type: 'integer', minimum: 60, maximum: 43200 },
+          ttl_minutes: { type: 'integer', minimum: 60, maximum: 525600 },
         },
         required: ['title'],
       },
@@ -879,7 +879,7 @@ export const openApiDocument = {
           tags: { type: 'array', items: { type: 'string' } },
           category_ids: { type: 'array', items: { type: 'integer' } },
           public_summary: { type: 'string', nullable: true },
-          ttl_minutes: { type: 'integer', minimum: 60, maximum: 43200 },
+          ttl_minutes: { type: 'integer', minimum: 60, maximum: 525600 },
         },
       },
       RequestSummary: {

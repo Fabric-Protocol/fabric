@@ -726,9 +726,13 @@ export async function offerSummary(offer: any) {
 const OFFER_TTL_MINUTES_DEFAULT = 48 * 60;
 const OFFER_TTL_MINUTES_MIN = 15;
 const OFFER_TTL_MINUTES_MAX = 7 * 24 * 60;
-const REQUEST_TTL_MINUTES_DEFAULT = 7 * 24 * 60;
+// Temporarily set to 365 days to build marketplace density during early growth.
+// Once request volume reaches critical mass, reduce to:
+//   DEFAULT = 7 * 24 * 60  (7 days)
+//   MAX     = 30 * 24 * 60 (30 days)
+const REQUEST_TTL_MINUTES_DEFAULT = 365 * 24 * 60;
 const REQUEST_TTL_MINUTES_MIN = 60;
-const REQUEST_TTL_MINUTES_MAX = 30 * 24 * 60;
+const REQUEST_TTL_MINUTES_MAX = 365 * 24 * 60;
 
 const PREPURCHASE_DAILY_SEARCH_LIMIT = 3;
 const PREPURCHASE_DAILY_OFFER_CREATE_LIMIT = 3;

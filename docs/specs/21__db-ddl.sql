@@ -407,7 +407,8 @@ create table if not exists requests (
   deleted_at timestamptz null
 );
 
-alter table requests add column if not exists expires_at timestamptz not null default (now() + interval '7 days');
+-- 365 days default for early marketplace density; reduce to '7 days' once volume is healthy
+alter table requests add column if not exists expires_at timestamptz not null default (now() + interval '365 days');
 alter table requests add column if not exists max_ship_days int null;
 
 create index if not exists requests_node_idx on requests(node_id) where deleted_at is null;

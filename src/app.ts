@@ -65,7 +65,8 @@ const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
 const OFFER_TTL_MINUTES_MIN = 15;
 const OFFER_TTL_MINUTES_MAX = 10080;
 const REQUEST_TTL_MINUTES_MIN = 60;
-const REQUEST_TTL_MINUTES_MAX = 43200;
+// 365 days — intentionally long for early marketplace density; reduce once volume is healthy
+const REQUEST_TTL_MINUTES_MAX = 525600;
 
 const CONTACT_EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
 const CONTACT_PHONE_RE = /(?:\+\d{1,3}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;

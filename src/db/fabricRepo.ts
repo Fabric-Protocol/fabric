@@ -459,7 +459,7 @@ export async function createResource(kind: 'units'|'requests', nodeId: string, p
     return rows[0];
   }
   const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '7 days'),$21,$22,$23)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '365 days'),$21,$22,$23)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version,expires_at`,
       [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary]);
   return rows[0];

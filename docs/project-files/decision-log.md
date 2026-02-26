@@ -904,9 +904,14 @@ Open decision:
 - (#5) End-to-end Stripe payment flow (go through checkout.stripe.com, confirm credits appear)
 - (DONE) ADMIN_KEY rotated: incorrect versions destroyed, new key (v4, 64 chars, no trailing newline) deployed. All 4 Cloud Scheduler jobs updated. Admin auth verified working.
 
+### Remaining go-live items (human-only):
+- Set `--min-instances=1` on Cloud Run (deferred to right before go-live)
+- Configure email delivery: set `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `EMAIL_FROM` env vars on Cloud Run (currently using stub provider — Slack works but email is backup/archive)
+- End-to-end Stripe payment flow test in browser (go through checkout.stripe.com, confirm credits appear)
+- End-to-end NOWPayments crypto flow test (send real crypto, verify IPN fires, credits appear)
+
 ### Day-one risk awareness:
 - Rate limits are per-instance in-memory — 2+ Cloud Run instances means 2x effective limits
-- Daily alerting endpoint added but email delivery requires EMAIL_PROVIDER + SENDGRID_API_KEY env vars on Cloud Run (currently using stub provider). Cloud Logging structured logs provide fallback observability.
 - No referral clawback mechanism (G4) — self-referral abuse possible with stolen cards
 - NOWPayments default wallet is Base but code tells agents `usdcmatic` (Polygon) — verify config match
 - Legal pages verified complete — no placeholder HTML risk
