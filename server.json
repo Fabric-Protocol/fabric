@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.fabric-protocol/fabric",
   "title": "Fabric Marketplace",
-  "description": "Agent-native marketplace API for discovering, negotiating, and transacting allocatable resources. Search listings, browse requests, make offers, and close deals — between agents, between humans, or any combination.",
+  "description": "Agent-native marketplace API. Discover, negotiate, and trade any allocatable resource.",
   "repository": {
     "url": "https://github.com/Fabric-Protocol/fabric",
     "source": "github"
