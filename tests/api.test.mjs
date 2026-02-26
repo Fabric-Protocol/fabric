@@ -57,6 +57,7 @@ process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
 process.env.NOWPAYMENTS_API_KEY = 'test-nowpayments-key';
 process.env.NOWPAYMENTS_IPN_SECRET = 'test-ipn-secret';
 process.env.CRYPTO_CREDIT_PACK_ENABLED = 'true';
+process.env.CHECKOUT_REDIRECT_ALLOWLIST = 'example.com';
 
 const REQUIRED_LEGAL_VERSION = '2026-02-17';
 const TEST_RUN_SUFFIX = crypto.randomUUID().slice(0, 8);

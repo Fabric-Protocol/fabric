@@ -58,6 +58,15 @@ Last updated: 2026-02-24
 - [x] **D5** (done): Subscription status change webhook notifications to nodes (`subscription_changed` event type on `invoice.paid` and `invoice.payment_failed`). DB migration to allow nullable `offer_id` and new event types in `offer_events` table.
 - [x] **D7** (done): Cloud Scheduler setup script created (`scripts/setup-cloud-scheduler.ps1`) covering all 3 jobs: projections rebuild (30min), sweep (5min), retention (daily). Internal `POST /internal/admin/retention` endpoint added.
 
+### Audit findings (2026-02-26, logic+spec completeness)
+- [ ] Add daily velocity limit (`CREDIT_PACK_MAX_GRANTS_PER_DAY`) enforcement to NOWPayments IPN handler — Stripe path already enforces via `countCreditPackPurchasesSince`; crypto path skips it. Low urgency (idempotency by `order_id` already prevents duplicate grants per payment; velocity limit only matters if a node creates 4+ separate crypto invoices in one UTC day).
+- [ ] Add `crypto_payments` table to `21__db-ddl.sql` (currently only in `supabase_migrations/`).
+- [ ] Spec `20__api-contracts.md` section 15c response shape drift: code returns `expiration_estimate_date` instead of `valid_until`, plus extra fields (`send_amount`, `chain`, `payment_status`, `warning`). Align spec or code.
+- [ ] Document ops admin endpoints in `20__api-contracts.md`: `POST /internal/admin/health-pulse`, `POST /internal/admin/daily-digest`, `POST /internal/admin/sweep`, `POST /internal/admin/retention`.
+- [ ] Add NOWPayments/crypto billing rows to `26__enforcement-coverage.md` coverage matrix.
+- [ ] Fix Request PATCH TTL bounds in `20__api-contracts.md` line 927: `[60, 43200]` should be `[60, 525600]` to match code.
+- [ ] Fix `GET /v1/events` metering label in `20__api-contracts.md`: "Conditional" should be "None".
+
 ### Next Phase (ranked by likelihood)
 High likelihood:
 - [ ] Encrypt webhook secrets at rest (KMS/pgcrypto/vault) with rotation plan and docs update.
