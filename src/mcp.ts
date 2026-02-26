@@ -238,6 +238,11 @@ function safeJsonParse(text: string): unknown {
 }
 
 export function registerMcpRoute(app: AppInstance) {
+  app.get('/mcp', async (_req, reply) => {
+    reply.header('Content-Type', 'text/event-stream');
+    return reply.status(200).send('');
+  });
+
   app.post('/mcp', async (req, reply) => {
     const raw = typeof req.body === 'string' ? safeJsonParse(req.body) : req.body;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
