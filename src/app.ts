@@ -818,6 +818,7 @@ function isPublicRoute(path: string) {
     || path === '/v1/meta'
     || path === '/v1/categories'
     || path === '/v1/regions'
+    || path === '/mcp'
     || path === '/support'
     || path === '/docs/agents'
     || path === '/legal/terms'
