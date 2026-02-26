@@ -17,7 +17,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 3 searches/day, 3 offer creates/day, 1 offer accept/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
+- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 20 searches/day, 3 offer creates/day, 1 offer accept/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
 
 ---
 
@@ -2076,7 +2076,7 @@ Request
 {
   "node_id": "uuid",
   "pack_code": "credits_500|credits_1500|credits_4500",
-  "pay_currency": "string (e.g. usdcmatic)"
+  "pay_currency": "string (e.g. usdcsol)"
 }
 
 Response 200
@@ -2087,7 +2087,7 @@ Response 200
   "payment_id": "string",
   "pay_address": "string",
   "pay_amount": 9.99,
-  "pay_currency": "usdcmatic",
+  "pay_currency": "usdcsol",
   "price_amount": 9.99,
   "price_currency": "usd",
   "order_id": "string",
@@ -2114,7 +2114,7 @@ Purpose
 List available NOWPayments crypto currencies that agents can use for credit pack purchases.
 
 Response 200
-{ "currencies": ["usdcmatic", "btc", "eth", ...] }
+{ "currencies": ["usdcsol", "btc", "eth", ...] }
 
 POST /v1/webhooks/nowpayments
 Auth

@@ -92,7 +92,7 @@ MVP note:
   - node inventory expansion
 - Broadening is deprecated/optional in MVP and **MUST NOT** increase credit cost.
 - Search **MUST** require ACTIVE, not-suspended node state and sufficient credits. No subscriber gate — credits are sufficient.
-- Pre-purchase daily limits: 3 combined search requests/day, 3 offer creates/day, 1 offer accept/day. Purchasing anything (subscription or credit pack) permanently removes these limits.
+- Pre-purchase daily limits: 20 combined search requests/day, 3 offer creates/day, 1 offer accept/day. Purchasing anything (subscription or credit pack) permanently removes these limits.
 - Search **MUST** be split by intent (no combined search):
   - `POST /v1/search/listings` (buyer/acquirer intent)
   - `POST /v1/search/requests` (seller/provider intent)

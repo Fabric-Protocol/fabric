@@ -106,6 +106,10 @@ function safeTimingSafeCompare(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+const CRYPTO_CHAIN_LABELS: Record<string, string> = {
+  usdcsol: 'Solana',
+};
+
 function isAllowedCheckoutRedirectUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
@@ -695,7 +699,7 @@ function buildAgentsDocs(req: FastifyRequest) {
       <li><strong>Pagination escalation</strong> is anti-scrape economics. Pages 2-5 cost 2-5 credits; page 6+ costs 100 credits. Use targeted queries and category drilldowns instead.</li>
       <li><strong>Contact info ban</strong> in content fields protects everyone from harvesting. Contact details only surface after both parties agree to transact via <code>reveal-contact</code>.</li>
       <li><strong>Rate limits</strong> prevent individual actors from degrading service. <code>429</code> responses always include <code>Retry-After</code> guidance.</li>
-      <li><strong>Pre-purchase limits</strong> (3 searches/day, 3 offers/day, 1 accept/day) let you evaluate with 100 free signup credits. Any purchase permanently removes them.</li>
+      <li><strong>Pre-purchase limits</strong> (20 searches/day, 3 offers/day, 1 accept/day) let you evaluate with 100 free signup credits. Any purchase permanently removes them.</li>
     </ul>
 
     <h2>Get started (3 calls)</h2>
@@ -882,9 +886,14 @@ function purchaseGuidance(nodeId: string) {
     crypto: {
       description: 'One-time credit pack via cryptocurrency. No subscription available.',
       endpoint: 'POST /v1/billing/crypto-credit-pack',
-      example_body: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+      example_body: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcsol' },
       available_packs: packs,
-      supported_currencies: 'GET /v1/billing/crypto-currencies returns the full list of accepted pay_currency values',
+      recommended_currencies: [
+        { pay_currency: 'usdcsol', chain: 'Solana', token: 'USDC' },
+      ],
+      how_to_pay: 'Set pay_currency to one of the recommended_currencies values. The response includes a chain-specific pay_address and send_amount. Send exactly send_amount of the specified token on the specified chain to that address.',
+      warning: 'Sending tokens on the wrong chain to a pay_address will result in permanent loss of funds.',
+      all_currencies: 'GET /v1/billing/crypto-currencies returns the full list of accepted pay_currency values beyond USDC',
     },
     stripe: {
       description: 'Credit card payment. Supports one-time credit packs and recurring subscriptions with monthly credit grants.',
@@ -1780,13 +1789,12 @@ export function buildApp() {
     if (!pack) return reply.status(422).send(errorEnvelope('validation_error', 'Unsupported pack code'));
     const priceDollars = pack.price_cents / 100;
     const orderId = `fabric:${parsed.data.node_id}:${pack.pack_code}:${crypto.randomUUID()}`;
-    const baseUrl = `${req.protocol}://${req.hostname}`;
     const result = await nowPayments.createPayment({
       priceAmount: priceDollars,
       priceCurrency: 'usd',
       payCurrency: parsed.data.pay_currency,
       orderId,
-      ipnCallbackUrl: `${baseUrl}/v1/webhooks/nowpayments`,
+      ipnCallbackUrl: absoluteUrl(req, '/v1/webhooks/nowpayments'),
     });
     if ('ok' in result && result.ok === false) {
       req.log.warn({ reason: result.code, status: result.status }, 'NOWPayments create payment failed');
@@ -1805,19 +1813,23 @@ export function buildApp() {
       payment.pay_address,
       payment.pay_amount,
     );
+    const effectivePayCurrency = payment.pay_currency ?? parsed.data.pay_currency;
+    const chainLabel = CRYPTO_CHAIN_LABELS[effectivePayCurrency.toLowerCase()] ?? null;
     return {
       node_id: parsed.data.node_id,
       pack_code: pack.pack_code,
       credits: pack.credits,
       price_amount: priceDollars,
       price_currency: 'usd',
+      send_amount: priceDollars,
       pay_address: payment.pay_address,
-      pay_amount: payment.pay_amount,
-      pay_currency: payment.pay_currency ?? parsed.data.pay_currency,
+      pay_currency: effectivePayCurrency,
+      chain: chainLabel,
       payment_id: payment.payment_id,
       order_id: orderId,
       payment_status: payment.payment_status,
       expiration_estimate_date: payment.expiration_estimate_date ?? null,
+      warning: `Send exactly ${priceDollars} ${effectivePayCurrency.toUpperCase()} on ${chainLabel ?? 'the correct chain'} to this address. Sending less will result in a partial payment. Sending on the wrong chain will result in permanent loss of funds.`,
     };
   });
   app.get('/v1/billing/crypto-currencies', async (_req, reply) => {
@@ -2328,9 +2340,22 @@ export function buildApp() {
           webhookApp.log.warn({ payment_id: paymentId, order_id: orderId }, 'NOWPayments IPN for unknown payment');
           return { ok: true };
         }
-        await repo.markCryptoPaymentStatus(paymentId, paymentStatus, actuallyPaid);
-        if (paymentStatus === 'finished' || paymentStatus === 'partially_paid') {
-          const grantCredits = paymentStatus === 'finished' ? existing.credits : 0;
+        const CRYPTO_PAYMENT_TOLERANCE = 0.02;
+        const effectiveStatus = (paymentStatus === 'partially_paid'
+          && actuallyPaid != null
+          && existing.pay_amount != null
+          && actuallyPaid >= existing.pay_amount * (1 - CRYPTO_PAYMENT_TOLERANCE))
+          ? 'finished'
+          : paymentStatus;
+        await repo.markCryptoPaymentStatus(paymentId, effectiveStatus, actuallyPaid);
+        if (effectiveStatus !== paymentStatus) {
+          webhookApp.log.info(
+            { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, tolerance: CRYPTO_PAYMENT_TOLERANCE },
+            'Crypto payment promoted from partially_paid to finished (within tolerance)',
+          );
+        }
+        if (effectiveStatus === 'finished' || effectiveStatus === 'partially_paid') {
+          const grantCredits = effectiveStatus === 'finished' ? existing.credits : 0;
           if (grantCredits > 0) {
             const idempotencyKey = `crypto_credit_pack:${paymentId}`;
             const inserted = await repo.addCreditIdempotent(
@@ -2349,6 +2374,18 @@ export function buildApp() {
             webhookApp.log.info(
               { payment_id: paymentId, node_id: existing.node_id, credits: grantCredits, inserted, pack_code: existing.pack_code },
               inserted ? 'Crypto credit pack credits granted' : 'Crypto credit pack idempotent replay',
+            );
+            if (inserted) {
+              await repo.awardReferralFirstPaid(existing.node_id, 100, `crypto_credit_pack:${paymentId}`, config.referralMaxGrantsPerReferrer, {
+                invoice_id: null,
+                stripe_subscription_id: null,
+              });
+            }
+          }
+          if (actuallyPaid != null && existing.pay_amount != null && actuallyPaid > existing.pay_amount * 1.10) {
+            webhookApp.log.warn(
+              { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, overpayment_ratio: actuallyPaid / existing.pay_amount },
+              'Crypto payment significant overpayment (>10%) — may require manual refund via NOWPayments dashboard',
             );
           }
         }

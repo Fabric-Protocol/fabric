@@ -735,7 +735,7 @@ const REQUEST_TTL_MINUTES_DEFAULT = 365 * 24 * 60;
 const REQUEST_TTL_MINUTES_MIN = 60;
 const REQUEST_TTL_MINUTES_MAX = 365 * 24 * 60;
 
-const PREPURCHASE_DAILY_SEARCH_LIMIT = 3;
+const PREPURCHASE_DAILY_SEARCH_LIMIT = 20;
 const PREPURCHASE_DAILY_OFFER_CREATE_LIMIT = 3;
 const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
 
@@ -1977,6 +1977,13 @@ async function applyCreditPackGrant(nodeId: string, eventType: string, eventObje
           max_grants_per_day: creditPackResult.max_grants_per_day,
         }));
       }
+      if (creditPackResult.applied) {
+        const ref = creditPackResult.payment_reference ?? `checkout:${stripeId(object?.id) ?? 'unknown'}`;
+        await repo.awardReferralFirstPaid(nodeId, 100, `credit_pack:${ref}`, config.referralMaxGrantsPerReferrer, {
+          invoice_id: null,
+          stripe_subscription_id: null,
+        });
+      }
       return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, credit_pack: creditPackResult };
     }
     const paymentStatus = nonEmptyString(object?.payment_status);
@@ -2034,6 +2041,13 @@ async function applyCreditPackGrant(nodeId: string, eventType: string, eventObje
           grants_today: creditPackResult.grants_today,
           max_grants_per_day: creditPackResult.max_grants_per_day,
         }));
+      }
+      if (creditPackResult.applied) {
+        const ref = creditPackResult.payment_reference ?? `invoice:${invoiceIdForIdempotency(object) ?? 'unknown'}`;
+        await repo.awardReferralFirstPaid(nodeId, 100, `credit_pack:${ref}`, config.referralMaxGrantsPerReferrer, {
+          invoice_id: invoiceIdForIdempotency(object) ?? null,
+          stripe_subscription_id: null,
+        });
       }
       return { mapped: true, node_id: nodeId, mapping_source: mapping.source, event_type: type, credit_pack: creditPackResult };
     }

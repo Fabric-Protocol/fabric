@@ -19,7 +19,7 @@ Scope/impact:
 Decision:
 - Search no longer requires active subscription or trial. Credits are sufficient for access.
 - Pre-purchase daily limits (until first purchase of any kind — subscription or credit pack):
-  - 3 combined search requests/day (listings + requests counted together)
+  - 20 combined search requests/day (listings + requests counted together)
   - 3 offer creates/day
   - 1 offer accept/day
 - Purchasing anything permanently removes these daily limits (lifetime "has ever purchased" flag).
@@ -915,6 +915,23 @@ Open decision:
 - No referral clawback mechanism (G4) — self-referral abuse possible with stolen cards
 - NOWPayments default wallet is Base but code tells agents `usdcmatic` (Polygon) — verify config match
 - Legal pages verified complete — no placeholder HTML risk
+
+## 2026-02-26 - Crypto payment flow hardening + referral on any purchase
+
+Decision:
+- Referral awards now trigger on any first purchase: Stripe subscription, Stripe credit pack, or NOWPayments crypto credit pack.
+- Pre-purchase search limit increased from 3 to 20/day to let new users meaningfully evaluate the marketplace.
+- Crypto payment response now includes `send_amount`, `chain`, and `warning` fields for clear agent instructions.
+- Only Solana USDC (`usdcsol`) is recommended for crypto payments; other chains remain technically supported but not promoted.
+- 2% tolerance added for crypto payments: if NOWPayments reports `partially_paid` but received amount is within 2% of expected, credits are granted.
+- Overpayments >10% are logged as warnings for manual review.
+- IPN callback URL fixed to use `absoluteUrl()` (respects x-forwarded-proto/host behind Cloud Run proxy).
+
+Reason: End-to-end crypto payment testing revealed multiple issues (IPN URL, signature secret newline, confusing `pay_amount` field, missing referral triggers). Each was fixed and verified live.
+
+Where captured: `src/app.ts`, `src/services/fabricService.ts`, all spec docs, agent skill docs.
+
+Impact: All payment paths (Stripe + crypto) now award referrals. Crypto payments are Solana-only until other chain wallet configs are verified.
 
 ## (Add future decisions below)
 Template:

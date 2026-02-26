@@ -7329,13 +7329,15 @@ test('GET /v1/offers/:id returns offer for party and 404 for non-party with vers
 // QA AUDIT — GAP 4: Pre-purchase daily search limit
 // =====================================================================
 
-test('pre-purchase daily search limit blocks 4th search with prepurchase_daily_limit_exceeded', async () => {
+test('pre-purchase daily search limit blocks 21st search with prepurchase_daily_limit_exceeded', async () => {
+  const savedRl = config.rateLimitSearchPerMinute;
+  config.rateLimitSearchPerMinute = 100;
   const app = buildApp();
   const b = await bootstrap(app, 'boot-prepurchase-search-limit');
   const apiKey = b.json().api_key.api_key;
   const searchPayload = { q: null, scope: 'OTHER', filters: { scope_notes: 'prepurchase-search-limit' }, broadening: { level: 0, allow: false }, budget: { credits_requested: config.searchCreditCost }, limit: 20, cursor: null };
 
-  for (let i = 1; i <= 3; i++) {
+  for (let i = 1; i <= 20; i++) {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/search/listings',
@@ -7345,15 +7347,16 @@ test('pre-purchase daily search limit blocks 4th search with prepurchase_daily_l
     assert.equal(res.statusCode, 200, `search ${i} should succeed`);
   }
 
-  const fourth = await app.inject({
+  const next = await app.inject({
     method: 'POST',
     url: '/v1/search/listings',
-    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'prepurchase-search-4' },
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'prepurchase-search-21' },
     payload: searchPayload,
   });
-  assert.equal(fourth.statusCode, 429);
-  assert.equal(fourth.json().error.code, 'prepurchase_daily_limit_exceeded');
-  assert.equal(fourth.json().error.details.action, 'search');
+  assert.equal(next.statusCode, 429);
+  assert.equal(next.json().error.code, 'prepurchase_daily_limit_exceeded');
+  assert.equal(next.json().error.details.action, 'search');
+  config.rateLimitSearchPerMinute = savedRl;
   await app.close();
 });
 
@@ -9173,8 +9176,8 @@ test('POST /v1/billing/crypto-credit-pack creates payment and stores record (moc
     assert.equal(body.credits, 500);
     assert.equal(typeof body.pay_address, 'string');
     assert.ok(body.pay_address.length > 0, 'pay_address should be non-empty');
-    assert.equal(typeof body.pay_amount, 'number');
-    assert.ok(body.pay_amount > 0, 'pay_amount should be positive');
+    assert.equal(typeof body.send_amount, 'number');
+    assert.ok(body.send_amount > 0, 'send_amount should be positive');
     assert.equal(body.payment_status, 'waiting');
     assert.ok(body.order_id.startsWith('fabric:'), 'order_id should be prefixed');
     assert.equal(body.payment_id, mockPaymentId);
@@ -9486,6 +9489,8 @@ test('subscription monthly grant is capped at 2x plan credits', async () => {
 // ── Prepurchase limit response includes purchase options ──
 
 test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
+  const savedRl = config.rateLimitSearchPerMinute;
+  config.rateLimitSearchPerMinute = 100;
   const app = buildApp();
   const b = await bootstrap(app, 'boot-prepurchase-guidance');
   const apiKey = b.json().api_key.api_key;
@@ -9493,8 +9498,8 @@ test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
 
   const searchPayload = { q: null, scope: 'OTHER', filters: { scope_notes: 'prepurchase-guidance-test' }, broadening: { level: 0, allow: false }, budget: { credits_requested: 10 }, limit: 20, cursor: null };
 
-  // Exhaust the daily search limit (3 searches)
-  for (let i = 0; i < 3; i++) {
+  // Exhaust the daily search limit (20 searches)
+  for (let i = 0; i < 20; i++) {
     await app.inject({
       method: 'POST', url: '/v1/search/listings',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `prepurch-search-${nodeId}-${i}`, 'content-type': 'application/json' },
@@ -9502,7 +9507,7 @@ test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
     });
   }
 
-  // 4th search should hit prepurchase limit
+  // 21st search should hit prepurchase limit
   const res = await app.inject({
     method: 'POST', url: '/v1/search/listings',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `prepurch-search-${nodeId}-over`, 'content-type': 'application/json' },
@@ -9516,6 +9521,7 @@ test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
   assert.ok(body.error.details.purchase_options.stripe, 'should include stripe options');
   assert.ok(body.error.details.how_to_remove_limit, 'should include how_to_remove_limit');
 
+  config.rateLimitSearchPerMinute = savedRl;
   await app.close();
 });
 

@@ -22,7 +22,7 @@ Fabric is designed for agents as first-class participants. Every cost, limit, an
 
 **Rate limits protect the network, not restrict you.** Per-IP and per-node limits prevent individual actors from degrading service for everyone. When you see a `429`, it includes `Retry-After` guidance — the system is telling you exactly when to come back. Implement exponential backoff and you'll never have a problem. The limits are generous for normal usage patterns.
 
-**Pre-purchase daily limits let you try before you buy.** Before your first purchase, you get 3 searches/day, 3 offer creates/day, and 1 accept/day. These exist to let you evaluate the platform using your 100 signup credits without requiring payment upfront. Any purchase (subscription or credit pack) permanently removes these limits.
+**Pre-purchase daily limits let you try before you buy.** Before your first purchase, you get 20 searches/day, 3 offer creates/day, and 1 accept/day. These exist to let you evaluate the platform using your 100 signup credits without requiring payment upfront. Any purchase (subscription or credit pack) permanently removes these limits.
 
 ---
 

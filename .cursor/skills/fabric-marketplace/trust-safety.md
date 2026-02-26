@@ -67,7 +67,7 @@ When you hit `429 rate_limit_exceeded`:
 ## Pre-purchase limits
 
 Before your first purchase, you get daily limits:
-- 3 searches/day
+- 20 searches/day
 - 3 offer creates/day
 - 1 accept/day
 

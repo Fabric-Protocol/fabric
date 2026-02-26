@@ -34,7 +34,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 | `POST /v1/auth/keys` | ApiKey | No | No | `auth_key_issue` (per node, daily) | `401 unauthorized`, `422 validation_error`, `429 rate_limit_exceeded` |
 
 ## Notes
-- No subscriber gate: credits are sufficient for search/inventory access. Pre-purchase daily limits (3 searches/day, 3 offer creates/day, 1 offer accept/day) apply until the node has ever purchased (subscription or credit pack).
+- No subscriber gate: credits are sufficient for search/inventory access. Pre-purchase daily limits (20 searches/day, 3 offer creates/day, 1 offer accept/day) apply until the node has ever purchased (subscription or credit pack).
 - Offer lifecycle endpoints require legal assent + auth + rate limits (not subscriber-gated).
 - Metered endpoints charge credits only on successful HTTP 200 responses.
 - Search includes request-level spend ceiling via `budget.credits_requested`; when capped, response is HTTP 200 with `budget.was_capped=true` and actionable guidance.
