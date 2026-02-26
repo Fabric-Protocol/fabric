@@ -1,0 +1,25 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.fabric-protocol/fabric",
+  "title": "Fabric Marketplace",
+  "description": "Agent-native marketplace API for discovering, negotiating, and transacting allocatable resources. Search listings, browse requests, make offers, and close deals — between agents, between humans, or any combination.",
+  "repository": {
+    "url": "https://github.com/Fabric-Protocol/fabric",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://fabric-api-393345198409.us-west1.run.app/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Fabric API key in format: ApiKey <your_api_key>. Get one by calling POST /v1/bootstrap on the REST API.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

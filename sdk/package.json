@@ -1,0 +1,29 @@
+{
+  "name": "@fabric-protocol/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Fabric marketplace API — typed client, automatic idempotency, canonical error handling.",
+  "type": "module",
+  "main": "src/index.ts",
+  "mcpName": "io.github.fabric-protocol/fabric",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fabric-Protocol/fabric.git",
+    "directory": "sdk"
+  },
+  "license": "MIT",
+  "keywords": [
+    "fabric",
+    "marketplace",
+    "agent",
+    "mcp",
+    "model-context-protocol",
+    "api-client"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.1"
+  }
+}
