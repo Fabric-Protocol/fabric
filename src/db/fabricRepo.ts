@@ -1493,18 +1493,32 @@ export async function stripeEventExists(id: string) {
   return !!rows[0];
 }
 
-const STRIPE_REDACT_KEYS = new Set([
-  'email', 'name', 'phone', 'address', 'shipping',
-  'payment_method_details', 'billing_details', 'card',
-  'bank_account', 'iban_last4', 'last4', 'fingerprint',
+const STRIPE_ALLOW_KEYS = new Set([
+  'id', 'object', 'type', 'livemode', 'created', 'api_version',
+  'data', 'pending_webhooks', 'request',
+  'customer', 'subscription', 'payment_status', 'payment_intent',
+  'status', 'mode', 'currency', 'amount_total', 'amount_subtotal',
+  'current_period_start', 'current_period_end',
+  'cancel_at', 'cancel_at_period_end', 'canceled_at',
+  'start_date', 'ended_at', 'trial_start', 'trial_end',
+  'plan', 'price', 'product', 'quantity', 'interval', 'interval_count',
+  'items', 'amount', 'amount_paid', 'amount_remaining',
+  'invoice', 'invoice_id', 'hosted_invoice_url',
+  'period_start', 'period_end', 'billing_reason',
+  'lines', 'total', 'subtotal', 'tax',
+  'paid', 'attempted', 'attempt_count', 'next_payment_attempt',
+  'collection_method', 'default_payment_method',
+  'latest_invoice', 'default_source',
+  'discount', 'coupon', 'promotion_code',
 ]);
 
-function redactStripePayload(obj: unknown): unknown {
+function redactStripePayload(obj: unknown, depth = 0): unknown {
+  if (depth > 10) return '[DEPTH_LIMIT]';
   if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) return obj.map(redactStripePayload);
+  if (Array.isArray(obj)) return obj.map(item => redactStripePayload(item, depth + 1));
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
-    out[key] = STRIPE_REDACT_KEYS.has(key) ? '[REDACTED]' : redactStripePayload(val);
+    out[key] = STRIPE_ALLOW_KEYS.has(key) ? redactStripePayload(val, depth + 1) : '[REDACTED]';
   }
   return out;
 }

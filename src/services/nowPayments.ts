@@ -40,16 +40,19 @@ function sortObjectKeys(obj: unknown): unknown {
   return sorted;
 }
 
-export function verifyIpnSignature(body: Record<string, unknown>, signatureHeader: string): boolean {
-  if (!config.nowpaymentsIpnSecret) return false;
+export type IpnVerifyResult = { valid: true } | { valid: false; reason: 'missing_secret' | 'signature_mismatch' | 'hex_decode_error' };
+
+export function verifyIpnSignature(body: Record<string, unknown>, signatureHeader: string): IpnVerifyResult {
+  if (!config.nowpaymentsIpnSecret) return { valid: false, reason: 'missing_secret' };
   const sorted = sortObjectKeys(body);
   const hmac = crypto.createHmac('sha512', config.nowpaymentsIpnSecret);
   hmac.update(JSON.stringify(sorted));
   const expected = hmac.digest('hex');
   try {
-    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signatureHeader, 'hex'));
+    const match = crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(signatureHeader, 'hex'));
+    return match ? { valid: true } : { valid: false, reason: 'signature_mismatch' };
   } catch {
-    return false;
+    return { valid: false, reason: 'hex_decode_error' };
   }
 }
 

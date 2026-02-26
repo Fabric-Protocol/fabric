@@ -77,28 +77,43 @@ async function sendViaSendgrid(input: EmailSendInput): Promise<EmailSendResult> 
   }
 }
 
+const RESEND_MAX_RETRIES = 2;
+const RESEND_RETRY_BASE_MS = 500;
+
 async function sendViaResend(input: EmailSendInput): Promise<EmailSendResult> {
   if (!config.resendApiKey) return { ok: false, provider: 'resend', reason: 'resend_api_key_missing' };
   if (!config.emailFrom) return { ok: false, provider: 'resend', reason: 'email_from_missing' };
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.resendApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from: config.emailFrom,
-        to: [input.to],
-        subject: input.subject,
-        text: input.text,
-      }),
-    });
-    if (!res.ok) return { ok: false, provider: 'resend', reason: `resend_http_${res.status}` };
-    return { ok: true, provider: 'resend' };
-  } catch {
-    return { ok: false, provider: 'resend', reason: 'resend_network_error' };
+  const payload = JSON.stringify({
+    from: config.emailFrom,
+    to: [input.to],
+    subject: input.subject,
+    text: input.text,
+  });
+  for (let attempt = 0; attempt <= RESEND_MAX_RETRIES; attempt++) {
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: payload,
+      });
+      if (res.status === 429 && attempt < RESEND_MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RESEND_RETRY_BASE_MS * Math.pow(2, attempt)));
+        continue;
+      }
+      if (!res.ok) return { ok: false, provider: 'resend', reason: `resend_http_${res.status}` };
+      return { ok: true, provider: 'resend' };
+    } catch {
+      if (attempt < RESEND_MAX_RETRIES) {
+        await new Promise(r => setTimeout(r, RESEND_RETRY_BASE_MS * Math.pow(2, attempt)));
+        continue;
+      }
+      return { ok: false, provider: 'resend', reason: 'resend_network_error' };
+    }
   }
+  return { ok: false, provider: 'resend', reason: 'resend_retries_exhausted' };
 }
 
 async function smtpTransport() {

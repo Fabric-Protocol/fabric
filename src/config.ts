@@ -105,10 +105,12 @@ export const config = {
   rateLimitMcpPerMinute: Number(process.env.RATE_LIMIT_MCP_PER_MINUTE ?? 60),
   checkoutRedirectAllowlist: parseCsv(process.env.CHECKOUT_REDIRECT_ALLOWLIST),
   apiKeyPepper: process.env.API_KEY_PEPPER ?? '',
+  opsDigestEmail: process.env.OPS_DIGEST_EMAIL ?? '',
   slackOpsWebhookUrl: process.env.SLACK_OPS_WEBHOOK_URL ?? '',
   nowpaymentsApiKey: process.env.NOWPAYMENTS_API_KEY ?? '',
   nowpaymentsIpnSecret: process.env.NOWPAYMENTS_IPN_SECRET ?? '',
   nowpaymentsApiBase: process.env.NOWPAYMENTS_API_BASE ?? 'https://api.nowpayments.io/v1',
+  baseUrl: (process.env.BASE_URL ?? '').replace(/\/+$/, ''),
   cryptoCreditPackEnabled: parseBoolean(process.env.CRYPTO_CREDIT_PACK_ENABLED, true),
   rateLimitCryptoCreditPackPerDay: Number(process.env.RATE_LIMIT_CRYPTO_CREDIT_PACK_PER_DAY ?? 10),
 };

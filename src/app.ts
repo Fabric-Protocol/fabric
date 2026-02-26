@@ -115,7 +115,7 @@ function isAllowedCheckoutRedirectUrl(url: string): boolean {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return false;
     const allowlist = config.checkoutRedirectAllowlist;
-    if (allowlist.length === 0) return true;
+    if (allowlist.length === 0) return false;
     return allowlist.some((allowed) => parsed.hostname === allowed || parsed.hostname.endsWith(`.${allowed}`));
   } catch {
     return false;
@@ -1261,9 +1261,9 @@ function parseStripeSignature(sigHeader: string) {
 }
 
 function timingSafeHexEqual(aHex: string, bHex: string) {
-  const a = Buffer.from(aHex, 'hex');
-  const b = Buffer.from(bHex, 'hex');
-  if (a.length !== b.length) return false;
+  const key = crypto.randomBytes(32);
+  const a = crypto.createHmac('sha256', key).update(aHex).digest();
+  const b = crypto.createHmac('sha256', key).update(bHex).digest();
   return crypto.timingSafeEqual(a, b);
 }
 
@@ -1316,6 +1316,12 @@ export function buildApp() {
       app.log.warn(
         { check_point: 'startup', scope: 'redirect_allowlist', env_var: 'CHECKOUT_REDIRECT_ALLOWLIST' },
         'CHECKOUT_REDIRECT_ALLOWLIST is empty; any HTTPS URL will be accepted as a checkout redirect -- set this in production',
+      );
+    }
+    if (!config.baseUrl) {
+      app.log.warn(
+        { check_point: 'startup', scope: 'base_url', env_var: 'BASE_URL' },
+        'BASE_URL is not set; IPN callback URLs will be derived from request headers (X-Forwarded-Host) which is insecure -- set BASE_URL in production',
       );
     }
   }
@@ -1477,7 +1483,7 @@ export function buildApp() {
 
   app.post('/v1/bootstrap', async (req, reply) => {
     const schema = z.object({
-      display_name: z.string().min(1).max(200),
+      display_name: z.string().min(1).max(128),
       email: z.string().nullable(),
       referral_code: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
@@ -1544,7 +1550,7 @@ export function buildApp() {
   app.get('/v1/me', async (req) => fabricService.me((req as AuthedRequest).nodeId!));
   app.patch('/v1/me', async (req, reply) => {
     const parsed = z.object({
-      display_name: z.string().min(1).max(200).nullable().optional(),
+      display_name: z.string().min(1).max(128).nullable().optional(),
       email: z.string().nullable().optional(),
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
@@ -1794,7 +1800,9 @@ export function buildApp() {
       priceCurrency: 'usd',
       payCurrency: parsed.data.pay_currency,
       orderId,
-      ipnCallbackUrl: absoluteUrl(req, '/v1/webhooks/nowpayments'),
+      ipnCallbackUrl: config.baseUrl
+        ? `${config.baseUrl}/v1/webhooks/nowpayments`
+        : absoluteUrl(req, '/v1/webhooks/nowpayments'),
     });
     if ('ok' in result && result.ok === false) {
       req.log.warn({ reason: result.code, status: result.status }, 'NOWPayments create payment failed');
@@ -2323,8 +2331,9 @@ export function buildApp() {
         } else {
           return reply.status(400).send(errorEnvelope('validation_error', 'Invalid webhook payload'));
         }
-        if (!nowPayments.verifyIpnSignature(body, sig)) {
-          webhookApp.log.warn({ reason: 'signature_mismatch', payment_id: body.payment_id ?? null }, 'NOWPayments IPN signature mismatch');
+        const sigResult = nowPayments.verifyIpnSignature(body, sig);
+        if (sigResult.valid === false) {
+          webhookApp.log.warn({ reason: sigResult.reason, payment_id: body.payment_id ?? null }, 'NOWPayments IPN signature verification failed');
           return reply.status(400).send(errorEnvelope('nowpayments_signature_invalid', 'IPN signature verification failed'));
         }
         const paymentId = Number(body.payment_id);
@@ -2340,54 +2349,82 @@ export function buildApp() {
           webhookApp.log.warn({ payment_id: paymentId, order_id: orderId }, 'NOWPayments IPN for unknown payment');
           return { ok: true };
         }
+        if (existing.status === 'finished') {
+          webhookApp.log.info({ payment_id: paymentId, node_id: existing.node_id, reason: 'already_finished' }, 'NOWPayments IPN skipped — payment already finished');
+          return { ok: true };
+        }
+
         const CRYPTO_PAYMENT_TOLERANCE = 0.02;
-        const effectiveStatus = (paymentStatus === 'partially_paid'
+        const CREDIT_GRANTING_STATUSES = new Set(['finished', 'confirmed']);
+        const NON_TERMINAL_STATUSES = new Set(['waiting', 'confirming', 'sending']);
+        const TERMINAL_FAILURE_STATUSES = new Set(['expired', 'failed', 'refunded']);
+
+        let effectiveStatus = paymentStatus;
+        if (paymentStatus === 'partially_paid'
           && actuallyPaid != null
           && existing.pay_amount != null
-          && actuallyPaid >= existing.pay_amount * (1 - CRYPTO_PAYMENT_TOLERANCE))
-          ? 'finished'
-          : paymentStatus;
-        await repo.markCryptoPaymentStatus(paymentId, effectiveStatus, actuallyPaid);
-        if (effectiveStatus !== paymentStatus) {
+          && Number(existing.pay_amount) > 0
+          && actuallyPaid >= Number(existing.pay_amount) * (1 - CRYPTO_PAYMENT_TOLERANCE)) {
+          effectiveStatus = 'finished';
           webhookApp.log.info(
             { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, tolerance: CRYPTO_PAYMENT_TOLERANCE },
             'Crypto payment promoted from partially_paid to finished (within tolerance)',
           );
         }
-        if (effectiveStatus === 'finished' || effectiveStatus === 'partially_paid') {
-          const grantCredits = effectiveStatus === 'finished' ? existing.credits : 0;
-          if (grantCredits > 0) {
-            const idempotencyKey = `crypto_credit_pack:${paymentId}`;
-            const inserted = await repo.addCreditIdempotent(
-              existing.node_id,
-              'topup_purchase',
-              grantCredits,
-              {
-                pack_code: existing.pack_code,
-                payment_method: 'crypto',
-                nowpayments_id: paymentId,
-                order_id: orderId,
-                pay_currency: existing.pay_currency,
-              },
-              idempotencyKey,
-            );
-            webhookApp.log.info(
-              { payment_id: paymentId, node_id: existing.node_id, credits: grantCredits, inserted, pack_code: existing.pack_code },
-              inserted ? 'Crypto credit pack credits granted' : 'Crypto credit pack idempotent replay',
-            );
-            if (inserted) {
-              await repo.awardReferralFirstPaid(existing.node_id, 100, `crypto_credit_pack:${paymentId}`, config.referralMaxGrantsPerReferrer, {
-                invoice_id: null,
-                stripe_subscription_id: null,
-              });
-            }
+
+        await repo.markCryptoPaymentStatus(paymentId, effectiveStatus, actuallyPaid);
+
+        if (CREDIT_GRANTING_STATUSES.has(effectiveStatus)) {
+          const idempotencyKey = `crypto_credit_pack:${paymentId}`;
+          const inserted = await repo.addCreditIdempotent(
+            existing.node_id,
+            'topup_purchase',
+            existing.credits,
+            {
+              pack_code: existing.pack_code,
+              payment_method: 'crypto',
+              nowpayments_id: paymentId,
+              order_id: orderId,
+              pay_currency: existing.pay_currency,
+            },
+            idempotencyKey,
+          );
+          webhookApp.log.info(
+            { payment_id: paymentId, node_id: existing.node_id, credits: existing.credits, inserted, pack_code: existing.pack_code, effective_status: effectiveStatus },
+            inserted ? 'Crypto credit pack credits granted' : 'Crypto credit pack idempotent replay',
+          );
+          if (inserted) {
+            await repo.awardReferralFirstPaid(existing.node_id, 100, `crypto_credit_pack:${paymentId}`, config.referralMaxGrantsPerReferrer, {
+              invoice_id: null,
+              stripe_subscription_id: null,
+            });
           }
-          if (actuallyPaid != null && existing.pay_amount != null && actuallyPaid > existing.pay_amount * 1.10) {
+          if (actuallyPaid != null && existing.pay_amount != null && actuallyPaid > Number(existing.pay_amount) * 1.10) {
             webhookApp.log.warn(
-              { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, overpayment_ratio: actuallyPaid / existing.pay_amount },
+              { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, overpayment_ratio: actuallyPaid / Number(existing.pay_amount) },
               'Crypto payment significant overpayment (>10%) — may require manual refund via NOWPayments dashboard',
             );
           }
+        } else if (paymentStatus === 'partially_paid') {
+          webhookApp.log.warn(
+            { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount },
+            'Crypto payment partially paid (below tolerance) — no credits granted',
+          );
+        } else if (TERMINAL_FAILURE_STATUSES.has(paymentStatus)) {
+          webhookApp.log.info(
+            { payment_id: paymentId, node_id: existing.node_id, payment_status: paymentStatus },
+            'Crypto payment reached terminal failure status',
+          );
+        } else if (NON_TERMINAL_STATUSES.has(paymentStatus)) {
+          webhookApp.log.info(
+            { payment_id: paymentId, node_id: existing.node_id, payment_status: paymentStatus },
+            'Crypto payment status update (non-terminal)',
+          );
+        } else {
+          webhookApp.log.warn(
+            { payment_id: paymentId, node_id: existing.node_id, payment_status: paymentStatus },
+            'Crypto payment unknown status received',
+          );
         }
         return { ok: true };
       } catch (err) {
@@ -2412,11 +2449,14 @@ export function buildApp() {
       active_base_url: activeBaseHost(req),
     };
   });
-  app.get('/internal/admin/daily-metrics', async () => fabricService.adminDailyMetrics());
+  app.get('/internal/admin/daily-metrics', async () => {
+    app.log.info({ audit: true, action: 'admin.daily_metrics' }, 'Admin daily metrics requested');
+    return fabricService.adminDailyMetrics();
+  });
 
   app.post('/internal/admin/health-pulse', async (req) => {
     const pulse = await fabricService.adminHealthPulse();
-    app.log.info({ digest: 'health_pulse', pulse }, 'Health pulse check');
+    app.log.info({ audit: true, action: 'admin.health_pulse', digest: 'health_pulse', status: pulse.status }, 'Health pulse check');
 
     if (pulse.status === 'degraded') {
       const alertLines = [
@@ -2432,11 +2472,11 @@ export function buildApp() {
       ];
       const text = alertLines.join('\n');
       const slackText = `:warning: *Fabric Health Alert*\n${pulse.alerts.map(a => `• ${a}`).join('\n')}`;
-      const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
-      await Promise.all([
-        sendEmail({ to: digestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text }),
-        sendSlack(slackText),
-      ]);
+      const promises: Promise<unknown>[] = [sendSlack(slackText)];
+      if (config.opsDigestEmail) {
+        promises.push(sendEmail({ to: config.opsDigestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text }));
+      }
+      await Promise.all(promises);
     }
 
     return pulse;
@@ -2470,7 +2510,7 @@ export function buildApp() {
       `  Recovery lockouts: ${metrics.abuse.recovery_attempts_exceeded}`,
     ];
     const text = lines.join('\n');
-    app.log.info({ digest: 'daily_metrics', metrics }, 'Daily metrics digest');
+    app.log.info({ audit: true, action: 'admin.daily_digest', digest: 'daily_metrics', metrics }, 'Daily metrics digest');
 
     const m = metrics;
     const slackText = [
@@ -2483,11 +2523,11 @@ export function buildApp() {
         : null,
     ].filter(Boolean).join('\n');
 
-    const digestEmail = (req.query as any).email || 'mapmoiras@gmail.com';
-    const [emailResult, slackResult] = await Promise.all([
-      sendEmail({ to: digestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text }),
-      sendSlack(slackText),
-    ]);
+    const slackResult = await sendSlack(slackText);
+    let emailResult: { ok: boolean; provider: string; reason?: string | null } = { ok: false, provider: 'none', reason: 'ops_digest_email_not_configured' };
+    if (config.opsDigestEmail) {
+      emailResult = await sendEmail({ to: config.opsDigestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text });
+    }
 
     return {
       ok: true,
@@ -2498,7 +2538,7 @@ export function buildApp() {
   });
 
   app.post('/v1/admin/credits/adjust', async (req, reply) => {
-    const parsed = z.object({ node_id: z.string(), delta: z.number(), reason: z.string() }).safeParse(req.body);
+    const parsed = z.object({ node_id: z.string(), delta: z.number().int().min(-1_000_000).max(1_000_000), reason: z.string().min(1).max(500) }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     await repo.addCredit(parsed.data.node_id, 'adjustment_manual', parsed.data.delta, { reason: parsed.data.reason });
     app.log.info({ audit: true, action: 'admin.credits_adjust', node_id: parsed.data.node_id, delta: parsed.data.delta, reason: parsed.data.reason }, 'Admin credit adjustment');
