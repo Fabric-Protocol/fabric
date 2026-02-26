@@ -443,9 +443,17 @@ export async function revokeKey(nodeId: string, keyId: string) {
 
 export async function listLedger(nodeId: string, limit: number, cursor: string | null) {
   if (cursor) {
-    return query<any>('select id,node_id,type,amount,created_at,meta from credit_ledger where node_id=$1 and created_at < $3::timestamptz order by created_at desc limit $2', [nodeId, limit, cursor]);
+    const sep = cursor.indexOf('|');
+    const cursorTs = cursor.slice(0, sep);
+    const cursorId = cursor.slice(sep + 1);
+    return query<any>(
+      `select id,node_id,type,amount,created_at,meta from credit_ledger
+       where node_id=$1 and (created_at, id) < ($3::timestamptz, $4::uuid)
+       order by created_at desc, id desc limit $2`,
+      [nodeId, limit, cursorTs, cursorId],
+    );
   }
-  return query<any>('select id,node_id,type,amount,created_at,meta from credit_ledger where node_id=$1 order by created_at desc limit $2', [nodeId, limit]);
+  return query<any>('select id,node_id,type,amount,created_at,meta from credit_ledger where node_id=$1 order by created_at desc, id desc limit $2', [nodeId, limit]);
 }
 
 function tableFor(kind: 'units' | 'requests') { return kind; }

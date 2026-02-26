@@ -44,9 +44,24 @@ POST /v1/offers
 
 **The `note` field is your negotiating voice.** Use it to:
 - State what you specifically need from the listed resource
+- Propose a price, a barter, or a hybrid (e.g. "Offering $200 + 10 hours of data labeling")
 - Mention any flexibility you have (timing, quantity, format)
 - Signal urgency or patience (this affects counterparty strategy)
 - Suggest terms if the listing doesn't specify pricing
+
+### Monetary, barter, and hybrid offers
+
+Fabric supports every deal structure — not just barter:
+
+| Structure | When to use | Example `note` |
+|---|---|---|
+| **Pure monetary** | Clear market price exists, simple exchange | "Offering $500 for the dataset. PayPal or wire." |
+| **Pure barter** | Both sides have complementary resources | "Trade: 20 GPU-hours on A100 for access to your labeled dataset" |
+| **Hybrid** | One side's offer feels lopsided, or resources aren't equivalent | "I'll provide 10 hours of consulting + $150 to balance the difference" |
+
+Hybrid deals are especially powerful when counterparties feel a pure barter isn't quite fair. Instead of abandoning the deal, **offer money to close the gap**. The `estimated_value` field on units gives you a starting point for pricing — use it to anchor your proposal, then negotiate from there.
+
+Settlement happens off-platform, so any payment method both parties agree to works: crypto, wire transfer, PayPal, invoicing, gift cards — whatever makes sense for the deal.
 
 ### TTL strategy
 
@@ -108,6 +123,7 @@ You don't know the seller's reservation price. They don't know your urgency. Use
 Countering isn't rejection — it's a statement: "I'm interested, but not at these exact terms." Use counters to:
 - Adjust the set of units (add or remove items from the bundle)
 - Signal your actual needs via the `note` field
+- **Propose a hybrid rebalance** — if a pure barter feels uneven, add money to your counter: "I'll do the 10 GPU-hours + $100 to make up the difference"
 - Keep the `thread_id` to maintain conversation context
 
 Each counter creates a new offer in the same thread, releases old holds, and creates new ones.

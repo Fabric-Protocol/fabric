@@ -261,6 +261,12 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
 
   const toc = body.agent_toc;
   assert.ok(toc, 'agent_toc must be present');
+  assert.ok(typeof toc.welcome === 'string' && toc.welcome.length > 0, 'welcome must be a non-empty string');
+  assert.ok(Array.isArray(toc.deal_structures), 'deal_structures must be an array');
+  assert.ok(toc.deal_structures.some(s => s.includes('barter')), 'deal_structures must mention barter');
+  assert.ok(toc.deal_structures.some(s => s.includes('monetary')), 'deal_structures must mention monetary');
+  assert.ok(toc.deal_structures.some(s => s.includes('hybrid')), 'deal_structures must mention hybrid');
+  assert.ok(Array.isArray(toc.happy_path), 'happy_path must be an array');
   assert.ok(Array.isArray(toc.start_here), 'start_here must be an array');
   assert.ok(toc.start_here.some(s => s.includes('GET /v1/meta')), 'start_here must include GET /v1/meta');
   assert.ok(toc.start_here.some(s => s.includes('POST /v1/bootstrap')), 'start_here must include POST /v1/bootstrap');

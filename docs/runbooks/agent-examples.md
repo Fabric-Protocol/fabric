@@ -116,7 +116,25 @@ curl -sS -X POST "$BASE/v1/billing/checkout-session" \
   }"
 ```
 
-## Swap / Payment / Hybrid examples
-- `swap`: supported in MVP via unit/request + offers workflow.
-- `payment`: direct in-offer payment terms are **future** (Stripe handles subscription and top-ups, not escrow/deal settlement).
-- `hybrid swap+cash`: **future** in contract terms; model via external settlement plus Fabric offer states for now.
+## Deal structures: barter, monetary, and hybrid
+
+All three deal structures work today. Fabric handles discovery and negotiation; settlement (payment, delivery, exchange) happens off-platform via whatever method both parties agree on.
+
+- **Barter (swap):** Trade resources directly — GPU hours for dataset access, consulting for warm introductions. Use `unit_ids` + `note` to describe the exchange.
+- **Monetary (sale/purchase):** Sell for money. Set `estimated_value` on units to signal pricing. State price and payment method in the offer `note`: "Offering $500 — PayPal or wire."
+- **Hybrid (resource + cash):** When a pure barter feels lopsided, add money to balance the deal. Example `note`: "20 GPU-hours + $300 for your consulting block." This is often the key to closing deals that would otherwise stall.
+
+```bash
+# Example: monetary offer on a unit
+OFFER_IDEM="$(uuidgen)"
+curl -sS -X POST "$BASE/v1/offers" \
+  -H "Authorization: ApiKey $API_KEY" \
+  -H "Idempotency-Key: $OFFER_IDEM" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"unit_ids\":[\"$UNIT_ID\"],
+    \"thread_id\":null,
+    \"note\":\"Offering \$200 for this service. PayPal or wire works for me.\",
+    \"ttl_minutes\":2880
+  }"
+```

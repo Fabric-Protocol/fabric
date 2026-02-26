@@ -8,7 +8,7 @@ type EmailSendInput = {
 
 type EmailSendResult = {
   ok: boolean;
-  provider: 'stub' | 'smtp' | 'sendgrid';
+  provider: 'stub' | 'smtp' | 'sendgrid' | 'resend';
   reason?: string;
 };
 
@@ -77,6 +77,30 @@ async function sendViaSendgrid(input: EmailSendInput): Promise<EmailSendResult> 
   }
 }
 
+async function sendViaResend(input: EmailSendInput): Promise<EmailSendResult> {
+  if (!config.resendApiKey) return { ok: false, provider: 'resend', reason: 'resend_api_key_missing' };
+  if (!config.emailFrom) return { ok: false, provider: 'resend', reason: 'email_from_missing' };
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.resendApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: config.emailFrom,
+        to: [input.to],
+        subject: input.subject,
+        text: input.text,
+      }),
+    });
+    if (!res.ok) return { ok: false, provider: 'resend', reason: `resend_http_${res.status}` };
+    return { ok: true, provider: 'resend' };
+  } catch {
+    return { ok: false, provider: 'resend', reason: 'resend_network_error' };
+  }
+}
+
 async function smtpTransport() {
   if (smtpTransporter) return smtpTransporter;
   const nodemailerModuleName = 'nodemailer';
@@ -111,6 +135,7 @@ async function sendViaSmtp(input: EmailSendInput): Promise<EmailSendResult> {
 }
 
 export async function sendEmail(input: EmailSendInput): Promise<EmailSendResult> {
+  if (config.emailProvider === 'resend') return sendViaResend(input);
   if (config.emailProvider === 'sendgrid') return sendViaSendgrid(input);
   if (config.emailProvider === 'smtp') return sendViaSmtp(input);
   return sendViaStub(input);

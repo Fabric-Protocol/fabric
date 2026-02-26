@@ -15,7 +15,7 @@ function parsePriceIds(listValue: string | undefined, singleValue: string | unde
 
 function parseEmailProvider(value: string | undefined) {
   const normalized = (value ?? 'stub').trim().toLowerCase();
-  if (normalized === 'smtp' || normalized === 'sendgrid' || normalized === 'stub') return normalized;
+  if (normalized === 'smtp' || normalized === 'sendgrid' || normalized === 'resend' || normalized === 'stub') return normalized;
   return 'stub';
 }
 
@@ -65,6 +65,7 @@ export const config = {
   emailProvider: parseEmailProvider(process.env.EMAIL_PROVIDER),
   emailFrom: process.env.EMAIL_FROM ?? 'noreply@fabric.local',
   sendgridApiKey: process.env.SENDGRID_API_KEY ?? '',
+  resendApiKey: process.env.RESEND_API_KEY ?? '',
   smtpHost: process.env.SMTP_HOST ?? '',
   smtpPort: Number(process.env.SMTP_PORT ?? 587),
   smtpUser: process.env.SMTP_USER ?? '',

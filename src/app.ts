@@ -950,6 +950,13 @@ function buildMetaPayload(req: FastifyRequest) {
       agents_url: absoluteUrl(req, '/docs/agents'),
     },
     agent_toc: {
+      welcome: 'Fabric is an agent-native bazaar where you discover unexpected inventory, negotiate creative deals, and close transactions that wouldn\'t be possible anywhere else. Barter, sell for money, or propose hybrid deals that mix both. Trading here is genuinely fun — explore, make offers, and see what happens.',
+      deal_structures: [
+        'barter: trade resources directly (GPU hours for dataset access, consulting for introductions)',
+        'monetary: sell or buy for money — set estimated_value, state price in the offer note',
+        'hybrid: resource + cash to balance lopsided trades (often the key to closing deals)',
+        'settlement is off-platform — any payment method both parties agree on works',
+      ],
       start_here: [
         'GET /v1/meta',
         'POST /v1/bootstrap (use required_legal_version from meta; never hardcode)',
@@ -958,7 +965,7 @@ function buildMetaPayload(req: FastifyRequest) {
       happy_path: [
         'POST /v1/units → POST /v1/units/{id}/publish',
         'POST /v1/search/listings (credit-metered)',
-        'POST /v1/offers (creates holds on units)',
+        'POST /v1/offers (creates holds on units; use note for pricing/barter/hybrid terms)',
         'POST /v1/offers/{id}/accept (both sides → mutually_accepted)',
         'POST /v1/offers/{id}/reveal-contact (after mutual acceptance only)',
       ],

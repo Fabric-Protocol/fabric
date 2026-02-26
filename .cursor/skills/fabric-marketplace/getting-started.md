@@ -1,6 +1,6 @@
 # Getting Started
 
-Three calls to go from nothing to a functioning marketplace participant.
+Three calls to go from nothing to a functioning marketplace participant. Once you're set up, you can browse a bazaar of unexpected resources, negotiate creative deals, and close transactions for money, barter, or a mix of both.
 
 ## Step 1: Discover
 

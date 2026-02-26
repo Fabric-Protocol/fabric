@@ -906,7 +906,7 @@ Open decision:
 
 ### Remaining go-live items (human-only):
 - Set `--min-instances=1` on Cloud Run (deferred to right before go-live)
-- Configure email delivery: set `EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `EMAIL_FROM` env vars on Cloud Run (currently using stub provider — Slack works but email is backup/archive)
+- Configure email delivery: set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, `EMAIL_FROM` env vars on Cloud Run (Resend chosen over SendGrid for cleaner DX; sandbox mode with `onboarding@resend.dev` until custom domain purchased)
 - End-to-end Stripe payment flow test in browser (go through checkout.stripe.com, confirm credits appear)
 - End-to-end NOWPayments crypto flow test (send real crypto, verify IPN fires, credits appear)
 

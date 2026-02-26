@@ -132,6 +132,58 @@ The specialist might not even be on Fabric yet — but publishing a **request** 
 
 **Why this is interesting:** This is a perishable asset — it's worthless after Wednesday 4pm. Short TTL on the listing makes sense. Someone running a last-minute meeting would pay a premium for this. Traditional marketplaces don't handle one-off, time-bounded space sharing well. Fabric does.
 
+## Scenario: Straight sale with price negotiation
+
+**Situation:** A data company has a premium, cleaned dataset that took 6 months to build. They want money, not a barter.
+
+**Listing:**
+```json
+{
+  "title": "Curated e-commerce product taxonomy — 500K SKUs, multi-language",
+  "type": "access",
+  "estimated_value": 2500,
+  "quantity": 1,
+  "measure": "EA",
+  "scope_primary": "digital_delivery",
+  "delivery_format": "bulk_download",
+  "category_ids": [9],
+  "public_summary": "500K product records with hierarchical taxonomy in 12 languages. CSV + JSON. Licensed for commercial use."
+}
+```
+
+**Buyer's opening offer:**
+```
+note: "Interested. Would you do $1,800? We can pay via wire transfer within 48 hours."
+```
+
+**Seller counters:**
+```
+note: "Meet in the middle at $2,100 and you have a deal. Wire or crypto both work."
+```
+
+**Buyer accepts.** Contact reveal. Wire transfer happens off-platform.
+
+**Why this works:** Not every trade needs to be a barter. Setting `estimated_value` signals your price expectation upfront and saves negotiation rounds. Fabric handles the discovery, negotiation, and trust mechanics — the payment itself is peer-to-peer.
+
+## Scenario: Hybrid deal — barter plus cash to close the gap
+
+**Situation:** A marketing agency needs 50 hours of video editing. A freelance editor wants both exposure (a case study) and cash — the case study alone isn't enough.
+
+**Negotiation:**
+```
+Agency offers: "We'll feature your work as a published case study on our site (10K monthly visitors)
+  + a backlink to your portfolio. Happy to discuss additional terms."
+
+Editor counters: "Love the case study idea, but 50 hours is significant.
+  Could you add $600 to balance it out? That would make it work."
+
+Agency counters: "Case study + backlink + $400. Final offer."
+
+Editor accepts.
+```
+
+**Why hybrids are powerful:** Pure barter sometimes feels lopsided. Rather than abandoning a deal both sides want, adding money closes the value gap. The `note` field handles all of this — just state terms clearly and negotiate in good faith.
+
 ## Scenario: Cross-category creative bundle
 
 **Situation:** An indie game studio needs: 3D asset creation + QA testing + a Steam key for a reference game + GPU time for rendering.
@@ -151,6 +203,8 @@ When deciding what to list or search for, consider:
 - **What do you have that's sitting idle?** Unused compute, empty time slots, excess inventory, dormant accounts, unused licenses.
 - **What do you need that you can't easily buy?** Warm introductions, niche expertise, specific physical items, time-bounded access, verification of something.
 - **What would you trade for if money weren't the medium?** Skill-for-skill, access-for-access, capacity-for-capacity.
+- **What would you just buy outright?** Sometimes money is the simplest deal structure. Set `estimated_value` and state your price in the `note`. Done.
+- **What's almost a fair trade but not quite?** That's a hybrid deal waiting to happen. Add cash to balance it.
 - **What's perishable?** Time slots, event tickets, seasonal inventory — these have urgency that creates negotiating opportunities.
 - **What's weirdly specific?** The more specific your listing, the more valuable it is to the right counterparty. "GPU hours" is generic. "A100 hourly, PyTorch pre-installed, US-West, immediate SSH" is a magnet for the right buyer.
 

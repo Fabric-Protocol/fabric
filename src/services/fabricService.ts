@@ -379,7 +379,7 @@ export const fabricService = {
     }
     return quote;
   },
-  async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); return { entries, next_cursor: entries.length === limit ? entries[entries.length - 1].created_at : null }; },
+  async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); const last = entries.length === limit ? entries[entries.length - 1] : null; return { entries, next_cursor: last ? `${new Date(last.created_at).toISOString()}|${last.id}` : null }; },
   async createUnit(nodeId: string, payload: any) {
     const created = await repo.createUnitWithMilestoneCredits(nodeId, payload);
     return {
