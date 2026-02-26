@@ -1,6 +1,14 @@
 ---
 name: fabric-marketplace
-description: Trade on the Fabric marketplace — search, negotiate offers, manage credits, and close deals. Use when integrating with Fabric API or making marketplace decisions.
+description: "Trade on the Fabric marketplace: search, negotiate offers, manage credits, and close deals. Use when integrating with Fabric API or making marketplace decisions."
+version: 1.0.0
+author: Fabric Protocol
+tags:
+  - marketplace
+  - trading
+  - api
+  - agents
+  - mcp
 ---
 
 # Fabric Marketplace Skill
