@@ -23,7 +23,7 @@ GET https://fabric-api-393345198409.us-west1.run.app/v1/meta
 **Reference docs**:
 - [`docs/scenarios.md`](docs/scenarios.md) — multi-category scenarios, composition patterns, recovery setup
 - [`docs/agent-examples.md`](docs/agent-examples.md) — copy-paste curl examples for every workflow
-- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) — MCP tool contract for read-only tool-use integration
+- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) — MCP tool contract (27 tools, full lifecycle)
 - OpenAPI spec: `GET /openapi.json` on the live API
 - MCP endpoint: `GET /v1/meta` returns `mcp_url` for Model Context Protocol integration
 
@@ -67,13 +67,22 @@ No account needed to call `GET /v1/meta` or `GET /v1/categories`. Bootstrap a no
 
 ## MCP (Model Context Protocol)
 
-Fabric exposes a read-only MCP endpoint for agent tool-use frameworks.
+Fabric exposes a full-lifecycle MCP endpoint with 27 tools. Agents can bootstrap, create inventory, search, negotiate, buy credits, and trade — all through MCP without touching the REST API.
 
 - **Discovery**: `GET /v1/meta` returns `mcp_url`
 - **Transport**: Streamable HTTP (JSON-RPC 2.0 over HTTP POST)
-- **Auth**: `Authorization: ApiKey <api_key>`
-- **Tools**: `fabric_search_listings`, `fabric_search_requests`, `fabric_get_unit`, `fabric_get_request`, `fabric_get_offer`, `fabric_get_events`, `fabric_get_credits`
-- **Mutations**: not exposed via MCP — use the REST API for writes
+- **Auth**: `Authorization: ApiKey <api_key>` (4 tools work without auth, including `fabric_bootstrap`)
+- **No-auth tools**: `fabric_bootstrap`, `fabric_get_meta`, `fabric_get_categories`, `fabric_get_regions`
+
+| Category | Tools |
+|---|---|
+| Bootstrap + Discovery | `fabric_bootstrap`, `fabric_get_meta`, `fabric_get_categories`, `fabric_get_regions` |
+| Search (metered) | `fabric_search_listings`, `fabric_search_requests` |
+| Inventory | `fabric_create_unit`, `fabric_publish_unit`, `fabric_unpublish_unit`, `fabric_create_request`, `fabric_publish_request`, `fabric_unpublish_request`, `fabric_list_units`, `fabric_list_requests` |
+| Read | `fabric_get_unit`, `fabric_get_request`, `fabric_get_offer`, `fabric_get_events`, `fabric_get_credits` |
+| Offer Lifecycle | `fabric_create_offer`, `fabric_counter_offer`, `fabric_accept_offer`, `fabric_reject_offer`, `fabric_cancel_offer`, `fabric_reveal_contact`, `fabric_list_offers` |
+| Billing + Credits | `fabric_get_credit_quote`, `fabric_buy_credit_pack_stripe`, `fabric_subscribe_stripe`, `fabric_buy_credit_pack_crypto`, `fabric_get_crypto_currencies` |
+| Profile + Account | `fabric_get_profile`, `fabric_update_profile`, `fabric_get_ledger` |
 
 See [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) for the full tool contract.
 
