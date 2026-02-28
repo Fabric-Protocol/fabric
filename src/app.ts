@@ -808,6 +808,37 @@ function idempotencyRoutePath(req: FastifyRequest) {
   return routePath(req.url);
 }
 
+function sortForStableJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => sortForStableJson(item));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      const nested = (value as Record<string, unknown>)[key];
+      if (nested !== undefined) out[key] = sortForStableJson(nested);
+    }
+    return out;
+  }
+  return value;
+}
+
+function idempotencyPayloadForHash(req: FastifyRequest, idemPath: string): unknown {
+  const body = req.body ?? {};
+  if (req.method !== 'POST' || idemPath !== '/v1/offers') return body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
+
+  // Treat omitted thread_id the same as explicit null for create-offer retries.
+  const normalized: Record<string, unknown> = { ...(body as Record<string, unknown>) };
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'thread_id')) normalized.thread_id = null;
+  return sortForStableJson(normalized);
+}
+
+function idempotencyRequestHash(req: FastifyRequest, idemPath: string) {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(idempotencyPayloadForHash(req, idemPath)))
+    .digest('hex');
+}
+
 function isPublicRoute(path: string) {
   return path === '/v1/bootstrap'
     || path === '/v1/recovery/start'
@@ -1400,8 +1431,8 @@ export function buildApp() {
     if (!nonGet.has(req.method) || path === '/v1/webhooks/stripe' || path === '/v1/webhooks/nowpayments' || isNoIdemWriteRoute(req)) return;
     const idemKey = req.headers['idempotency-key'];
     if (!idemKey) return reply.status(422).send(errorEnvelope('validation_error', 'Idempotency-Key required'));
-    const hash = crypto.createHash('sha256').update(JSON.stringify(req.body ?? {})).digest('hex');
     const idemPath = idempotencyRoutePath(req);
+    const hash = idempotencyRequestHash(req, idemPath);
 
     if (isAnonIdempotentRoute(req.url)) {
       const keyScope = `${req.method}:${idemPath}:${String(idemKey)}`;
@@ -2111,7 +2142,7 @@ export function buildApp() {
     return out;
   });
   app.post('/v1/offers', async (req, reply) => {
-    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable(), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
+    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable().optional(), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, OFFER_TTL_MINUTES_MIN, OFFER_TTL_MINUTES_MAX)) {
       return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {

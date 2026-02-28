@@ -815,7 +815,7 @@ export const openApiDocument = {
           note: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
-        required: ['unit_ids', 'thread_id', 'note'],
+        required: ['unit_ids', 'note'],
       },
       OfferCounterRequest: {
         type: 'object',

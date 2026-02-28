@@ -1287,6 +1287,29 @@ test('search works with credits only (no subscriber gate) and offer progression 
   await app.close();
 });
 
+test('POST /v1/offers accepts omitted thread_id and generates one', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-omit-thread-seller');
+  const buyerBoot = await bootstrap(app, 'boot-offer-omit-thread-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer omit thread unit', 'offer-omit-thread-scope'));
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-omit-thread-create' },
+    payload: { unit_ids: [unit.id], note: null },
+  });
+
+  assert.equal(created.statusCode, 200);
+  const offer = created.json().offer;
+  assert.ok(typeof offer.thread_id === 'string' && offer.thread_id.length > 0, 'thread_id should be generated');
+  assert.match(offer.thread_id, /^[0-9a-f-]{36}$/i, 'thread_id should be a UUID');
+
+  await app.close();
+});
+
 test('offer actions stay blocked for suspended nodes even without subscriber gating', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-suspended-seller');
@@ -2119,6 +2142,15 @@ test('buyer offer create cannot lock seller inventory; seller-side accept locks;
   });
   assert.equal(replay.statusCode, 200);
   assert.equal(replay.json().offer.id, createdOffer.id);
+
+  const replayOmittedThreadId = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'hold-offer-create' },
+    payload: { unit_ids: [unit.id], note: null },
+  });
+  assert.equal(replayOmittedThreadId.statusCode, 200);
+  assert.equal(replayOmittedThreadId.json().offer.id, createdOffer.id);
 
   const idemConflict = await app.inject({
     method: 'POST',
