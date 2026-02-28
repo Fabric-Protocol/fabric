@@ -9,7 +9,7 @@ type JsonRpcRequest = {
   params?: any;
 };
 
-const SERVER_NAME = 'fabric-api-readonly-mcp';
+const SERVER_NAME = 'fabric-api-mcp-stdio';
 const SERVER_VERSION = '0.1.0';
 const DEFAULT_TIMEOUT_MS = 15_000;
 

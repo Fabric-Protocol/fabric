@@ -13,7 +13,7 @@
     "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",
     "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1",
     "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js",
-    "mcp:readonly": "npm run build && node dist/scripts/mcp-readonly-server.js",
+    "mcp:stdio": "npm run build && node dist/scripts/mcp-stdio-server.js",
     "smoke:mcp": "powershell -ExecutionPolicy Bypass -File scripts/smoke-mcp.ps1"
   },
   "dependencies": {

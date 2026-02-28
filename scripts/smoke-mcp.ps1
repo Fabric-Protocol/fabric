@@ -85,18 +85,36 @@ try {
 }
 
 # -----------------------------------------------------------------------
-# Step 3: POST /mcp tools/list - confirm allowlist
+# Step 3: POST /mcp tools/list - confirm MCP tool surface
 # -----------------------------------------------------------------------
 Write-Step "POST $mcpUrl - tools/list"
 $expectedTools = @(
+  "fabric_bootstrap",
+  "fabric_get_meta",
+  "fabric_create_unit",
+  "fabric_update_unit",
+  "fabric_delete_unit",
+  "fabric_create_request",
+  "fabric_update_request",
+  "fabric_delete_request",
   "fabric_search_listings",
   "fabric_search_requests",
+  "fabric_get_node_listings",
+  "fabric_get_node_requests",
+  "fabric_get_nodes_categories_summary",
+  "fabric_create_auth_key",
+  "fabric_list_auth_keys",
+  "fabric_revoke_auth_key",
+  "fabric_get_referral_code",
+  "fabric_get_referral_stats",
+  "fabric_claim_referral",
   "fabric_get_unit",
   "fabric_get_request",
   "fabric_get_offer",
   "fabric_get_events",
   "fabric_get_credits"
 )
+$expectedMinToolCount = 49
 try {
   $listResult = Invoke-McpPost -Url $mcpUrl -Body @{
     jsonrpc = "2.0"
@@ -105,7 +123,7 @@ try {
   } -ApiKey $ApiKey
 
   $toolNames = $listResult.result.tools | ForEach-Object { $_.name }
-  Write-Pass "tools/list returned $($toolNames.Count) tool(s): $($toolNames -join ', ')"
+  Write-Pass "tools/list returned $($toolNames.Count) tool(s)"
 
   foreach ($expected in $expectedTools) {
     if ($toolNames -notcontains $expected) {
@@ -113,8 +131,12 @@ try {
       $failures++
     }
   }
+  if ($toolNames.Count -lt $expectedMinToolCount) {
+    Write-Fail "tools/list returned fewer than expected minimum tool count ($expectedMinToolCount)"
+    $failures++
+  }
   if ($failures -eq 0) {
-    Write-Pass "All 7 expected tools present"
+    Write-Pass "All expected MCP tools present and tool count threshold met"
   }
 } catch {
   Write-Fail "tools/list failed: $_"

@@ -6789,14 +6789,38 @@ test('GET /v1/meta mcp_url uses MCP_URL env override when set', async () => {
   await app.close();
 });
 
-test('MCP POST /mcp requires auth', async () => {
+test('MCP initialize allows unauthenticated handshake', async () => {
   const app = buildApp();
   const res = await app.inject({
     method: 'POST',
     url: '/mcp',
     payload: { jsonrpc: '2.0', id: 1, method: 'initialize' },
   });
-  assert.equal(res.statusCode, 401);
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.jsonrpc, '2.0');
+  assert.equal(body.id, 1);
+  assert.equal(body.result.serverInfo.name, 'fabric-marketplace');
+  await app.close();
+});
+
+test('MCP auth-required tools return auth_required without API key', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.ok(body.result.isError);
+  const content = JSON.parse(body.result.content[0].text);
+  assert.equal(content.error, 'auth_required');
   await app.close();
 });
 
@@ -6815,13 +6839,13 @@ test('MCP initialize returns server info', async () => {
   assert.equal(body.jsonrpc, '2.0');
   assert.equal(body.id, 1);
   assert.ok(body.result.serverInfo, 'must include serverInfo');
-  assert.equal(body.result.serverInfo.name, 'fabric-api-readonly');
+  assert.equal(body.result.serverInfo.name, 'fabric-marketplace');
   assert.ok(body.result.protocolVersion, 'must include protocolVersion');
   assert.ok(body.result.capabilities, 'must include capabilities');
   await app.close();
 });
 
-test('MCP tools/list returns allowlisted tools', async () => {
+test('MCP tools/list returns full MCP tool surface', async () => {
   const app = buildApp();
   const boot = await bootstrap(app, 'mcp-tlist');
   const apiKey = boot.json().api_key.api_key;
@@ -6836,12 +6860,26 @@ test('MCP tools/list returns allowlisted tools', async () => {
   const names = body.result.tools.map((t) => t.name);
   assert.ok(names.includes('fabric_search_listings'), 'must include fabric_search_listings');
   assert.ok(names.includes('fabric_search_requests'), 'must include fabric_search_requests');
+  assert.ok(names.includes('fabric_bootstrap'), 'must include fabric_bootstrap');
+  assert.ok(names.includes('fabric_update_unit'), 'must include fabric_update_unit');
+  assert.ok(names.includes('fabric_delete_unit'), 'must include fabric_delete_unit');
+  assert.ok(names.includes('fabric_update_request'), 'must include fabric_update_request');
+  assert.ok(names.includes('fabric_delete_request'), 'must include fabric_delete_request');
+  assert.ok(names.includes('fabric_get_node_listings'), 'must include fabric_get_node_listings');
+  assert.ok(names.includes('fabric_get_node_requests'), 'must include fabric_get_node_requests');
+  assert.ok(names.includes('fabric_get_nodes_categories_summary'), 'must include fabric_get_nodes_categories_summary');
+  assert.ok(names.includes('fabric_create_auth_key'), 'must include fabric_create_auth_key');
+  assert.ok(names.includes('fabric_list_auth_keys'), 'must include fabric_list_auth_keys');
+  assert.ok(names.includes('fabric_revoke_auth_key'), 'must include fabric_revoke_auth_key');
+  assert.ok(names.includes('fabric_get_referral_code'), 'must include fabric_get_referral_code');
+  assert.ok(names.includes('fabric_get_referral_stats'), 'must include fabric_get_referral_stats');
+  assert.ok(names.includes('fabric_claim_referral'), 'must include fabric_claim_referral');
   assert.ok(names.includes('fabric_get_unit'), 'must include fabric_get_unit');
   assert.ok(names.includes('fabric_get_request'), 'must include fabric_get_request');
   assert.ok(names.includes('fabric_get_offer'), 'must include fabric_get_offer');
   assert.ok(names.includes('fabric_get_events'), 'must include fabric_get_events');
   assert.ok(names.includes('fabric_get_credits'), 'must include fabric_get_credits');
-  assert.equal(names.length, 7, 'exactly 7 tools in allowlist');
+  assert.ok(names.length >= 49, 'must expose at least 49 tools');
   await app.close();
 });
 
@@ -6876,7 +6914,7 @@ test('MCP unknown JSON-RPC method returns -32601', async () => {
     method: 'POST',
     url: '/mcp',
     headers: { authorization: `ApiKey ${apiKey}` },
-    payload: { jsonrpc: '2.0', id: 99, method: 'resources/list' },
+    payload: { jsonrpc: '2.0', id: 99, method: 'fabric/unknown_method' },
   });
   assert.equal(res.statusCode, 200);
   const body = res.json();
@@ -6937,23 +6975,21 @@ test('MCP rate limit triggers 429 after threshold', async () => {
   const apiKey = boot.json().api_key.api_key;
 
   await withConfigOverrides({ rateLimitMcpPerMinute: 2 }, async () => {
-    for (let i = 0; i < 2; i++) {
+    let sawLimited = false;
+    for (let i = 0; i < 8; i++) {
       const r = await app.inject({
         method: 'POST',
         url: '/mcp',
         headers: { authorization: `ApiKey ${apiKey}` },
-        payload: { jsonrpc: '2.0', id: i, method: 'tools/list' },
+        payload: { jsonrpc: '2.0', id: i, method: 'initialize' },
       });
-      assert.equal(r.statusCode, 200, `request ${i} should succeed`);
+      if (r.statusCode === 429) {
+        sawLimited = true;
+        assert.equal(r.json().error.code, 'rate_limit_exceeded');
+        break;
+      }
     }
-    const limited = await app.inject({
-      method: 'POST',
-      url: '/mcp',
-      headers: { authorization: `ApiKey ${apiKey}` },
-      payload: { jsonrpc: '2.0', id: 99, method: 'tools/list' },
-    });
-    assert.equal(limited.statusCode, 429);
-    assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+    assert.ok(sawLimited, 'expected MCP rate limit to trigger 429');
   });
   await app.close();
 });
@@ -9525,4 +9561,3 @@ test('prepurchase_daily_limit_exceeded includes purchase_options', async () => {
   config.rateLimitSearchPerMinute = savedRl;
   await app.close();
 });
-

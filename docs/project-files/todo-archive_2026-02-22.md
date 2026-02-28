@@ -266,7 +266,7 @@ Last updated: 2026-02-22
   - Stripe + credits health
   - liquidity/reliability metrics
   - webhook health (when applicable)
-- [ ] Lightweight MCP server (read-only, pre–go live):
+- [ ] Lightweight MCP server (initial MCP phase, pre-go-live):
   - expose safe read operations only (search, get unit/request, get offer, get events, get credits)
   - no mutations
   - thin wrapper over existing HTTP API (no new business logic)

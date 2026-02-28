@@ -18,7 +18,7 @@ Last updated: 2026-02-24
   - `POST /internal/admin/daily-digest` added: fetches metrics, logs structured digest, sends email if provider configured
   - Cloud Scheduler job `fabric-daily-digest` added to setup script (daily 06:00 UTC)
   - Internal admin POST routes exempted from idempotency (Cloud Scheduler compat)
-- [x] Lightweight MCP server (read-only, pre–go live):
+- [x] Lightweight MCP server (initial MCP phase, pre-go-live):
   - expose safe read operations only (search, get unit/request, get offer, get events, get credits)
   - no mutations
   - thin wrapper over existing HTTP API (no new business logic)
@@ -171,4 +171,3 @@ Low likelihood:
 - Phase 1: /v1/credits/quote, credit packs top-ups, plan-change credit semantics
 - Phase 2: SDKs + MCP + expanded docs + search quote/preview + effort/selectivity split + reputation/routing
 - Phase 3: hardening + admin endpoints + anomaly detection + compliance + compliance metadata + provenance/recourse
-

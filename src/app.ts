@@ -989,7 +989,7 @@ function buildMetaPayload(req: FastifyRequest) {
         'credits_billing_stripe_and_crypto',
         'referral_codes',
         'region_discovery',
-        'mcp_read_only_tools',
+        'mcp_tools',
       ],
       invariants: [
         'idempotency_key_required_on_non_get',
