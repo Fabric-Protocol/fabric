@@ -138,7 +138,7 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 - Search requests include a request-level spend ceiling:
   - `budget.credits_requested` (hard cap)
   - response returns `budget.credits_charged <= credits_requested`
-  - capped executions return 200 with `budget.was_capped=true` and guidance
+  - over-budget executions return `402 budget_cap_exceeded` with guidance and no charge
 
 ### Search privacy + retention (MVP locked)
 - Do **not** store raw search queries by default.
@@ -172,6 +172,8 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 - `POST /v1/offers` supports exactly one target mode per request:
   - Unit-targeted: `unit_ids` required.
   - Request-targeted: `request_id` required, non-empty `note` required, `unit_ids` optional.
+- Self-offers are rejected in all modes.
+- Offer/counter notes must not include direct contact information.
 - Initial request-targeted offers are intent-only and cannot be accepted until a counter-offer exists.
 
 ### Offer status model (locked)
@@ -215,6 +217,7 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 
 - Contact reveal occurs after **mutual acceptance**.
 - Reveal requires caller legal assent and party authorization checks.
+- Reveal is blocked with `409 invalid_state_transition` when the counterparty has no email configured.
 - Contact fields: **email required**, phone optional, `messaging_handles[]` optional (user-provided/unverified).
 - Safety disclaimers shown at publish, offer, and contact reveal.
 

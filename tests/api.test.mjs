@@ -105,6 +105,7 @@ await query(cryptoPaymentsMigrationSql);
 
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
+await query('DELETE FROM rate_limit_counters');
 
 async function bootstrap(
   app,
@@ -1476,6 +1477,70 @@ test('request-targeted offer create validates note, creator-owned unit_ids, and 
   await app.close();
 });
 
+test('offer and counter notes reject direct contact information', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-offer-note-contact-seller');
+  const buyerBoot = await bootstrap(app, 'boot-offer-note-contact-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer note contact unit', 'offer-note-contact-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const createBlocked = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-note-contact-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'Email me at buyer@example.com' },
+  });
+  assert.equal(createBlocked.statusCode, 422);
+  assert.equal(createBlocked.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(createBlocked.json().error.details.field, 'note');
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-note-contact-create-ok' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'Can trade this week.' },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const counterBlocked = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-note-contact-counter' },
+    payload: { unit_ids: [unit.id], note: 'Call me at 555-123-4567' },
+  });
+  assert.equal(counterBlocked.statusCode, 422);
+  assert.equal(counterBlocked.json().error.code, 'content_contact_info_disallowed');
+  assert.equal(counterBlocked.json().error.details.field, 'note');
+  await app.close();
+});
+
+test('unit-target self-offer is rejected with conflict self_offer', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'boot-self-offer-unit');
+  const nodeId = boot.json().node.id;
+  const apiKey = boot.json().api_key.api_key;
+  const unit = await repo.createResource('units', nodeId, unitPayload('Self offer unit', 'self-offer-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', nodeId, unit.id));
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'self-offer-unit' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'Self trade attempt' },
+  });
+  assert.equal(res.statusCode, 409);
+  assert.equal(res.json().error.code, 'conflict');
+  assert.equal(res.json().error.details.reason, 'self_offer');
+  await app.close();
+});
+
 test('offer actions stay blocked for suspended nodes even without subscriber gating', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-suspended-seller');
@@ -1730,12 +1795,12 @@ test('pre-purchase daily offer-accept limit blocks second acceptance until first
   await app.close();
 });
 
-test('offer ttl_minutes defaults/overrides are enforced and hold expiry matches offer expiry', async () => {
+test('offer ttl_minutes defaults/overrides are enforced for unit-target create', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-offer-ttl-seller');
   const buyerBoot = await bootstrap(app, 'boot-offer-ttl-buyer');
   const sellerNodeId = sellerBoot.json().node.id;
-  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
 
   const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer TTL unit', 'offer-ttl-scope'));
   const overrideUnit = await repo.createResource('units', sellerNodeId, unitPayload('Offer TTL override unit', 'offer-ttl-override-scope'));
@@ -1743,31 +1808,33 @@ test('offer ttl_minutes defaults/overrides are enforced and hold expiry matches 
   const defaultOffer = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-default' },
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-ttl-default' },
     payload: { unit_ids: [unit.id], thread_id: null, note: null },
   });
   assert.equal(defaultOffer.statusCode, 200);
   const defaultBody = defaultOffer.json().offer;
   const defaultMinutes = (new Date(defaultBody.expires_at).getTime() - Date.now()) / 60000;
   assert.equal(defaultMinutes >= 2860 && defaultMinutes <= 2890, true);
-  assert.equal(Math.abs(new Date(defaultBody.hold_expires_at).getTime() - new Date(defaultBody.expires_at).getTime()) < 2000, true);
+  assert.equal(defaultBody.hold_status, 'released');
+  assert.equal(defaultBody.hold_expires_at, null);
 
   const overriddenOffer = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-override' },
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-ttl-override' },
     payload: { unit_ids: [overrideUnit.id], thread_id: null, note: null, ttl_minutes: 30 },
   });
   assert.equal(overriddenOffer.statusCode, 200);
   const overriddenBody = overriddenOffer.json().offer;
   const overrideMinutes = (new Date(overriddenBody.expires_at).getTime() - Date.now()) / 60000;
   assert.equal(overrideMinutes >= 27 && overrideMinutes <= 33, true);
-  assert.equal(Math.abs(new Date(overriddenBody.hold_expires_at).getTime() - new Date(overriddenBody.expires_at).getTime()) < 2000, true);
+  assert.equal(overriddenBody.hold_status, 'released');
+  assert.equal(overriddenBody.hold_expires_at, null);
 
   const invalidOffer = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'offer-ttl-invalid' },
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'offer-ttl-invalid' },
     payload: { unit_ids: [unit.id], thread_id: null, note: null, ttl_minutes: 10 },
   });
   assert.equal(invalidOffer.statusCode, 400);
@@ -2772,6 +2839,64 @@ test('reveal-contact returns empty messaging_handles array when none configured'
   });
   assert.equal(reveal.statusCode, 200);
   assert.deepEqual(reveal.json().contact.messaging_handles, []);
+  await app.close();
+});
+
+test('reveal-contact returns 409 when counterparty email is missing', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-reveal-missing-email-seller', {
+    display_name: 'Reveal Missing Email Seller',
+    email: null,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-reveal-missing-email-buyer', {
+    display_name: 'Reveal Missing Email Buyer',
+    email: `reveal.missing.email.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_reveal_missing_email_seller')).statusCode, 200);
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_reveal_missing_email_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Reveal missing email unit', 'reveal-missing-email-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const offer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-missing-email-offer' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(offer.statusCode, 200);
+  const offerId = offer.json().offer.id;
+
+  const sellerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'reveal-missing-email-accept-seller' },
+    payload: {},
+  });
+  assert.equal(sellerAccept.statusCode, 200);
+  const buyerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-missing-email-accept-buyer' },
+    payload: {},
+  });
+  assert.equal(buyerAccept.statusCode, 200);
+
+  const reveal = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reveal-contact`,
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'reveal-missing-email-reveal' },
+    payload: {},
+  });
+  assert.equal(reveal.statusCode, 409);
+  assert.equal(reveal.json().error.code, 'invalid_state_transition');
+  assert.equal(reveal.json().error.details.reason, 'counterparty_email_missing');
   await app.close();
 });
 
@@ -4888,7 +5013,7 @@ test('search accepts deprecated budget.credits_max alias', async () => {
   await app.close();
 });
 
-test('search budget cap exceeded returns 200 with was_capped=true and zero items', async () => {
+test('search budget cap exceeded returns 402 budget_cap_exceeded and does not charge credits', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-search-budget-cap');
   const nodeId = b.json().node.id;
@@ -4910,14 +5035,12 @@ test('search budget cap exceeded returns 200 with was_capped=true and zero items
       cursor: null,
     },
   });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.json().budget.was_capped, true);
-  assert.equal(typeof res.json().budget.cap_reason, 'string');
-  assert.equal(typeof res.json().budget.guidance, 'string');
-  assert.equal(res.json().budget.credits_charged, 0);
-  assert.equal(res.json().budget.breakdown.base_search_cost, config.searchCreditCost);
-  assert.equal(res.json().budget.breakdown.broadening_cost, 0);
-  assert.equal(res.json().items.length, 0);
+  assert.equal(res.statusCode, 402);
+  assert.equal(res.json().error.code, 'budget_cap_exceeded');
+  assert.equal(typeof res.json().error.details.guidance, 'string');
+  assert.equal(res.json().error.details.needed > 0, true);
+  assert.equal(res.json().error.details.requested, 0);
+  assert.equal(res.json().error.details.breakdown.base_search_cost, config.searchCreditCost);
   const balanceAfter = await repo.creditBalance(nodeId);
   assert.equal(balanceAfter, balanceBefore);
   await app.close();
@@ -5170,7 +5293,7 @@ test('search rejects unresolved target', async () => {
   await app.close();
 });
 
-test('search pagination applies tiered page add-ons and caps page 6 under modest budget', async () => {
+test('search pagination applies tiered page add-ons and returns budget_cap_exceeded on page 6 under modest budget', async () => {
   const app = buildApp();
   await withConfigOverrides({ rateLimitSearchScrapePerMinute: 1000, searchBroadQueryThreshold: 1000 }, async () => {
   const searcherBoot = await bootstrap(app, 'boot-search-page-tier-searcher');
@@ -5267,14 +5390,11 @@ test('search pagination applies tiered page add-ons and caps page 6 under modest
     headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-tier-page-6' },
     payload: searchPayload(page5.json().cursor, modestBudget),
   });
-  assert.equal(page6.statusCode, 200);
-  assert.equal(page6.json().budget.was_capped, true);
-  assert.equal(typeof page6.json().budget.cap_reason, 'string');
-  assert.equal(typeof page6.json().budget.guidance, 'string');
-  assert.equal(page6.json().budget.credits_charged, 0);
-  assert.equal(page6.json().budget.breakdown.page_index, 6);
-  assert.equal(page6.json().budget.breakdown.page_cost, 100);
-  assert.equal(page6.json().items.length, 0);
+  assert.equal(page6.statusCode, 402);
+  assert.equal(page6.json().error.code, 'budget_cap_exceeded');
+  assert.equal(page6.json().error.details.breakdown.page_index, 6);
+  assert.equal(page6.json().error.details.breakdown.page_cost, 100);
+  assert.equal(typeof page6.json().error.details.guidance, 'string');
   const afterPage6Balance = await repo.creditBalance(searcherNodeId);
   assert.equal(afterPage6Balance, beforePage6Balance);
 
@@ -8285,12 +8405,20 @@ test('POST /v1/offers/:id/cancel idempotency replay returns same response', asyn
 
 test('POST /v1/offers/:id/reveal-contact idempotency replay returns same response', async () => {
   const app = buildApp();
-  const sellerBoot = await bootstrap(app, 'boot-reveal-idem-seller');
+  const sellerBoot = await bootstrap(app, 'boot-reveal-idem-seller', {
+    display_name: 'Reveal Idem Seller',
+    email: `reveal.idem.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
   const sellerNodeId = sellerBoot.json().node.id;
   const sellerApiKey = sellerBoot.json().api_key.api_key;
   assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_reveal_idem_seller')).statusCode, 200);
 
-  const buyerBoot = await bootstrap(app, 'boot-reveal-idem-buyer');
+  const buyerBoot = await bootstrap(app, 'boot-reveal-idem-buyer', {
+    display_name: 'Reveal Idem Buyer',
+    email: `reveal.idem.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
   const buyerNodeId = buyerBoot.json().node.id;
   const buyerApiKey = buyerBoot.json().api_key.api_key;
   assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_reveal_idem_buyer')).statusCode, 200);
@@ -8472,7 +8600,7 @@ test('search log stores query_hash and query_redacted but not raw query text', a
 // QA AUDIT — Offer reject does NOT emit lifecycle event (spec-correct)
 // =====================================================================
 
-test('offer reject does not emit lifecycle event or webhook (spec-correct: reject is not in event enum)', async () => {
+test('offer reject emits lifecycle event and webhook', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-reject-no-event-seller');
   const sellerNodeId = sellerBoot.json().node.id;
@@ -8522,7 +8650,7 @@ test('offer reject does not emit lifecycle event or webhook (spec-correct: rejec
 
     const postRejectWebhooks = webhookCalls.slice(preRejectCount);
     const rejectEvents = postRejectWebhooks.filter((c) => c.body?.type === 'offer_rejected');
-    assert.equal(rejectEvents.length, 0, 'reject must not emit offer_rejected event (not in spec enum)');
+    assert.equal(rejectEvents.length > 0, true, 'reject must emit offer_rejected event');
   });
   await app.close();
 });
@@ -8579,6 +8707,49 @@ test('offer counter releases prior holds and creates new holds for countered off
   const oldOfferStatus = await query('select status from offers where id=$1', [offerId]);
   assert.equal(oldOfferStatus[0].status, 'countered');
   assert.notEqual(newOfferId, offerId, 'counter creates a new offer');
+  await app.close();
+});
+
+test('failed counter creation leaves prior offer state and holds unchanged', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-counter-atomic-seller');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const sellerApiKey = sellerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_counter_atomic_seller')).statusCode, 200);
+
+  const buyerBoot = await bootstrap(app, 'boot-counter-atomic-buyer');
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, buyerBoot.json().node.id, 'evt_counter_atomic_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Counter atomic unit', 'counter-atomic-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'counter-atomic-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+  assert.equal(created.json().offer.status, 'accepted_by_a');
+  assert.deepEqual(created.json().offer.held_unit_ids, []);
+
+  const failedCounter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'counter-atomic-fail' },
+    payload: { unit_ids: [crypto.randomUUID()], note: 'invalid unit id to force failure' },
+  });
+  assert.equal(failedCounter.statusCode, 409);
+  assert.equal(failedCounter.json().error.code, 'conflict');
+  assert.equal(failedCounter.json().error.details.reason, 'invalid_units');
+
+  const priorOffer = await repo.getOffer(offerId);
+  assert.equal(priorOffer.status, 'accepted_by_a');
+  const holds = await query("select status from holds where offer_id=$1", [offerId]);
+  assert.equal(holds.length, 0);
   await app.close();
 });
 
@@ -9443,11 +9614,12 @@ test('POST /v1/billing/crypto-credit-pack creates payment and stores record (moc
     const urlStr = typeof url === 'string' ? url : url.toString();
     if (urlStr.includes('nowpayments.io') && urlStr.includes('/payment')) {
       const reqBody = JSON.parse(opts.body);
+      const payAmount = Number(reqBody.price_amount) * 1.37;
       return new Response(JSON.stringify({
         payment_id: mockPaymentId,
         payment_status: 'waiting',
         pay_address: '0xFAKEADDRESS123',
-        pay_amount: reqBody.price_amount * 1.0,
+        pay_amount: payAmount,
         pay_currency: reqBody.pay_currency,
         price_amount: reqBody.price_amount,
         price_currency: reqBody.price_currency,
@@ -9474,6 +9646,7 @@ test('POST /v1/billing/crypto-credit-pack creates payment and stores record (moc
     assert.ok(body.pay_address.length > 0, 'pay_address should be non-empty');
     assert.equal(typeof body.send_amount, 'number');
     assert.ok(body.send_amount > 0, 'send_amount should be positive');
+    assert.equal(body.send_amount, Number(body.price_amount) * 1.37);
     assert.equal(body.payment_status, 'waiting');
     assert.ok(body.order_id.startsWith('fabric:'), 'order_id should be prefixed');
     assert.equal(body.payment_id, mockPaymentId);

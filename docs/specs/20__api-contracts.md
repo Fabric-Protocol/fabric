@@ -1181,7 +1181,7 @@ Unknown category IDs in `category_ids_any` MUST NOT return 400/422; they return 
 budget.credits_requested is a hard spend ceiling for this call:
 
 - response budget.credits_charged MUST be <= budget.credits_requested.
-- if capped, response budget.was_capped=true with actionable budget.guidance.
+- if requested execution exceeds budget, return `402 budget_cap_exceeded` with actionable guidance and no credit charge.
 
 target is optional:
 
@@ -1206,9 +1206,11 @@ Errors
 
 403 forbidden (revoked API key or suspended/non-ACTIVE node)
 
+402 budget_cap_exceeded
+
 402 credits_exhausted
 
-422 validation_error (includes inconsistent target and insufficient budget for requested execution)
+422 validation_error (includes inconsistent target)
 
 POST /v1/search/requests
 
@@ -1241,9 +1243,11 @@ Errors
 
 403 forbidden (revoked API key or suspended/non-ACTIVE node)
 
+402 budget_cap_exceeded
+
 402 credits_exhausted
 
-422 validation_error (includes inconsistent target and insufficient budget for requested execution)
+422 validation_error (includes inconsistent target)
 
 9) Node “inventory expansion” after a hit (metered)
 
@@ -1443,6 +1447,8 @@ General:
 - Caller must submit exactly one mode (unit-target or request-target); mixed/invalid shapes return `422 validation_error`.
 - If thread_id is present, this is a counter-offer within an existing thread.
 - `ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
+- Self-offers are rejected in all modes.
+- `note` must not contain direct contact information (email, phone, or messaging handles).
 
 Unit-target mode:
 - Server derives `to_node_id` from unit ownership; reject if units span multiple owners.
@@ -1451,7 +1457,6 @@ Unit-target mode:
 
 Request-target mode:
 - Server validates request exists, is published, and is not expired/deleted; derives `to_node_id` from request owner.
-- Self-offers are rejected.
 - `note` is required and must be non-empty.
 - If `unit_ids` are provided, they must all belong to the creator; holds apply only to those creator-owned unit ids.
 - If no `unit_ids` are provided, no holds are created.
@@ -1509,6 +1514,7 @@ Thread-specific validation:
 - Unit-thread counters require `unit_ids`.
 - Request-thread counters require non-empty `note`; `unit_ids` are optional.
 - Request-thread counters retain the thread request target (`request_id`).
+- `note` must not contain direct contact information (email, phone, or messaging handles).
 
 Creator acceptance is implicit at create for termed counters (`accepted_by_from_at` is set at creation).
 
@@ -1727,9 +1733,13 @@ Offer status is mutually_accepted.
 
 Caller is a party to the offer.
 
+Counterparty has a non-empty email configured.
+
 Errors
 
 409 if not mutually accepted (error.code="offer_not_mutually_accepted")
+
+409 invalid_state_transition if counterparty email is missing (`details.reason="counterparty_email_missing"`)
 
 403 if caller is not a party (error.code="forbidden")
 
@@ -1807,7 +1817,7 @@ Response 200
   "events": [
     {
       "id": "uuid",
-      "type": "offer_created|offer_countered|offer_accepted|offer_cancelled|offer_contact_revealed|subscription_changed",
+      "type": "offer_created|offer_countered|offer_accepted|offer_rejected|offer_cancelled|offer_contact_revealed|subscription_changed",
       "offer_id": "uuid",
       "actor_node_id": "uuid",
       "recipient_node_id": "uuid",

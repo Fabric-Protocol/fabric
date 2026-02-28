@@ -377,10 +377,11 @@ Target-constrained pricing policy:
 - If `target` resolves to a node, search uses low-cost base pricing for this call.
 - `budget.breakdown.base_search_cost` MUST reflect `SEARCH_TARGET_CREDIT_COST` for target-constrained calls and `SEARCH_CREDIT_COST` otherwise.
 
-If budget.credits_requested prevents executing requested page, return partial results within budget with:
+If `budget.credits_requested` is below required execution cost, the server returns:
 
-- budget.was_capped=true
-- budget.guidance describing how to increase budget or reduce limit.
+- `402 budget_cap_exceeded`
+- details including required cost breakdown and guidance to increase budget.
+- no credit charge for the rejected call.
 
 8) Node “inventory expansion” (metered)
 Endpoints:

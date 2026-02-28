@@ -462,7 +462,7 @@ const TOOLS = [
   // --- Phase C: Offer Lifecycle ---
   {
     name: 'fabric_create_offer',
-    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept.',
+    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept. Offer notes must not include contact info.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -479,7 +479,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_counter_offer',
-    description: 'Counter an existing offer. Unit-target threads require unit_ids (existing behavior). Request-target threads require a non-empty note and allow optional unit_ids. Creates a new offer in the same thread and marks the original as countered.',
+    description: 'Counter an existing offer. Unit-target threads require unit_ids (existing behavior). Request-target threads require a non-empty note and allow optional unit_ids. Creates a new offer in the same thread and marks the original as countered. Counter notes must not include contact info.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -534,7 +534,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_reveal_contact',
-    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted.',
+    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted and the counterparty has configured an email.',
     inputSchema: {
       type: 'object' as const,
       properties: { offer_id: { type: 'string' as const, description: 'UUID of the mutually accepted offer.' } },

@@ -94,9 +94,12 @@ For exact machine schema, call `tools/list`.
 
 Offer behavior notes:
 - `fabric_create_offer` supports unit-target mode (`unit_ids`) and request-target mode (`request_id` + non-empty `note`, optional `unit_ids`).
+- Self-offers are rejected in all modes.
+- Offer/counter notes must not include direct contact info (email/phone/messaging handles).
 - Initial request-target offers are intent-only; an accept on the root offer returns `counter_required_for_request_offer` until a counter is created.
 - Creator acceptance is implicit at create for termed offers; creator re-accept is a 200 no-op.
 - In request threads, `fabric_counter_offer` requires non-empty `note` and accepts optional `unit_ids`.
+- `fabric_reveal_contact` requires mutual acceptance and a counterparty email; otherwise it returns `409 invalid_state_transition` with `counterparty_email_missing`.
 
 ### 8) Billing + Credits (5)
 - `fabric_get_credit_quote`

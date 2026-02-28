@@ -67,6 +67,25 @@ export async function saveAdminIdempotency(key: string, method: string, path: st
   );
 }
 
+export async function consumeRateLimitCounter(key: string, windowSeconds: number) {
+  const safeWindowSeconds = Math.max(1, Math.trunc(windowSeconds));
+  const rows = await query<{ count: number; reset_epoch: string }>(
+    `insert into rate_limit_counters as r(key, count, reset_at, updated_at)
+     values($1, 1, now() + make_interval(secs => $2::int), now())
+     on conflict (key) do update
+     set
+       count = case when r.reset_at <= now() then 1 else r.count + 1 end,
+       reset_at = case when r.reset_at <= now() then now() + make_interval(secs => $2::int) else r.reset_at end,
+       updated_at = now()
+     returning count, extract(epoch from reset_at)::text as reset_epoch`,
+    [key, safeWindowSeconds],
+  );
+  return {
+    count: Number(rows[0]?.count ?? 0),
+    resetEpochSeconds: Number(rows[0]?.reset_epoch ?? Math.floor(Date.now() / 1000) + safeWindowSeconds),
+  };
+}
+
 export async function createNode(
   displayName: string,
   email: string | null,
@@ -1386,7 +1405,7 @@ export type OfferEventCursor = { created_at: string; id: string };
 
 export async function addOfferLifecycleEvents(
   offerId: string,
-  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_cancelled' | 'offer_contact_revealed',
+  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_rejected' | 'offer_cancelled' | 'offer_contact_revealed',
   actorNodeId: string,
   recipientNodeIds: string[],
   payload: Record<string, unknown> = {},

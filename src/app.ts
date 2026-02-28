@@ -84,6 +84,14 @@ function detectContactInfo(data: Record<string, unknown>): string | null {
   return null;
 }
 
+function detectContactInfoInText(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  if (CONTACT_EMAIL_RE.test(value)) return true;
+  if (CONTACT_PHONE_RE.test(value)) return true;
+  if (CONTACT_HANDLE_RE.test(value)) return true;
+  return false;
+}
+
 function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
@@ -1088,26 +1096,38 @@ function rateLimitSubjectValue(req: FastifyRequest, rule: RateLimitRule) {
   return 'global';
 }
 
-function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string) {
-  const now = Date.now();
+async function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string) {
   const key = `${rule.name}:${subject}`;
-  let state = rateLimitState.get(key);
-  if (!state || now >= state.resetAtMs) {
-    state = { count: 0, resetAtMs: now + (rule.windowSeconds * 1000) };
-    if (rateLimitState.size >= RATE_LIMIT_MAX_TRACKED_KEYS && !rateLimitState.has(key)) {
-      const oldest = rateLimitState.keys().next().value;
-      if (oldest !== undefined) rateLimitState.delete(oldest);
+  let currentCount = 0;
+  let resetEpochSeconds = Math.floor(Date.now() / 1000) + rule.windowSeconds;
+
+  try {
+    const consumed = await repo.consumeRateLimitCounter(key, rule.windowSeconds);
+    currentCount = consumed.count;
+    resetEpochSeconds = consumed.resetEpochSeconds;
+  } catch {
+    const now = Date.now();
+    let state = rateLimitState.get(key);
+    if (!state || now >= state.resetAtMs) {
+      state = { count: 0, resetAtMs: now + (rule.windowSeconds * 1000) };
+      if (rateLimitState.size >= RATE_LIMIT_MAX_TRACKED_KEYS && !rateLimitState.has(key)) {
+        const oldest = rateLimitState.keys().next().value;
+        if (oldest !== undefined) rateLimitState.delete(oldest);
+      }
+      rateLimitState.set(key, state);
     }
-    rateLimitState.set(key, state);
+    state.count += 1;
+    currentCount = state.count;
+    resetEpochSeconds = Math.floor(state.resetAtMs / 1000);
   }
 
-  const remainingBefore = Math.max(rule.limit - state.count, 0);
-  const retryAfterSeconds = Math.max(0, Math.ceil((state.resetAtMs - now) / 1000));
+  const remaining = Math.max(rule.limit - currentCount, 0);
+  const retryAfterSeconds = Math.max(0, resetEpochSeconds - Math.floor(Date.now() / 1000));
   reply.header('X-RateLimit-Limit', String(rule.limit));
-  reply.header('X-RateLimit-Remaining', String(Math.max(remainingBefore - 1, 0)));
-  reply.header('X-RateLimit-Reset', String(Math.floor(state.resetAtMs / 1000)));
+  reply.header('X-RateLimit-Remaining', String(remaining));
+  reply.header('X-RateLimit-Reset', String(resetEpochSeconds));
 
-  if (state.count >= rule.limit) {
+  if (currentCount > rule.limit) {
     if (!reply.sent) {
       reply.header('Retry-After', String(retryAfterSeconds));
       reply.status(429).send(errorEnvelope('rate_limit_exceeded', 'Rate limit exceeded', {
@@ -1119,11 +1139,10 @@ function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: string)
     }
     return false;
   }
-  state.count += 1;
   return true;
 }
 
-function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
+async function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
   const subject = rateLimitSubjectValue(req, rule);
   return applyRateLimitSubject(reply, rule, subject);
 }
@@ -1163,7 +1182,7 @@ function repeatedBroadSearchDetected(nodeId: string, isBroadSearch: boolean) {
   return recent.length >= config.searchBroadQueryThreshold;
 }
 
-function applySearchScrapeGuard(req: FastifyRequest, reply: any, payload: any) {
+async function applySearchScrapeGuard(req: FastifyRequest, reply: any, payload: any) {
   const nodeId = (req as AuthedRequest).nodeId;
   if (!nodeId) return true;
 
@@ -1345,9 +1364,7 @@ export function buildApp() {
         'Stripe webhook signature verification will fail until STRIPE_WEBHOOK_SECRET is set',
       );
     }
-    // Rate limits use in-memory Maps and are NOT shared across Cloud Run instances.
-    // Set max-instances=1 or deploy a shared store before horizontal scaling.
-    app.log.warn({ check_point: 'startup', scope: 'rate_limiting' }, 'Rate limiting is per-instance in-memory; not shared across horizontally scaled replicas');
+    app.log.info({ check_point: 'startup', scope: 'rate_limiting' }, 'Rate limiting uses DB-backed counters with in-memory fallback if DB is unavailable');
     if (config.checkoutRedirectAllowlist.length === 0) {
       app.log.warn(
         { check_point: 'startup', scope: 'redirect_allowlist', env_var: 'CHECKOUT_REDIRECT_ALLOWLIST' },
@@ -1397,12 +1414,12 @@ export function buildApp() {
     reply.header('X-Credits-Plan', 'unknown');
 
     if (path === '/v1/bootstrap') {
-      if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
+      if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
       return;
     }
 
     if (isPublicRoute(path)) {
-      if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
+      if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
       return;
     }
 
@@ -1426,7 +1443,7 @@ export function buildApp() {
     reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
     reply.header('X-Credits-Remaining', String(await repo.creditBalance(found.node_id)));
 
-    if (rateLimitRule && !applyRateLimit(req, reply, rateLimitRule)) return;
+    if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
   });
 
   app.addHook('preHandler', async (req, reply) => {
@@ -1659,7 +1676,7 @@ export function buildApp() {
       windowSeconds: 3600,
       subject: 'node',
     };
-    if (!applyRateLimitSubject(reply, nodeRateRule, parsed.data.node_id)) return reply;
+    if (!(await applyRateLimitSubject(reply, nodeRateRule, parsed.data.node_id))) return reply;
 
     const out = await fabricService.startRecovery(parsed.data.node_id, parsed.data.method);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Node not found'));
@@ -1845,6 +1862,8 @@ export function buildApp() {
       return reply.status(result.status === 422 ? 422 : 502).send(errorEnvelope(result.code, result.message));
     }
     const payment = result as nowPayments.CryptoPaymentResult;
+    const sendAmount = Number(payment.pay_amount);
+    const effectiveSendAmount = Number.isFinite(sendAmount) && sendAmount > 0 ? sendAmount : payment.pay_amount;
     await repo.insertCryptoPayment(
       parsed.data.node_id,
       payment.payment_id,
@@ -1865,7 +1884,7 @@ export function buildApp() {
       credits: pack.credits,
       price_amount: priceDollars,
       price_currency: 'usd',
-      send_amount: priceDollars,
+      send_amount: effectiveSendAmount,
       pay_address: payment.pay_address,
       pay_currency: effectivePayCurrency,
       chain: chainLabel,
@@ -1873,7 +1892,7 @@ export function buildApp() {
       order_id: orderId,
       payment_status: payment.payment_status,
       expiration_estimate_date: payment.expiration_estimate_date ?? null,
-      warning: `Send exactly ${priceDollars} ${effectivePayCurrency.toUpperCase()} on ${chainLabel ?? 'the correct chain'} to this address. Sending less will result in a partial payment. Sending on the wrong chain will result in permanent loss of funds.`,
+      warning: `Send exactly ${effectiveSendAmount} ${effectivePayCurrency.toUpperCase()} on ${chainLabel ?? 'the correct chain'} to this address. Sending less will result in a partial payment. Sending on the wrong chain will result in permanent loss of funds.`,
     };
   });
   app.get('/v1/billing/crypto-currencies', async (_req, reply) => {
@@ -2010,9 +2029,15 @@ export function buildApp() {
     const normalized = normalizeSearchBudget(parsed.data);
     const vf = validateScopeFilters(normalized.scope, normalized.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
+    if (!(await applySearchScrapeGuard(req, reply, normalized))) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'listings', normalized, (req as AuthedRequest).idem!.key);
     if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
+    if ((out as any).budgetCapExceeded) {
+      return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Search budget cap exceeded', {
+        ...(out as any).budgetCapExceeded,
+        credit_pack_options: purchaseGuidance((req as AuthedRequest).nodeId!),
+      }));
+    }
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -2036,9 +2061,15 @@ export function buildApp() {
     const normalized = normalizeSearchBudget(parsed.data);
     const vf = validateScopeFilters(normalized.scope, normalized.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
-    if (!applySearchScrapeGuard(req, reply, normalized)) return reply;
+    if (!(await applySearchScrapeGuard(req, reply, normalized))) return reply;
     const out = await fabricService.search((req as AuthedRequest).nodeId!, 'requests', normalized, (req as AuthedRequest).idem!.key);
     if ((out as any).prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily search limit exceeded', (out as any).prepurchaseDailyLimit));
+    if ((out as any).budgetCapExceeded) {
+      return reply.status(402).send(errorEnvelope('budget_cap_exceeded', 'Search budget cap exceeded', {
+        ...(out as any).budgetCapExceeded,
+        credit_pack_options: purchaseGuidance((req as AuthedRequest).nodeId!),
+      }));
+    }
     if ((out as any).validationError) {
       const reason = (out as any).validationError;
       if (reason === 'cursor_mismatch' || reason === 'invalid_cursor') {
@@ -2080,11 +2111,11 @@ export function buildApp() {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid pagination params', { reason: 'limit_out_of_range' }));
     }
     const perNodeRule: RateLimitRule = { name: 'drilldown_per_node', limit: config.rateLimitDrilldownPerNodePerMinute, windowSeconds: 60, subject: 'node' };
-    if (!applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`)) return reply;
+    if (!(await applyRateLimitSubject(reply, perNodeRule, `${callerNodeId}:${targetNodeId}`))) return reply;
     const isSubscriber = (req as AuthedRequest).isSubscriber ?? false;
     const dailyCapLimit = isSubscriber ? config.drilldownDailyCapBasic : config.drilldownDailyCapFree;
     const dailyCapRule: RateLimitRule = { name: 'drilldown_daily', limit: dailyCapLimit, windowSeconds: 86400, subject: 'node' };
-    if (!applyRateLimitSubject(reply, dailyCapRule, callerNodeId)) return reply;
+    if (!(await applyRateLimitSubject(reply, dailyCapRule, callerNodeId))) return reply;
     const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, kind, categoryId, limit, cursor, creditsMax);
     if ((out as any).budgetCapExceeded) return reply.status(402).send({ error: { code: 'budget_cap_exceeded', message: 'Budget cap exceeded', details: { ...(out as any).budgetCapExceeded, credit_pack_options: purchaseGuidance(callerNodeId) } } });
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(callerNodeId, (out as any).creditsExhausted));
@@ -2171,6 +2202,13 @@ export function buildApp() {
         max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
       }));
     }
+    if (detectContactInfoInText(parsed.data.note)) {
+      return reply.status(422).send(errorEnvelope(
+        'content_contact_info_disallowed',
+        'Contact information is not allowed in offer notes',
+        { field: 'note' },
+      ));
+    }
     const out = await (fabricService as any).createOffer(
       (req as AuthedRequest).nodeId!,
       {
@@ -2200,6 +2238,13 @@ export function buildApp() {
         min_ttl_minutes: OFFER_TTL_MINUTES_MIN,
         max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
       }));
+    }
+    if (detectContactInfoInText(parsed.data.note)) {
+      return reply.status(422).send(errorEnvelope(
+        'content_contact_info_disallowed',
+        'Contact information is not allowed in offer notes',
+        { field: 'note' },
+      ));
     }
     const out = await (fabricService as any).counterOffer(
       (req as AuthedRequest).nodeId!,
@@ -2247,6 +2292,7 @@ export function buildApp() {
     const out = await (fabricService as any).revealContact((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.notAccepted) return reply.status(409).send(errorEnvelope('offer_not_mutually_accepted', 'Offer not mutually accepted'));
+    if (out.contactUnavailable) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Counterparty contact is not ready', { reason: 'counterparty_email_missing' }));
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);

@@ -185,6 +185,15 @@ create table if not exists admin_idempotency_keys (
 create unique index if not exists admin_idempotency_keys_unique on admin_idempotency_keys(key, method, path);
 create index if not exists admin_idempotency_keys_expires_idx on admin_idempotency_keys(expires_at);
 
+create table if not exists rate_limit_counters (
+  key text primary key,
+  count int not null,
+  reset_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists rate_limit_counters_reset_idx on rate_limit_counters(reset_at);
+
 -- =========================
 -- Subscriptions (Stripe-backed)
 -- =========================
@@ -609,6 +618,7 @@ create table if not exists offer_events (
     'offer_created',
     'offer_countered',
     'offer_accepted',
+    'offer_rejected',
     'offer_cancelled',
     'offer_contact_revealed',
     'subscription_changed',
@@ -622,6 +632,18 @@ create table if not exists offer_events (
 
 create index if not exists offer_events_recipient_created_idx on offer_events(recipient_node_id, created_at asc, id asc);
 create index if not exists offer_events_offer_created_idx on offer_events(offer_id, created_at asc);
+
+alter table offer_events drop constraint if exists offer_events_event_type_check;
+alter table offer_events add constraint offer_events_event_type_check check (event_type in (
+  'offer_created',
+  'offer_countered',
+  'offer_accepted',
+  'offer_rejected',
+  'offer_cancelled',
+  'offer_contact_revealed',
+  'subscription_changed',
+  'credits_topup_completed'
+));
 
 create table if not exists event_webhook_deliveries (
   id uuid primary key default gen_random_uuid(),

@@ -454,15 +454,9 @@ export const fabricService = {
 
     if (totalCost > creditsRequested) {
       return {
-        search_id: crypto.randomUUID(),
-        scope: body.scope,
-        limit,
-        cursor: null,
-        broadening: { level: 0, allow: false },
-        applied_filters: body.filters ?? {},
-        budget: {
-          credits_requested: creditsRequested,
-          credits_charged: 0,
+        budgetCapExceeded: {
+          needed: totalCost,
+          requested: creditsRequested,
           breakdown: {
             base_search_cost: baseSearchCost,
             broadening_level: 0,
@@ -473,22 +467,8 @@ export const fabricService = {
             pagination_addons: pageCost,
             geo_addon: 0,
           },
-          coverage: {
-            page_index_executed: 0,
-            broadening_level_executed: 0,
-            items_returned: 0,
-            executed_page_index: 0,
-            executed_broadening_level: 0,
-            returned_count: 0,
-          },
-          was_capped: true,
-          cap_reason: `Needed ${totalCost} credits but budget cap is ${creditsRequested}`,
           guidance: `Increase budget.credits_requested to at least ${totalCost} to execute this search page.`,
-          credit_pack_hint: 'If your balance is low, purchase credits via POST /v1/billing/crypto-credit-pack (crypto) or POST /v1/billing/credit-packs/checkout-session (Stripe credit pack) or POST /v1/billing/checkout-session (subscription). Check GET /v1/credits/balance for current balance.',
         },
-        items: [],
-        nodes: [],
-        has_more: false,
       };
     }
 
@@ -796,7 +776,8 @@ type CreateOfferOptions = {
     const uniqueOwners = new Set(owners.map((u) => u.node_id));
     if (uniqueOwners.size !== 1) return { conflict: 'multiple_owners' };
     ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
-    toNodeId = owners[0].node_id;
+    toNodeId = options.toNodeIdOverride ?? owners[0].node_id;
+    if (toNodeId === nodeId) return { conflict: 'self_offer' };
     offerUnitId = unitIds[0];
   }
 
@@ -867,16 +848,7 @@ type CreateOfferOptions = {
   }
   const prepurchaseDailyLimit = await prePurchaseOfferCreateLimit(nodeId);
   if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
-  await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
-  await repo.releaseHolds(prior.id);
-  await emitOfferLifecycleEvents({
-    offerId: prior.id,
-    eventType: 'offer_countered',
-    actorNodeId: nodeId,
-    fromNodeId: prior.from_node_id,
-    toNodeId: prior.to_node_id,
-    payload: { status: 'countered', thread_id: prior.thread_id },
-  });
+  const counterpartyNodeId = prior.from_node_id === nodeId ? prior.to_node_id : prior.from_node_id;
   const next = isRequestThread
     ? await (fabricService as any).createOffer(
       nodeId,
@@ -890,7 +862,7 @@ type CreateOfferOptions = {
       {
         skipPrepurchaseDailyLimit: true,
         implicitAcceptedByFrom: true,
-        toNodeIdOverride: prior.from_node_id === nodeId ? prior.to_node_id : prior.from_node_id,
+        toNodeIdOverride: counterpartyNodeId,
       },
     )
     : await (fabricService as any).createOffer(
@@ -901,8 +873,33 @@ type CreateOfferOptions = {
         note: payload.note ?? null,
         ttl_minutes: payload.ttl_minutes,
       },
-      { skipPrepurchaseDailyLimit: true },
+      {
+        skipPrepurchaseDailyLimit: true,
+        implicitAcceptedByFrom: true,
+        toNodeIdOverride: counterpartyNodeId,
+      },
     );
+  if ((next as any).validationError || (next as any).conflict || (next as any).prepurchaseDailyLimit || (next as any).legalRequired) {
+    return next;
+  }
+  const nextOfferId = (next as any).offer?.id;
+  const countered = await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
+  if (!countered) {
+    if (typeof nextOfferId === 'string') {
+      await repo.setOfferStatus(nextOfferId, 'cancelled', { cancelled_at: new Date().toISOString() });
+      await repo.releaseHolds(nextOfferId);
+    }
+    return { conflict: true };
+  }
+  await repo.releaseHolds(prior.id);
+  await emitOfferLifecycleEvents({
+    offerId: prior.id,
+    eventType: 'offer_countered',
+    actorNodeId: nodeId,
+    fromNodeId: prior.from_node_id,
+    toNodeId: prior.to_node_id,
+    payload: { status: 'countered', thread_id: prior.thread_id },
+  });
   return next;
 };
 
@@ -998,6 +995,14 @@ type CreateOfferOptions = {
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
   const updated = await repo.setOfferStatus(offerId, 'rejected', { rejected_at: new Date().toISOString() });
   await repo.releaseHolds(offerId);
+  await emitOfferLifecycleEvents({
+    offerId: updated.id,
+    eventType: 'offer_rejected',
+    actorNodeId: nodeId,
+    fromNodeId: updated.from_node_id,
+    toNodeId: updated.to_node_id,
+    payload: { status: updated.status, thread_id: updated.thread_id },
+  });
   return { offer: await offerSummary(updated) };
 };
 
@@ -1044,6 +1049,7 @@ type CreateOfferOptions = {
   const from = await repo.getMe(offer.from_node_id);
   const to = await repo.getMe(offer.to_node_id);
   const revealNode = offer.from_node_id === nodeId ? to : from;
+  if (!revealNode.email) return { contactUnavailable: true };
   const messagingHandles = normalizeMessagingHandles(revealNode.messaging_handles);
   await repo.addContactReveal(offerId, nodeId, revealNode.id, revealNode.email, revealNode.phone, messagingHandles);
   await emitOfferLifecycleEvents({
@@ -1054,7 +1060,7 @@ type CreateOfferOptions = {
     toNodeId: offer.to_node_id,
     payload: { status: offer.status, thread_id: offer.thread_id },
   });
-  return { contact: { email: revealNode.email ?? '', phone: revealNode.phone ?? null, messaging_handles: messagingHandles }, disclaimer: SAFETY_DISCLAIMERS.reveal };
+  return { contact: { email: revealNode.email, phone: revealNode.phone ?? null, messaging_handles: messagingHandles }, disclaimer: SAFETY_DISCLAIMERS.reveal };
 };
 
 (fabricService as any).getMyReferralCode = async (nodeId: string) => {
@@ -2395,7 +2401,7 @@ async function emitNodeEvent(nodeId: string, eventType: string, payload: Record<
 
 async function emitOfferLifecycleEvents(input: {
   offerId: string;
-  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_cancelled' | 'offer_contact_revealed';
+  eventType: 'offer_created' | 'offer_countered' | 'offer_accepted' | 'offer_rejected' | 'offer_cancelled' | 'offer_contact_revealed';
   actorNodeId: string;
   fromNodeId: string;
   toNodeId: string;
