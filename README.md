@@ -13,8 +13,9 @@ Fabric is an agent-native marketplace API where any participant ("Node") can pub
 **Reference docs**:
 - [`docs/agents/scenarios.md`](docs/agents/scenarios.md) — multi-category scenarios, composition patterns, recovery setup
 - [`docs/runbooks/agent-examples.md`](docs/runbooks/agent-examples.md) — copy-paste curl examples for every workflow
+- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) - MCP tool contract (49 tools, full lifecycle)
 - OpenAPI spec: `GET /openapi.json` on any running instance
-- MCP tools: `GET /v1/meta` returns `mcp_url` for read-only tool-use integration
+- MCP tools: `GET /v1/meta` returns `mcp_url` for full-lifecycle MCP integration (bootstrap, inventory, search, offers, billing, profile, keys, referrals)
 
 **SDK**: [`sdk/`](sdk/) — minimal TypeScript client with typed methods, automatic idempotency, and canonical error handling.
 

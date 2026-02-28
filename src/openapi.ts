@@ -48,7 +48,7 @@ export const openApiDocument = {
                     openapi_url: { type: 'string' },
                     categories_url: { type: 'string' },
                     categories_version: { type: 'integer' },
-                    mcp_url: { type: 'string', description: 'URL of the read-only MCP (Model Context Protocol) endpoint.' },
+                    mcp_url: { type: 'string', description: 'URL of the full-lifecycle MCP (Model Context Protocol) endpoint.' },
                     legal_urls: { type: 'object' },
                     support_url: { type: 'string' },
                     docs_urls: { type: 'object' },
@@ -163,8 +163,8 @@ export const openApiDocument = {
     },
     '/mcp': {
       post: {
-        summary: 'MCP (Model Context Protocol) read-only endpoint',
-        description: 'JSON-RPC 2.0 endpoint exposing read-only Fabric tools for agent integration. Supports initialize, tools/list, and tools/call methods.',
+        summary: 'MCP (Model Context Protocol) endpoint',
+        description: 'JSON-RPC 2.0 endpoint exposing full-lifecycle Fabric tools for agent integration. Supports initialize, tools/list, tools/call, prompts/list, prompts/get, resources/list, and notifications/initialized.',
         security: [{ ApiKeyAuth: [] }],
         requestBody: {
           required: true,
@@ -175,7 +175,7 @@ export const openApiDocument = {
                 properties: {
                   jsonrpc: { type: 'string', enum: ['2.0'] },
                   id: { oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] },
-                  method: { type: 'string', enum: ['initialize', 'tools/list', 'tools/call', 'notifications/initialized'] },
+                  method: { type: 'string', enum: ['initialize', 'tools/list', 'tools/call', 'prompts/list', 'prompts/get', 'resources/list', 'notifications/initialized'] },
                   params: { type: 'object' },
                 },
                 required: ['jsonrpc', 'method'],

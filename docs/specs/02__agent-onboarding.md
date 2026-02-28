@@ -308,14 +308,14 @@ Idempotency-Key: <uuid>
 
 ## 11) MCP (Model Context Protocol)
 
-Fabric exposes a read-only MCP endpoint for agent tool-use frameworks.
+Fabric exposes a full-lifecycle MCP endpoint for agent tool-use frameworks.
 
 - **Discovery**: `GET /v1/meta` returns `mcp_url`
 - **Transport**: JSON-RPC 2.0 over HTTP POST
-- **Auth**: same `Authorization: ApiKey <api_key>` header
-- **Tools**: `fabric_search_listings`, `fabric_search_requests`, `fabric_get_unit`, `fabric_get_request`, `fabric_get_offer`, `fabric_get_events`, `fabric_get_credits`
-- **Mutations**: not exposed via MCP — use the REST API for writes
-
+- **Auth**: same `Authorization: ApiKey <api_key>` header (except no-auth bootstrap/discovery tools)
+- **Tools**: full lifecycle (49 tools) including bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
+- **Exact schemas**: use MCP `tools/list` or `docs/mcp-tool-spec.md`
+- **REST-only**: admin/internal operations and webhook ingestion endpoints
 ---
 
 ## 12) Error handling and retry guidance

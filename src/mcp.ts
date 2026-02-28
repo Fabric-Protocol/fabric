@@ -6,7 +6,7 @@ type AppInstance = ReturnType<typeof Fastify>;
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'fabric-marketplace';
-const SERVER_VERSION = '0.2.0';
+const SERVER_VERSION = '0.3.0';
 const SERVER_DISPLAY_NAME = 'Fabric Marketplace';
 const SERVER_HOMEPAGE = 'https://github.com/Fabric-Protocol/fabric';
 const SERVER_ICON = 'https://raw.githubusercontent.com/Fabric-Protocol/fabric/main/icon.png';
@@ -239,6 +239,170 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: readOnlyAnnotation,
+  },
+
+  // --- Phase B2: Inventory maintenance ---
+  {
+    name: 'fabric_update_unit',
+    description: 'Patch an existing unit. Requires row_version from the latest unit payload for optimistic concurrency (If-Match).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        unit_id: { type: 'string' as const, description: 'UUID of the unit to update.' },
+        row_version: { type: 'number' as const, description: 'Current row_version from the latest GET/list response.' },
+        ...unitCreateSchema.properties,
+      },
+      required: ['unit_id', 'row_version'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_delete_unit',
+    description: 'Soft-delete a unit you own. Removed from inventory and projections.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { unit_id: { type: 'string' as const, description: 'UUID of the unit to delete.' } },
+      required: ['unit_id'],
+      additionalProperties: false,
+    },
+    annotations: idempotentMutationAnnotation,
+  },
+  {
+    name: 'fabric_update_request',
+    description: 'Patch an existing request. Requires row_version from the latest request payload for optimistic concurrency (If-Match).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        request_id: { type: 'string' as const, description: 'UUID of the request to update.' },
+        row_version: { type: 'number' as const, description: 'Current row_version from the latest GET/list response.' },
+        ...requestCreateSchema.properties,
+      },
+      required: ['request_id', 'row_version'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_delete_request',
+    description: 'Soft-delete a request you own. Removed from inventory and projections.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { request_id: { type: 'string' as const, description: 'UUID of the request to delete.' } },
+      required: ['request_id'],
+      additionalProperties: false,
+    },
+    annotations: idempotentMutationAnnotation,
+  },
+
+  // --- Phase B3: Public node discovery ---
+  {
+    name: 'fabric_get_node_listings',
+    description: 'Get public listings for a specific node (credit-metered).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_id: { type: 'string' as const, description: 'Target node UUID.' },
+        cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
+        limit: { type: 'number' as const, description: 'Results per page (default 20).' },
+      },
+      required: ['node_id'],
+      additionalProperties: false,
+    },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_get_node_requests',
+    description: 'Get public requests for a specific node (credit-metered).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_id: { type: 'string' as const, description: 'Target node UUID.' },
+        cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
+        limit: { type: 'number' as const, description: 'Results per page (default 20).' },
+      },
+      required: ['node_id'],
+      additionalProperties: false,
+    },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_get_node_listings_by_category',
+    description: 'Get a node\'s public listings for one category (credit-metered drilldown).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_id: { type: 'string' as const, description: 'Target node UUID.' },
+        category_id: { type: 'number' as const, description: 'Category ID to drill down into.' },
+        cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
+        limit: { type: 'number' as const, description: 'Results per page (1-100, default 20).' },
+        budget_credits_max: { type: 'number' as const, description: 'Optional hard budget cap for this drilldown call.' },
+      },
+      required: ['node_id', 'category_id'],
+      additionalProperties: false,
+    },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_get_node_requests_by_category',
+    description: 'Get a node\'s public requests for one category (credit-metered drilldown).',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_id: { type: 'string' as const, description: 'Target node UUID.' },
+        category_id: { type: 'number' as const, description: 'Category ID to drill down into.' },
+        cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
+        limit: { type: 'number' as const, description: 'Results per page (1-100, default 20).' },
+        budget_credits_max: { type: 'number' as const, description: 'Optional hard budget cap for this drilldown call.' },
+      },
+      required: ['node_id', 'category_id'],
+      additionalProperties: false,
+    },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_get_nodes_categories_summary',
+    description: 'Get category summaries for up to 50 public nodes at once.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Target node UUIDs (1-50).' },
+        kind: { type: 'string' as const, enum: ['listings', 'requests', 'both'], description: 'Which inventory type to summarize.' },
+      },
+      required: ['node_ids', 'kind'],
+      additionalProperties: false,
+    },
+    annotations: readOnlyAnnotation,
+  },
+
+  // --- Phase B4: API key management ---
+  {
+    name: 'fabric_create_auth_key',
+    description: 'Create a new API key for the authenticated node.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { label: { type: 'string' as const, description: 'Human-readable key label.' } },
+      required: ['label'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_list_auth_keys',
+    description: 'List active API keys for the authenticated node (prefix + metadata, no secret values).',
+    inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_revoke_auth_key',
+    description: 'Revoke an API key by key_id.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { key_id: { type: 'string' as const, description: 'UUID of the key to revoke.' } },
+      required: ['key_id'],
+      additionalProperties: false,
+    },
+    annotations: idempotentMutationAnnotation,
   },
 
   // --- Existing: Read tools ---
@@ -491,6 +655,29 @@ const TOOLS = [
     },
     annotations: readOnlyAnnotation,
   },
+  {
+    name: 'fabric_get_referral_code',
+    description: 'Get your referral code for inviting other nodes.',
+    inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_get_referral_stats',
+    description: 'Get referral performance stats for your node.',
+    inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
+    annotations: readOnlyAnnotation,
+  },
+  {
+    name: 'fabric_claim_referral',
+    description: 'Claim a referral code on your node.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: { referral_code: { type: 'string' as const, description: 'Referral code to claim.' } },
+      required: ['referral_code'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
 ];
 
 const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
@@ -698,6 +885,153 @@ async function executeTool(
     return { status: res.statusCode, body: res.json() };
   }
 
+  if (name === 'fabric_update_unit') {
+    const payload: Record<string, unknown> = {};
+    const optionalFields = [
+      'title', 'description', 'type', 'condition', 'quantity', 'estimated_value', 'measure',
+      'custom_measure', 'scope_primary', 'scope_secondary', 'scope_notes',
+      'location_text_public', 'origin_region', 'dest_region', 'service_region',
+      'delivery_format', 'tags', 'category_ids', 'public_summary',
+    ];
+    for (const f of optionalFields) {
+      if (args[f] !== undefined) payload[f] = args[f];
+    }
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/units/${encodeURIComponent(String(args.unit_id))}`,
+      headers: { ...postHeaders(authHeader), 'if-match': String(args.row_version) },
+      payload,
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_delete_unit') {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/units/${encodeURIComponent(String(args.unit_id))}`,
+      headers: postHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_update_request') {
+    const payload: Record<string, unknown> = {};
+    const optionalFields = [
+      'title', 'description', 'type', 'condition', 'quantity', 'estimated_value', 'measure',
+      'custom_measure', 'scope_primary', 'scope_secondary', 'scope_notes',
+      'location_text_public', 'origin_region', 'dest_region', 'service_region',
+      'delivery_format', 'tags', 'category_ids', 'public_summary',
+      'need_by', 'accept_substitutions', 'ttl_minutes',
+    ];
+    for (const f of optionalFields) {
+      if (args[f] !== undefined) payload[f] = args[f];
+    }
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/v1/requests/${encodeURIComponent(String(args.request_id))}`,
+      headers: { ...postHeaders(authHeader), 'if-match': String(args.row_version) },
+      payload,
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_delete_request') {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/requests/${encodeURIComponent(String(args.request_id))}`,
+      headers: postHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_node_listings') {
+    const params = new URLSearchParams();
+    if (typeof args.cursor === 'string') params.set('cursor', args.cursor);
+    if (typeof args.limit === 'number') params.set('limit', String(args.limit));
+    const qs = params.toString();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${encodeURIComponent(String(args.node_id))}/listings${qs ? `?${qs}` : ''}`,
+      headers: authedHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_node_requests') {
+    const params = new URLSearchParams();
+    if (typeof args.cursor === 'string') params.set('cursor', args.cursor);
+    if (typeof args.limit === 'number') params.set('limit', String(args.limit));
+    const qs = params.toString();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${encodeURIComponent(String(args.node_id))}/requests${qs ? `?${qs}` : ''}`,
+      headers: authedHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_node_listings_by_category') {
+    const params = new URLSearchParams();
+    if (typeof args.cursor === 'string') params.set('cursor', args.cursor);
+    if (typeof args.limit === 'number') params.set('limit', String(args.limit));
+    if (typeof args.budget_credits_max === 'number') params.set('budget_credits_max', String(args.budget_credits_max));
+    const qs = params.toString();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${encodeURIComponent(String(args.node_id))}/listings/categories/${encodeURIComponent(String(args.category_id))}${qs ? `?${qs}` : ''}`,
+      headers: authedHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_node_requests_by_category') {
+    const params = new URLSearchParams();
+    if (typeof args.cursor === 'string') params.set('cursor', args.cursor);
+    if (typeof args.limit === 'number') params.set('limit', String(args.limit));
+    if (typeof args.budget_credits_max === 'number') params.set('budget_credits_max', String(args.budget_credits_max));
+    const qs = params.toString();
+    const res = await app.inject({
+      method: 'GET',
+      url: `/v1/public/nodes/${encodeURIComponent(String(args.node_id))}/requests/categories/${encodeURIComponent(String(args.category_id))}${qs ? `?${qs}` : ''}`,
+      headers: authedHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_nodes_categories_summary') {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/public/nodes/categories-summary',
+      headers: authedHeaders(authHeader),
+      payload: { node_ids: args.node_ids, kind: args.kind },
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_create_auth_key') {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/auth/keys',
+      headers: postHeaders(authHeader),
+      payload: { label: args.label },
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_list_auth_keys') {
+    const res = await app.inject({ method: 'GET', url: '/v1/auth/keys', headers: authedHeaders(authHeader) });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_revoke_auth_key') {
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/v1/auth/keys/${encodeURIComponent(String(args.key_id))}`,
+      headers: postHeaders(authHeader),
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
   // --- Existing: Read tools ---
 
   if (name === 'fabric_get_unit') {
@@ -892,6 +1226,26 @@ async function executeTool(
     return { status: res.statusCode, body: res.json() };
   }
 
+  if (name === 'fabric_get_referral_code') {
+    const res = await app.inject({ method: 'GET', url: '/v1/me/referral-code', headers: authedHeaders(authHeader) });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_get_referral_stats') {
+    const res = await app.inject({ method: 'GET', url: '/v1/me/referral-stats', headers: authedHeaders(authHeader) });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_claim_referral') {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/referrals/claim',
+      headers: postHeaders(authHeader),
+      payload: { referral_code: args.referral_code },
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
   return { status: 400, body: errorEnvelope('unknown_tool', `Unknown tool: ${name}`) };
 }
 
@@ -927,6 +1281,8 @@ const QUICKSTART_PROMPT = [
   'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids).',
   'Call fabric_publish_unit with the unit_id to make it searchable.',
   'Or call fabric_create_request + fabric_publish_request to post a need/want.',
+  'Use fabric_update_unit / fabric_update_request when details change.',
+  'Use fabric_delete_unit / fabric_delete_request to retire stale inventory.',
   '',
   '== Step 4: Search ==',
   'Call fabric_search_listings to find resources (supply side) — costs credits.',
@@ -953,6 +1309,8 @@ const QUICKSTART_PROMPT = [
   'Use fabric_get_profile to check your node status and plan.',
   'Use fabric_update_profile to set your email and messaging handles (shown on contact reveal).',
   'Use fabric_get_ledger to see your full credit history.',
+  'Use fabric_create_auth_key / fabric_list_auth_keys / fabric_revoke_auth_key for key rotation.',
+  'Use fabric_get_referral_code / fabric_claim_referral to use referrals.',
   'Free users have daily limits (20 searches, 3 offers, 1 accept). Any purchase removes limits permanently.',
 ].join('\n');
 

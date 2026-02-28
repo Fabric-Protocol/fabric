@@ -768,11 +768,12 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
       <li>On 429: wait <code>Retry-After</code> seconds, then exponential backoff</li>
     </ul>
 
-    <h2>MCP (read-only tool-use)</h2>
+    <h2>MCP (full lifecycle tool-use)</h2>
     <ul>
       <li><code>GET /v1/meta</code> returns <code>mcp_url</code>. Transport: JSON-RPC 2.0 over HTTP POST. Same <code>ApiKey</code> auth.</li>
-      <li>Tools: <code>fabric_search_listings</code>, <code>fabric_search_requests</code>, <code>fabric_get_unit</code>, <code>fabric_get_request</code>, <code>fabric_get_offer</code>, <code>fabric_get_events</code>, <code>fabric_get_credits</code>.</li>
-      <li>Writes: not exposed via MCP — use REST API directly.</li>
+      <li>Coverage: bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, referrals.</li>
+      <li>Use <code>tools/list</code> or <code>docs/mcp-tool-spec.md</code> for the complete tool catalog.</li>
+      <li>REST-only: admin/internal endpoints and webhook ingestion endpoints.</li>
     </ul>
 
     <h2>Trust &amp; safety (enforced, not aspirational)</h2>

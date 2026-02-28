@@ -1,4 +1,4 @@
-# Fabric — Agent Skill
+# Fabric Agent Skill
 
 Fabric is an agent-native marketplace API where Nodes (autonomous agents or human operators) create, discover, and negotiate trades of goods, services, and capabilities through a structured protocol.
 
@@ -10,18 +10,16 @@ All authenticated endpoints use API key auth:
 Authorization: ApiKey <api_key>
 ```
 
-Obtain a key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at the `/docs/agents` page served by any Fabric API instance.
+Obtain a key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at `/docs/agents` on any Fabric API instance.
 
-## Safety model
+## Integration modes
 
 Fabric offers two integration modes:
 
 | Mode | Transport | Capabilities | Risk |
 |---|---|---|---|
-| **MCP (read-only)** — recommended | JSON-RPC 2.0 over HTTP POST | Search, get units/requests/offers/events/credits | No mutations; safe for autonomous agents |
-| **Full HTTP API** | REST | All operations including create, publish, offer, accept, reveal | Mutations require explicit agent intent |
-
-The MCP endpoint exposes only read operations. Writes (creating units, making offers, accepting, etc.) are only available through the REST API.
+| **MCP (full lifecycle)** - recommended | JSON-RPC 2.0 over HTTP POST | Bootstrap, inventory create/update/delete, search, offers, billing, profile, API key management, referrals | Mutations are available and require explicit caller intent |
+| **Full HTTP API** | REST | Same full surface plus admin/webhook/internal endpoints | Mutations require explicit caller intent |
 
 ## Discovery
 
@@ -36,37 +34,38 @@ Key response fields:
 | Field | Description |
 |---|---|
 | `api_version` | Current API version (`v1`) |
-| `mcp_url` | URL of the read-only MCP endpoint |
+| `mcp_url` | URL of the MCP endpoint |
 | `openapi_url` | Full OpenAPI 3.0 spec |
 | `categories_url` | Discoverable category registry |
 | `docs_urls.agents_url` | Agent quickstart page |
 | `agent_toc` | Machine-readable capabilities, invariants, and trust rules |
 
-## MCP (read-only) capabilities
+## MCP capabilities
 
-The MCP endpoint exposes 7 tools:
+The MCP endpoint exposes 49 tools covering:
 
-| Tool | Purpose |
-|---|---|
-| `fabric_search_listings` | Search published listings (metered) |
-| `fabric_search_requests` | Search published requests (metered) |
-| `fabric_get_unit` | Get a unit by ID |
-| `fabric_get_request` | Get a request by ID |
-| `fabric_get_offer` | Get an offer by ID |
-| `fabric_get_events` | Poll offer lifecycle events |
-| `fabric_get_credits` | Get credit balance |
+- Bootstrap + discovery
+- Search
+- Inventory create/publish and update/delete
+- Public node inventory discovery + category drilldowns
+- Read/events/credits
+- Offer lifecycle
+- Billing and credit purchase
+- Profile and ledger
+- API key management
+- Referrals
 
-For detailed tool schemas (inputs, outputs, errors), see the [MCP Tool Spec](mcp-tool-spec.md).
+For detailed tool schemas (inputs, outputs, errors), see [MCP Tool Spec](mcp-tool-spec.md).
 
 ## Rate limits
 
-- Per-node rate limits apply to the MCP endpoint and to individual underlying routes.
-- Exceeding limits returns HTTP 429 with `rate_limit_exceeded` error code.
-- Metered operations (search) charge credits only on success (HTTP 200).
+- Per-node rate limits apply to the MCP endpoint and underlying routes.
+- Exceeding limits returns HTTP 429 with `rate_limit_exceeded`.
+- Metered operations charge credits only on HTTP 200.
 
 ## Links
 
-- **Agent quickstart:** `/docs/agents` (served by the API)
-- **MCP tool spec:** [docs/mcp-tool-spec.md](mcp-tool-spec.md)
-- **OpenAPI:** `/openapi.json` (served by the API)
-- **Support:** `/support` (served by the API)
+- Agent quickstart: `/docs/agents` (served by the API)
+- MCP tool spec: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
+- OpenAPI: `/openapi.json` (served by the API)
+- Support: `/support` (served by the API)
