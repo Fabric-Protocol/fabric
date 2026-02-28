@@ -129,6 +129,7 @@ export type OfferObject = {
   thread_id: string;
   from_node_id: string;
   to_node_id: string;
+  request_id: string | null;
   status: OfferStatus;
   expires_at: string;
   accepted_by_from_at: string | null;
@@ -143,12 +144,21 @@ export type OfferObject = {
   [key: string]: unknown;
 };
 
-export type CreateOfferRequest = {
-  unit_ids: string[];
-  thread_id: string | null;
-  note: string | null;
-  ttl_minutes?: number;
-};
+export type CreateOfferRequest =
+  | {
+      unit_ids: string[];
+      request_id?: never;
+      thread_id?: string | null;
+      note?: string | null;
+      ttl_minutes?: number;
+    }
+  | {
+      request_id: string;
+      unit_ids?: string[];
+      thread_id?: string | null;
+      note: string;
+      ttl_minutes?: number;
+    };
 
 export type CreateOfferResponse = {
   offer: OfferObject;

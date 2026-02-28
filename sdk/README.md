@@ -10,7 +10,7 @@ Minimal TypeScript client for the [Fabric marketplace API](https://github.com/Fa
 - Core methods:
   - `me()` → `GET /v1/me`
   - `searchListings()` → `POST /v1/search/listings`
-  - `createOffer()` → `POST /v1/offers`
+  - `createOffer()` → `POST /v1/offers` (unit-targeted or request-targeted)
 - Recovery helpers:
   - `recoveryStart()` → `POST /v1/recovery/start`
   - `recoveryComplete()` → `POST /v1/recovery/complete`
@@ -39,6 +39,15 @@ For non-GET requests, the SDK automatically sets `Idempotency-Key` (UUIDv4). You
 await client.createOffer(
   { unit_ids: ['...'], thread_id: null, note: null },
   { idempotencyKey: 'my-fixed-key' },
+);
+```
+
+Request-targeted offer example:
+
+```typescript
+await client.createOffer(
+  { request_id: '...', note: 'I can fulfill this request for $25.', unit_ids: ['optional-owned-unit-id'] },
+  { idempotencyKey: 'my-fixed-key-2' },
 );
 ```
 

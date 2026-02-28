@@ -2,7 +2,7 @@
 
 Definitive contract for the Fabric MCP endpoint for agent integrations.
 
-Version: 0.3.0
+Version: 0.4.0
 Tool count: 49 tools (full lifecycle + inventory maintenance + public node discovery + auth key management + referrals)
 
 ## Connection
@@ -91,6 +91,12 @@ For exact machine schema, call `tools/list`.
 - `fabric_cancel_offer`
 - `fabric_reveal_contact`
 - `fabric_list_offers`
+
+Offer behavior notes:
+- `fabric_create_offer` supports unit-target mode (`unit_ids`) and request-target mode (`request_id` + non-empty `note`, optional `unit_ids`).
+- Initial request-target offers are intent-only; an accept on the root offer returns `counter_required_for_request_offer` until a counter is created.
+- Creator acceptance is implicit at create for termed offers; creator re-accept is a 200 no-op.
+- In request threads, `fabric_counter_offer` requires non-empty `note` and accepts optional `unit_ids`.
 
 ### 8) Billing + Credits (5)
 - `fabric_get_credit_quote`

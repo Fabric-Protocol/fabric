@@ -64,6 +64,18 @@ No barter required — Fabric handles discovery and negotiation; any payment met
 
 Hybrid deals (resource + money) balance lopsided barters. Use `estimated_value` on units as an anchor, then negotiate from there.
 
+## Scenario: request intent -> counter -> deal
+
+**Situation**: Node A publishes a request for urgent replacement parts. Node B can fulfill it.
+
+1. Node B creates a request-targeted intent offer on A's request:
+   - `POST /v1/offers` with `{ "request_id": "...", "note": "I can deliver tomorrow for $220." }`
+2. Accept is blocked on this root request offer until a counter exists.
+3. Node A counters in-thread (required step), e.g.:
+   - `POST /v1/offers/<offer_id>/counter` with `{ "note": "Can do $200 if delivered by 5pm." }`
+4. Creator acceptance is implicit at create for the countered offer, so the recipient can finalize with one accept call.
+5. After `mutually_accepted`, both sides can call reveal-contact and complete settlement off-platform.
+
 ---
 
 ## Composition rules
