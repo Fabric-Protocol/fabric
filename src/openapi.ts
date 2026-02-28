@@ -512,6 +512,34 @@ export const openApiDocument = {
       },
     },
     '/v1/offers': {
+      get: {
+        summary: 'List offers',
+        description: 'List offers for the authenticated node. Filter by role (made/received) and optionally by request_id.',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { name: 'role', in: 'query', schema: { type: 'string', enum: ['made', 'received'], default: 'made' }, description: 'Filter by offer role.' },
+          { name: 'request_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Filter offers targeting a specific request.' },
+          { name: 'limit', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } },
+          { name: 'cursor', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': {
+            description: 'List of offers',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    offers: { type: 'array', items: { $ref: '#/components/schemas/Offer' } },
+                  },
+                  required: ['offers'],
+                },
+              },
+            },
+          },
+          '401': { description: 'Unauthorized' },
+        },
+      },
       post: {
         summary: 'Create a new offer',
         security: [{ ApiKeyAuth: [] }],
@@ -940,13 +968,18 @@ export const openApiDocument = {
           updated_at: { type: 'string' },
           version: { type: 'integer' },
           unit_ids: { type: 'array', items: { type: 'string' } },
+          note_only_deal: { type: 'boolean', description: 'True when the offer is mutually_accepted with no inventory units attached. All terms are in the notes.' },
         },
-        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'request_id', 'is_thread_root', 'requires_counter', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids'],
+        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'request_id', 'is_thread_root', 'requires_counter', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids', 'note_only_deal'],
       },
       OfferResponse: {
         type: 'object',
         properties: {
           offer: { $ref: '#/components/schemas/Offer' },
+          disclaimer: { type: 'string', nullable: true },
+          holds_deferred: { type: 'boolean', description: 'True when a request-targeted root offer includes unit_ids but holds were not created (deferred to counter).' },
+          holds_deferred_reason: { type: 'string', nullable: true },
+          settlement_guidance: { type: 'string', nullable: true, description: 'Guidance for note-only deals where no inventory units are attached.' },
         },
         required: ['offer'],
       },

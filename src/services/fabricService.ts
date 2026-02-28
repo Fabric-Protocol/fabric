@@ -415,7 +415,26 @@ export const fabricService = {
     if (payload.ttl_minutes !== undefined) nextPayload.expires_at = requestExpiresAtIso(payload.ttl_minutes);
     return repo.patchResource('requests', nodeId, id, version, nextPayload);
   },
-  deleteRequest(nodeId: string, id: string) { return repo.deleteResource('requests', nodeId, id); },
+  async deleteRequest(nodeId: string, id: string) {
+    const deleted = await repo.deleteResource('requests', nodeId, id);
+    if (deleted) {
+      const cancelledIds = await repo.cancelOffersForRequest(id);
+      for (const oid of cancelledIds) {
+        const offer = await repo.getOffer(oid);
+        if (offer) {
+          await emitOfferLifecycleEvents({
+            offerId: oid,
+            eventType: 'offer_cancelled',
+            actorNodeId: nodeId,
+            fromNodeId: offer.from_node_id,
+            toNodeId: offer.to_node_id,
+            payload: { status: 'cancelled', thread_id: offer.thread_id, reason: 'request_deleted' },
+          });
+        }
+      }
+    }
+    return deleted;
+  },
   async publish(kind: 'units' | 'requests', nodeId: string, id: string) {
     if (kind === 'requests') await repo.expireStaleRequests();
     const me = await repo.getMe(nodeId);
@@ -433,7 +452,29 @@ export const fabricService = {
       ? { projection: { kind: 'listing', source_unit_id: id, published_at: new Date().toISOString() }, disclaimer: SAFETY_DISCLAIMERS.publish }
       : { projection: { kind: 'request', source_request_id: id, published_at: new Date().toISOString() }, disclaimer: SAFETY_DISCLAIMERS.publish };
   },
-  async unpublish(kind: 'units' | 'requests', _nodeId: string, id: string) { await repo.setPublished(kind, id, false); await repo.removeProjection(kind, id); return { ok: true }; },
+  async unpublish(kind: 'units' | 'requests', nodeId: string, id: string) {
+    const row = await repo.getResource(kind, nodeId, id);
+    if (!row) return { notFound: true };
+    await repo.setPublished(kind, id, false);
+    await repo.removeProjection(kind, id);
+    if (kind === 'requests') {
+      const cancelledIds = await repo.cancelOffersForRequest(id);
+      for (const oid of cancelledIds) {
+        const offer = await repo.getOffer(oid);
+        if (offer) {
+          await emitOfferLifecycleEvents({
+            offerId: oid,
+            eventType: 'offer_cancelled',
+            actorNodeId: nodeId,
+            fromNodeId: offer.from_node_id,
+            toNodeId: offer.to_node_id,
+            payload: { status: 'cancelled', thread_id: offer.thread_id, reason: 'request_unpublished' },
+          });
+        }
+      }
+    }
+    return { ok: true };
+  },
   async search(nodeId: string, kind: 'listings' | 'requests', body: any, idemKey: string) {
     if (kind === 'requests') await repo.expireStaleRequests();
     const searchDailyLimit = await prePurchaseSearchLimit(nodeId);
@@ -684,7 +725,9 @@ export async function offerSummary(offer: any) {
   const lines = await repo.getOfferLines(offer.id);
   const hold = await repo.getHoldSummary(offer.id);
   const isRoot = (await repo.isOfferThreadRoot(offer.id)) === true;
-  return {
+  const unitIdList = lines.map((l) => l.unit_id);
+  const isNoteOnlyDeal = unitIdList.length === 0 && offer.status === 'mutually_accepted';
+  const summary: Record<string, unknown> = {
     id: offer.id,
     thread_id: offer.thread_id,
     from_node_id: offer.from_node_id,
@@ -704,8 +747,20 @@ export async function offerSummary(offer: any) {
     created_at: offer.created_at,
     updated_at: offer.updated_at,
     version: offer.row_version,
-    unit_ids: lines.map((l) => l.unit_id),
+    unit_ids: unitIdList,
+    note_only_deal: isNoteOnlyDeal,
   };
+  return summary;
+}
+
+async function getActionableRequestTarget(requestId: string) {
+  const request = await repo.getRequestOfferTarget(requestId);
+  if (!request) return { conflict: 'invalid_request' as const };
+  if (!request.published_at) return { conflict: 'request_not_published' as const };
+  if (request.expires_at && new Date(request.expires_at).getTime() <= Date.now()) {
+    return { conflict: 'request_expired' as const };
+  }
+  return { request };
 }
 
 const OFFER_TTL_MINUTES_DEFAULT = 48 * 60;
@@ -755,10 +810,9 @@ type CreateOfferOptions = {
   let ownerByUnitId = new Map<string, string>();
 
   if (isRequestTarget) {
-    const request = await repo.getRequestOfferTarget(requestId);
-    if (!request) return { conflict: 'invalid_request' };
-    if (!request.published_at) return { conflict: 'request_not_published' };
-    if (request.expires_at && new Date(request.expires_at).getTime() <= Date.now()) return { conflict: 'request_expired' };
+    const target = await getActionableRequestTarget(requestId);
+    if ('conflict' in target) return { conflict: target.conflict };
+    const request = target.request;
     const nextToNodeId = options.toNodeIdOverride ?? request.node_id;
     if (nextToNodeId === nodeId) return { conflict: 'self_offer' };
     toNodeId = nextToNodeId;
@@ -805,8 +859,13 @@ type CreateOfferOptions = {
   const offerExpiresAtIsoValue = toIsoString(offer.expires_at) ?? offerExpiresAt;
   const held: string[] = [];
   const unheld: string[] = [];
+  const isRootRequestOffer = isRequestTarget && !implicitAcceptedByFrom;
   for (const unitId of unitIds) {
     await repo.addOfferLine(offer.id, unitId);
+    if (isRootRequestOffer) {
+      unheld.push(unitId);
+      continue;
+    }
     const ownerNodeId = ownerByUnitId.get(unitId);
     if (ownerNodeId !== nodeId) {
       unheld.push(unitId);
@@ -829,7 +888,12 @@ type CreateOfferOptions = {
     toNodeId: offer.to_node_id,
     payload: { status: offer.status, thread_id: offer.thread_id },
   });
-  return { offer: sum, disclaimer: SAFETY_DISCLAIMERS.offer };
+  const result: Record<string, unknown> = { offer: sum, disclaimer: SAFETY_DISCLAIMERS.offer };
+  if (isRootRequestOffer && unitIds.length > 0) {
+    result.holds_deferred = true;
+    result.holds_deferred_reason = 'Request-targeted intent offers do not place holds. Holds will be created when a counter-offer is made with unit_ids.';
+  }
+  return result;
 };
 
 (fabricService as any).counterOffer = async (
@@ -842,6 +906,14 @@ type CreateOfferOptions = {
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
   if (![prior.from_node_id, prior.to_node_id].includes(nodeId)) return { notFound: true };
+  if (prior.request_id) {
+    const target = await getActionableRequestTarget(prior.request_id);
+    if ('conflict' in target) return { conflict: target.conflict };
+  }
+  if (prior.from_node_id === nodeId) {
+    const isRoot = await repo.isOfferThreadRoot(prior.id);
+    if (isRoot) return { conflict: 'cannot_counter_own_root_offer' };
+  }
   const isRequestThread = Boolean(prior.request_id);
   const unitIds = Array.isArray(payload.unit_ids) ? payload.unit_ids : undefined;
   if (!isRequestThread && (!unitIds || unitIds.length === 0)) return { validationError: 'unit_ids_required' };
@@ -922,6 +994,8 @@ type CreateOfferOptions = {
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
   if (offer.request_id) {
+    const target = await getActionableRequestTarget(offer.request_id);
+    if ('conflict' in target) return { conflict: target.conflict };
     const isRoot = await repo.isOfferThreadRoot(offerId);
     if (isRoot) return { conflict: 'counter_required_for_request_offer' };
   }
@@ -1047,9 +1121,9 @@ type CreateOfferOptions = {
   return { offer: await offerSummary(updated) };
 };
 
-(fabricService as any).listOffers = async (nodeId: string, role: 'made' | 'received', limit: number, cursor: string | null) => {
+(fabricService as any).listOffers = async (nodeId: string, role: 'made' | 'received', limit: number, cursor: string | null, requestId?: string | null) => {
   await repo.expireStaleOffers();
-  const offers = await repo.listOffers(nodeId, role, limit, cursor);
+  const offers = await repo.listOffers(nodeId, role, limit, cursor, requestId);
   return { offers: await Promise.all(offers.map((o) => offerSummary(o))) };
 };
 
@@ -1082,7 +1156,13 @@ type CreateOfferOptions = {
     toNodeId: offer.to_node_id,
     payload: { status: offer.status, thread_id: offer.thread_id },
   });
-  return { contact: { email: revealNode.email, phone: revealNode.phone ?? null, messaging_handles: messagingHandles }, disclaimer: SAFETY_DISCLAIMERS.reveal };
+  const lines = await repo.getOfferLines(offer.id);
+  const result: Record<string, unknown> = { contact: { email: revealNode.email, phone: revealNode.phone ?? null, messaging_handles: messagingHandles }, disclaimer: SAFETY_DISCLAIMERS.reveal };
+  if (lines.length === 0) {
+    result.note_only_deal = true;
+    result.settlement_guidance = 'This deal was negotiated entirely via notes with no inventory units attached. All terms, pricing, and fulfillment details are in the offer notes. Verify terms carefully before settling off-platform.';
+  }
+  return result;
 };
 
 (fabricService as any).getMyReferralCode = async (nodeId: string) => {

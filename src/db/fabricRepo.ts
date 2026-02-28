@@ -1217,10 +1217,52 @@ export async function expireStaleRequests() {
        delete from public_requests
        where request_id in (select id from expired)
        returning request_id
+     ),
+     cancelled_offers as (
+       update offers
+       set status='cancelled',
+           cancelled_at=coalesce(cancelled_at, now())
+       where request_id in (select id from expired)
+         and status in ('pending','accepted_by_a','accepted_by_b')
+         and deleted_at is null
+       returning id
+     ),
+     released_holds as (
+       update holds
+       set status='released',
+           released_at=coalesce(released_at, now())
+       where offer_id in (select id from cancelled_offers)
+         and status='active'
+       returning id
      )
      select id from expired`,
   );
   return rows.length;
+}
+
+export async function cancelOffersForRequest(requestId: string): Promise<string[]> {
+  const rows = await query<{ id: string }>(
+    `with cancelled as (
+       update offers
+       set status='cancelled',
+           cancelled_at=coalesce(cancelled_at, now())
+       where request_id=$1
+         and status in ('pending','accepted_by_a','accepted_by_b')
+         and deleted_at is null
+       returning id
+     ),
+     released_holds as (
+       update holds
+       set status='released',
+           released_at=coalesce(released_at, now())
+       where offer_id in (select id from cancelled)
+         and status='active'
+       returning id
+     )
+     select id from cancelled`,
+    [requestId],
+  );
+  return rows.map(r => r.id);
 }
 
 export async function getOfferLines(offerId: string) {
@@ -1390,10 +1432,18 @@ export async function commitHolds(offerId: string) {
   await query("update holds set status='committed', committed_at=now() where offer_id=$1 and status='active'", [offerId]);
 }
 
-export async function listOffers(nodeId: string, role: 'made'|'received', limit: number, cursor: string | null) {
+export async function listOffers(nodeId: string, role: 'made'|'received', limit: number, cursor: string | null, requestId?: string | null) {
   const col = role === 'made' ? 'from_node_id' : 'to_node_id';
-  if (cursor) return query<any>(`select * from offers where ${col}=$1 and created_at < $3::timestamptz and deleted_at is null order by created_at desc limit $2`, [nodeId, limit, cursor]);
-  return query<any>(`select * from offers where ${col}=$1 and deleted_at is null order by created_at desc limit $2`, [nodeId, limit]);
+  const reqFilter = requestId ? ' and request_id=$4' : '';
+  const params: any[] = [nodeId, limit];
+  if (cursor) {
+    params.push(cursor);
+    if (requestId) params.push(requestId);
+    return query<any>(`select * from offers where ${col}=$1 and created_at < $3::timestamptz${reqFilter} and deleted_at is null order by created_at desc limit $2`, params);
+  }
+  if (requestId) params.push(requestId);
+  const reqFilterNoCursor = requestId ? ` and request_id=$${params.length}` : '';
+  return query<any>(`select * from offers where ${col}=$1${reqFilterNoCursor} and deleted_at is null order by created_at desc limit $2`, params);
 }
 
 export async function addContactReveal(

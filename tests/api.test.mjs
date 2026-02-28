@@ -1453,7 +1453,9 @@ test('request-targeted offer create validates note, creator-owned unit_ids, and 
     payload: createPayload,
   });
   assert.equal(created.statusCode, 200);
-  assert.deepEqual(created.json().offer.held_unit_ids, [fulfillerUnit.id]);
+  assert.deepEqual(created.json().offer.held_unit_ids, [], 'Root request-targeted offers defer holds');
+  assert.deepEqual(created.json().offer.unheld_unit_ids, [fulfillerUnit.id]);
+  assert.equal(created.json().holds_deferred, true);
   const offerId = created.json().offer.id;
 
   const replay = await app.inject({
@@ -1473,6 +1475,60 @@ test('request-targeted offer create validates note, creator-owned unit_ids, and 
   });
   assert.equal(changedReplay.statusCode, 409);
   assert.equal(changedReplay.json().error.code, 'idempotency_key_reuse_conflict');
+
+  await app.close();
+});
+
+test('request-thread accept is blocked when target request is no longer published', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'boot-req-offer-stale-requester');
+  const fulfillerBoot = await bootstrap(app, 'boot-req-offer-stale-fulfiller');
+  const requesterNodeId = requesterBoot.json().node.id;
+  const requesterApiKey = requesterBoot.json().api_key.api_key;
+  const fulfillerApiKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestResource = await repo.createResource('requests', requesterNodeId, {
+    ...unitPayload('Need pears', 'request-offer-stale-scope'),
+    public_summary: 'Need pears',
+  });
+  await repo.setPublished('requests', requestResource.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', requesterNodeId, requestResource.id));
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-stale-create' },
+    payload: { request_id: requestResource.id, note: 'Can fulfill with tomorrow pickup.' },
+  });
+  assert.equal(create.statusCode, 200);
+  const rootOfferId = create.json().offer.id;
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${rootOfferId}/counter`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-stale-counter' },
+    payload: { note: 'Can do this for $30.' },
+  });
+  assert.equal(counter.statusCode, 200);
+  const counterOfferId = counter.json().offer.id;
+
+  const unpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestResource.id}/unpublish`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-stale-unpublish' },
+    payload: {},
+  });
+  assert.equal(unpublish.statusCode, 200);
+
+  const accept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${counterOfferId}/accept`,
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-stale-accept' },
+    payload: {},
+  });
+  assert.equal(accept.statusCode, 409);
+  assert.equal(accept.json().error.code, 'invalid_state_transition');
+  assert.equal(accept.json().error.details.reason, 'request_not_published');
 
   await app.close();
 });
@@ -2106,6 +2162,71 @@ test('request publish and unpublish toggle projection visibility', async () => {
   assert.equal(unpublishedRows[0].published_at, null);
   const requestRowsAfter = await query('select count(*)::text as c from public_requests where request_id=$1', [requestId]);
   assert.equal(Number(requestRowsAfter[0].c), 0);
+
+  await app.close();
+});
+
+test('unpublish returns 404 for non-owner and keeps projections published', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-unpublish-owner');
+  const otherBoot = await bootstrap(app, 'boot-unpublish-other');
+  const ownerNodeId = ownerBoot.json().node.id;
+  const ownerApiKey = ownerBoot.json().api_key.api_key;
+  const otherApiKey = otherBoot.json().api_key.api_key;
+
+  const unit = await repo.createResource('units', ownerNodeId, unitPayload('Owner unit', 'unpublish-owner-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', ownerNodeId, unit.id));
+
+  const requestResource = await repo.createResource('requests', ownerNodeId, unitPayload('Owner request', 'unpublish-owner-request-scope'));
+  await repo.setPublished('requests', requestResource.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', ownerNodeId, requestResource.id));
+
+  const unitUnpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unit.id}/unpublish`,
+    headers: { authorization: `ApiKey ${otherApiKey}`, 'idempotency-key': 'unpublish-owner-unit-non-owner' },
+    payload: {},
+  });
+  assert.equal(unitUnpublish.statusCode, 404);
+  assert.equal(unitUnpublish.json().error.code, 'not_found');
+
+  const requestUnpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestResource.id}/unpublish`,
+    headers: { authorization: `ApiKey ${otherApiKey}`, 'idempotency-key': 'unpublish-owner-request-non-owner' },
+    payload: {},
+  });
+  assert.equal(requestUnpublish.statusCode, 404);
+  assert.equal(requestUnpublish.json().error.code, 'not_found');
+
+  const unitRows = await query('select published_at from units where id=$1', [unit.id]);
+  assert.equal(unitRows.length, 1);
+  assert.notEqual(unitRows[0].published_at, null);
+  const listingRows = await query('select count(*)::text as c from public_listings where unit_id=$1', [unit.id]);
+  assert.equal(Number(listingRows[0].c), 1);
+
+  const requestRows = await query('select published_at from requests where id=$1', [requestResource.id]);
+  assert.equal(requestRows.length, 1);
+  assert.notEqual(requestRows[0].published_at, null);
+  const projectionRows = await query('select count(*)::text as c from public_requests where request_id=$1', [requestResource.id]);
+  assert.equal(Number(projectionRows[0].c), 1);
+
+  const ownerUnitUnpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unit.id}/unpublish`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'unpublish-owner-unit-owner' },
+    payload: {},
+  });
+  assert.equal(ownerUnitUnpublish.statusCode, 200);
+
+  const ownerRequestUnpublish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestResource.id}/unpublish`,
+    headers: { authorization: `ApiKey ${ownerApiKey}`, 'idempotency-key': 'unpublish-owner-request-owner' },
+    payload: {},
+  });
+  assert.equal(ownerRequestUnpublish.statusCode, 200);
 
   await app.close();
 });

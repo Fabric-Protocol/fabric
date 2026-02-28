@@ -1383,6 +1383,8 @@ accepted_by_from_at, accepted_by_to_at
 
 hold summary: held_unit_ids, unheld_unit_ids, hold_status, hold_expires_at
 
+note_only_deal (boolean — true when the offer reaches `mutually_accepted` with no unit_ids attached; all deal terms are in the notes)
+
 created_at, updated_at
 
 version (for concurrency)
@@ -1462,7 +1464,7 @@ Unit-target mode:
 Request-target mode:
 - Server validates request exists, is published, and is not expired/deleted; derives `to_node_id` from request owner.
 - `note` is required and must be non-empty.
-- If `unit_ids` are provided, they must all belong to the creator; holds apply only to those creator-owned unit ids.
+- If `unit_ids` are provided, they must all belong to the creator. However, **no holds are created on root request-targeted offers** because the root offer is intent-only and cannot be accepted directly. Holds are deferred until a counter-offer is made with `unit_ids`. The response includes `holds_deferred: true` with an explanation.
 - If no `unit_ids` are provided, no holds are created.
 - Initial request-targeted offers are intent-only and cannot be accepted until a counter-offer exists.
 
@@ -1513,6 +1515,8 @@ Creates a new offer in same thread_id.
 Sets original offer status to countered.
 
 Releases original holds; creates new holds for counter-offer when `unit_ids` are provided.
+
+The creator of the root offer (`from_node_id`) cannot counter it — only the other party can respond first. Returns 409 `cannot_counter_own_root_offer`.
 
 Thread-specific validation:
 - Unit-thread counters require `unit_ids`.

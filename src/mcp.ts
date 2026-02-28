@@ -462,7 +462,7 @@ const TOOLS = [
   // --- Phase C: Offer Lifecycle ---
   {
     name: 'fabric_create_offer',
-    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept. Offer notes must not include contact info.',
+    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept. Offer notes must not include contact info. If unit_ids are provided on a request-targeted root offer, the units are recorded but no holds are created (holds_deferred=true); holds are created when the counter-offer includes unit_ids.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -479,7 +479,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_counter_offer',
-    description: 'Counter an existing offer. Unit-target threads require unit_ids (existing behavior). Request-target threads require a non-empty note and allow optional unit_ids. Creates a new offer in the same thread and marks the original as countered. Counter notes must not include contact info.',
+    description: 'Counter an existing offer. Unit-target threads require unit_ids (existing behavior). Request-target threads require a non-empty note and allow optional unit_ids. Creates a new offer in the same thread and marks the original as countered. Counter notes must not include contact info. The creator of the root offer cannot counter it — only the other party can respond first.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -534,7 +534,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_reveal_contact',
-    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted and the counterparty has configured an email.',
+    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted and the counterparty has configured an email. For note-only deals (no unit_ids), the response includes settlement_guidance reminding both parties to verify terms from offer notes before settling off-platform.',
     inputSchema: {
       type: 'object' as const,
       properties: { offer_id: { type: 'string' as const, description: 'UUID of the mutually accepted offer.' } },
@@ -545,11 +545,12 @@ const TOOLS = [
   },
   {
     name: 'fabric_list_offers',
-    description: 'List offers you have made or received. Filter by role to see sent offers (made) or incoming offers (received).',
+    description: 'List offers you have made or received. Filter by role to see sent offers (made) or incoming offers (received). Optionally filter by request_id to see all offers targeting a specific request.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         role: { type: 'string' as const, enum: ['made', 'received'], description: 'Filter: "made" for offers you sent, "received" for offers sent to you.' },
+        request_id: { type: 'string' as const, description: 'Optional UUID — filter offers targeting this request.' },
         cursor: { type: ['string', 'null'] as const, description: 'Pagination cursor.' },
         limit: { type: 'number' as const, description: 'Results per page (default 20).' },
       },
@@ -1134,6 +1135,7 @@ async function executeTool(
   if (name === 'fabric_list_offers') {
     const params = new URLSearchParams();
     params.set('role', String(args.role));
+    if (typeof args.request_id === 'string') params.set('request_id', args.request_id);
     if (typeof args.cursor === 'string') params.set('cursor', args.cursor);
     if (typeof args.limit === 'number') params.set('limit', String(args.limit));
     const qs = params.toString();
@@ -1303,6 +1305,7 @@ const QUICKSTART_PROMPT = [
   '',
   '== Step 6: Complete the Trade ==',
   'After mutual acceptance, call fabric_reveal_contact to get counterparty contact info.',
+  'For note-only deals (no unit_ids attached), the offer and reveal responses include note_only_deal=true and settlement_guidance. Verify all terms from the notes before settling.',
   'Settlement happens off-platform between you and the counterparty.',
   '',
   '== Credits & Billing ==',

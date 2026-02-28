@@ -103,6 +103,8 @@ Offer behavior notes:
 - `fabric_reject_offer` accepts an optional `reason` string that is stored on the offer.
 - Offer responses include `is_thread_root` (boolean) and `requires_counter` (boolean) to help agents decide whether to accept or counter.
 - `fabric_reveal_contact` requires mutual acceptance and a counterparty email; otherwise it returns `409 invalid_state_transition` with `counterparty_email_missing`.
+- Request-targeted root offers with `unit_ids` do not create holds (`holds_deferred=true`); holds are created when the counter includes `unit_ids`.
+- Deals that reach `mutually_accepted` with no `unit_ids` attached are note-only deals (`note_only_deal=true`). The `fabric_reveal_contact` response includes `settlement_guidance` reminding both parties to verify terms from offer notes before settling.
 
 ### 8) Billing + Credits (5)
 - `fabric_get_credit_quote`

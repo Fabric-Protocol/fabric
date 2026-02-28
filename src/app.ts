@@ -1862,8 +1862,10 @@ export function buildApp() {
       return reply.status(result.status === 422 ? 422 : 502).send(errorEnvelope(result.code, result.message));
     }
     const payment = result as nowPayments.CryptoPaymentResult;
-    const sendAmount = Number(payment.pay_amount);
-    const effectiveSendAmount = Number.isFinite(sendAmount) && sendAmount > 0 ? sendAmount : payment.pay_amount;
+    const parsedPayAmount = Number(payment.pay_amount);
+    const effectiveSendAmount = Number.isFinite(parsedPayAmount) && parsedPayAmount > 0
+      ? parsedPayAmount
+      : priceDollars;
     await repo.insertCryptoPayment(
       parsed.data.node_id,
       payment.payment_id,
@@ -2006,7 +2008,11 @@ export function buildApp() {
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
     return out;
   });
-  app.post('/v1/units/:unit_id/unpublish', async (req) => fabricService.unpublish('units', (req as AuthedRequest).nodeId!, (req.params as any).unit_id));
+  app.post('/v1/units/:unit_id/unpublish', async (req, reply) => {
+    const out = await fabricService.unpublish('units', (req as AuthedRequest).nodeId!, (req.params as any).unit_id);
+    if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Unit not found'));
+    return out;
+  });
   app.post('/v1/requests/:request_id/publish', async (req, reply) => {
     const out = await fabricService.publish('requests', (req as AuthedRequest).nodeId!, (req.params as any).request_id);
     if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Request not found'));
@@ -2014,7 +2020,11 @@ export function buildApp() {
     if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
     return out;
   });
-  app.post('/v1/requests/:request_id/unpublish', async (req) => fabricService.unpublish('requests', (req as AuthedRequest).nodeId!, (req.params as any).request_id));
+  app.post('/v1/requests/:request_id/unpublish', async (req, reply) => {
+    const out = await fabricService.unpublish('requests', (req as AuthedRequest).nodeId!, (req.params as any).request_id);
+    if ((out as any).notFound) return reply.status(404).send(errorEnvelope('not_found', 'Request not found'));
+    return out;
+  });
 
   app.post('/v1/search/listings', async (req, reply) => {
     const disabledFeatures = detectDisabledSearchFeatures(req.body);
@@ -2168,7 +2178,7 @@ export function buildApp() {
 
   app.get('/v1/offers', async (req) => {
     const q = req.query as any;
-    return (fabricService as any).listOffers((req as AuthedRequest).nodeId!, q.role === 'received' ? 'received' : 'made', Number(q.limit ?? 20), q.cursor ?? null);
+    return (fabricService as any).listOffers((req as AuthedRequest).nodeId!, q.role === 'received' ? 'received' : 'made', Number(q.limit ?? 20), q.cursor ?? null, q.request_id ?? null);
   });
   app.get('/v1/offers/:offer_id', async (req, reply) => {
     const out = await (fabricService as any).getOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
