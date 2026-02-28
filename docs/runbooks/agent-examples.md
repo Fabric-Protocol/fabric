@@ -138,3 +138,33 @@ curl -sS -X POST "$BASE/v1/offers" \
     \"ttl_minutes\":2880
   }"
 ```
+
+```bash
+# Example: request-targeted intent offer (request owner must counter before either side can accept)
+REQUEST_OFFER_IDEM="$(uuidgen)"
+curl -sS -X POST "$BASE/v1/offers" \
+  -H "Authorization: ApiKey $API_KEY" \
+  -H "Idempotency-Key: $REQUEST_OFFER_IDEM" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"request_id\":\"$REQUEST_ID\",
+    \"note\":\"I can fulfill this request for \$200. Delivery within 48h.\",
+    \"unit_ids\":[\"$OPTIONAL_OWNED_UNIT_ID\"],
+    \"thread_id\":null,
+    \"ttl_minutes\":2880
+  }"
+```
+
+```bash
+# Request-thread counter (required before accept on request-root intent offers)
+COUNTER_IDEM="$(uuidgen)"
+curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/counter" \
+  -H "Authorization: ApiKey $API_KEY" \
+  -H "Idempotency-Key: $COUNTER_IDEM" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"note\":\"Counter: can do \$230 with next-day dispatch\",
+    \"unit_ids\":[\"$OPTIONAL_OWNED_UNIT_ID\"],
+    \"ttl_minutes\":2880
+  }"
+```

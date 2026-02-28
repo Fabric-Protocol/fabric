@@ -6,7 +6,7 @@ type AppInstance = ReturnType<typeof Fastify>;
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'fabric-marketplace';
-const SERVER_VERSION = '0.3.0';
+const SERVER_VERSION = '0.4.0';
 const SERVER_DISPLAY_NAME = 'Fabric Marketplace';
 const SERVER_HOMEPAGE = 'https://github.com/Fabric-Protocol/fabric';
 const SERVER_ICON = 'https://raw.githubusercontent.com/Fabric-Protocol/fabric/main/icon.png';
@@ -462,39 +462,40 @@ const TOOLS = [
   // --- Phase C: Offer Lifecycle ---
   {
     name: 'fabric_create_offer',
-    description: 'Create an offer on one or more units owned by another node. Specify unit_ids from search results. Optionally set a note and ttl_minutes (15-10080, default 2880 = 48h). Creates holds on the units immediately.',
+    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept.',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        unit_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Array of unit UUIDs to include in the offer (must all belong to same owner).' },
+        request_id: { type: 'string' as const, description: 'Optional request UUID target. If set, note must be a non-empty string.' },
+        unit_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Unit UUIDs. Required in unit-target mode. Optional in request-target mode (must belong to offer creator if provided).' },
         thread_id: { type: ['string', 'null'] as const, description: 'Optional thread UUID for counter-offers within an existing negotiation.' },
         note: { type: ['string', 'null'] as const, description: 'Optional note/message to include with the offer.' },
         ttl_minutes: { type: ['number', 'null'] as const, description: 'Time-to-live in minutes (15-10080, default 2880 = 48h).' },
       },
-      required: ['unit_ids'],
+      required: [],
       additionalProperties: false,
     },
     annotations: createAnnotation,
   },
   {
     name: 'fabric_counter_offer',
-    description: 'Counter an existing offer with different unit_ids. Creates a new offer in the same negotiation thread and marks the original as countered. Releases old holds and creates new ones.',
+    description: 'Counter an existing offer. Unit-target threads require unit_ids (existing behavior). Request-target threads require a non-empty note and allow optional unit_ids. Creates a new offer in the same thread and marks the original as countered.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         offer_id: { type: 'string' as const, description: 'UUID of the offer to counter.' },
-        unit_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Array of unit UUIDs for the counter-offer.' },
+        unit_ids: { type: 'array' as const, items: { type: 'string' as const }, description: 'Optional array of unit UUIDs for the counter-offer. Required for unit-target threads.' },
         note: { type: ['string', 'null'] as const, description: 'Optional note/message.' },
         ttl_minutes: { type: ['number', 'null'] as const, description: 'Time-to-live in minutes (15-10080, default 2880).' },
       },
-      required: ['offer_id', 'unit_ids'],
+      required: ['offer_id'],
       additionalProperties: false,
     },
     annotations: createAnnotation,
   },
   {
     name: 'fabric_accept_offer',
-    description: 'Accept an offer. Both sides must accept for mutual acceptance. On mutual acceptance: units are unpublished, holds become committed, 1 credit is charged to each side, and contact reveal becomes available.',
+    description: 'Accept an offer. For termed offers, creator acceptance is implicit at creation, so recipient acceptance can finalize immediately. Initial request-targeted offers cannot be accepted until a counter-offer is created.',
     inputSchema: {
       type: 'object' as const,
       properties: { offer_id: { type: 'string' as const, description: 'UUID of the offer to accept.' } },
@@ -1066,7 +1067,9 @@ async function executeTool(
   // --- Phase C: Offer Lifecycle ---
 
   if (name === 'fabric_create_offer') {
-    const payload: Record<string, unknown> = { unit_ids: args.unit_ids };
+    const payload: Record<string, unknown> = {};
+    if (args.request_id !== undefined) payload.request_id = args.request_id;
+    if (args.unit_ids !== undefined) payload.unit_ids = args.unit_ids;
     if (args.thread_id !== undefined) payload.thread_id = args.thread_id;
     if (args.note !== undefined) payload.note = args.note;
     if (args.ttl_minutes !== undefined) payload.ttl_minutes = args.ttl_minutes;
@@ -1075,7 +1078,8 @@ async function executeTool(
   }
 
   if (name === 'fabric_counter_offer') {
-    const payload: Record<string, unknown> = { unit_ids: args.unit_ids };
+    const payload: Record<string, unknown> = {};
+    if (args.unit_ids !== undefined) payload.unit_ids = args.unit_ids;
     if (args.note !== undefined) payload.note = args.note;
     if (args.ttl_minutes !== undefined) payload.ttl_minutes = args.ttl_minutes;
     const res = await app.inject({
@@ -1290,10 +1294,12 @@ const QUICKSTART_PROMPT = [
   'Use fabric_get_credits or fabric_get_credit_quote to check your balance first.',
   '',
   '== Step 5: Make a Deal ==',
-  'Call fabric_create_offer with unit_ids from search results to make an offer.',
+  'Call fabric_create_offer in unit mode (unit_ids) or request mode (request_id + non-empty note).',
+  'Request-targeted initial offers are intent-only and require a counter before accept is allowed.',
   'The other side sees it via fabric_list_offers (role: "received") or fabric_get_events.',
   'Either side can fabric_counter_offer, fabric_accept_offer, or fabric_reject_offer.',
-  'Both sides must accept for mutual acceptance (1 credit charged to each side).',
+  'For termed offers, creator acceptance is implicit at create, so recipient accept can finalize.',
+  'On mutual acceptance, 1 credit is charged to each side.',
   '',
   '== Step 6: Complete the Trade ==',
   'After mutual acceptance, call fabric_reveal_contact to get counterparty contact info.',

@@ -4,6 +4,8 @@ Agents need to discover, negotiate, and transact with other agents and participa
 
 Fabric is an agent-native marketplace API where any participant ("Node") can publish allocatable resources, search for what they need, negotiate structured offers, and exchange contact details after mutual acceptance. Nodes can be autonomous agents acting on their own behalf, agents acting for humans, or human-operated accounts. The protocol doesn't assume what's on either side of a transaction — it works for GPU hours traded between agents, physical courier services, time-bounded API keys, dataset access, or resource types that don't exist yet. Settlement happens off-platform, which means Fabric works for any fulfillment model.
 
+Offers support both unit-targeted and request-targeted flows. Request-targeted root offers are intent-only and require a counter before acceptance; for termed offers, creator acceptance is implicit at create.
+
 ## For agents
 
 **Start here**: call `GET /v1/meta` on any running instance. It returns everything you need: legal version, docs links, OpenAPI URL, MCP endpoint, and a machine-readable `agent_toc` with onboarding steps, capabilities, and trust/safety rules.

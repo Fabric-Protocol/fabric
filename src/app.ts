@@ -826,9 +826,12 @@ function idempotencyPayloadForHash(req: FastifyRequest, idemPath: string): unkno
   if (req.method !== 'POST' || idemPath !== '/v1/offers') return body;
   if (!body || typeof body !== 'object' || Array.isArray(body)) return body;
 
-  // Treat omitted thread_id the same as explicit null for create-offer retries.
+  // Treat omitted nullable fields the same as explicit null for create-offer retries.
   const normalized: Record<string, unknown> = { ...(body as Record<string, unknown>) };
   if (!Object.prototype.hasOwnProperty.call(normalized, 'thread_id')) normalized.thread_id = null;
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'note')) normalized.note = null;
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'request_id')) normalized.request_id = null;
+  if (!Object.prototype.hasOwnProperty.call(normalized, 'unit_ids')) normalized.unit_ids = null;
   return sortForStableJson(normalized);
 }
 
@@ -2142,8 +2145,25 @@ export function buildApp() {
     return out;
   });
   app.post('/v1/offers', async (req, reply) => {
-    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), thread_id: z.string().nullable().optional(), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
+    const parsed = z.object({
+      unit_ids: z.array(z.string()).min(1).optional(),
+      request_id: z.string().optional(),
+      thread_id: z.string().nullable().optional(),
+      note: z.string().nullable().optional(),
+      ttl_minutes: z.number().int().optional(),
+    }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const hasRequestId = typeof parsed.data.request_id === 'string' && parsed.data.request_id.trim().length > 0;
+    if (parsed.data.request_id !== undefined && !hasRequestId) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'request_id_required' }));
+    }
+    if (hasRequestId) {
+      if (typeof parsed.data.note !== 'string' || parsed.data.note.trim().length === 0) {
+        return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'request_note_required' }));
+      }
+    } else if (!Array.isArray(parsed.data.unit_ids) || parsed.data.unit_ids.length === 0) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'unit_ids_required' }));
+    }
     if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, OFFER_TTL_MINUTES_MIN, OFFER_TTL_MINUTES_MAX)) {
       return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
         reason: 'ttl_minutes_out_of_range',
@@ -2151,14 +2171,28 @@ export function buildApp() {
         max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
       }));
     }
-    const out = await (fabricService as any).createOffer((req as AuthedRequest).nodeId!, parsed.data.unit_ids, parsed.data.thread_id, parsed.data.note, parsed.data.ttl_minutes);
+    const out = await (fabricService as any).createOffer(
+      (req as AuthedRequest).nodeId!,
+      {
+        unit_ids: parsed.data.unit_ids,
+        request_id: hasRequestId ? parsed.data.request_id : undefined,
+        thread_id: parsed.data.thread_id,
+        note: parsed.data.note ?? null,
+        ttl_minutes: parsed.data.ttl_minutes,
+      },
+    );
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: out.validationError }));
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/counter', async (req, reply) => {
-    const parsed = z.object({ unit_ids: z.array(z.string()).min(1), note: z.string().nullable(), ttl_minutes: z.number().int().optional() }).safeParse(req.body);
+    const parsed = z.object({
+      unit_ids: z.array(z.string()).min(1).optional(),
+      note: z.string().nullable().optional(),
+      ttl_minutes: z.number().int().optional(),
+    }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (isTtlMinutesOutOfRange(parsed.data.ttl_minutes, OFFER_TTL_MINUTES_MIN, OFFER_TTL_MINUTES_MAX)) {
       return reply.status(400).send(errorEnvelope('validation_error', 'Invalid payload', {
@@ -2167,10 +2201,20 @@ export function buildApp() {
         max_ttl_minutes: OFFER_TTL_MINUTES_MAX,
       }));
     }
-    const out = await (fabricService as any).counterOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, parsed.data.unit_ids, parsed.data.note, parsed.data.ttl_minutes);
+    const out = await (fabricService as any).counterOffer(
+      (req as AuthedRequest).nodeId!,
+      (req.params as any).offer_id,
+      {
+        unit_ids: parsed.data.unit_ids,
+        note: parsed.data.note ?? null,
+        ttl_minutes: parsed.data.ttl_minutes,
+      },
+    );
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
+    if (out.validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: out.validationError }));
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
+    if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
@@ -2180,7 +2224,10 @@ export function buildApp() {
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
-    if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition'));
+    if (out.conflict) {
+      const details = typeof out.conflict === 'string' ? { reason: out.conflict } : {};
+      return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition', details));
+    }
     return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {

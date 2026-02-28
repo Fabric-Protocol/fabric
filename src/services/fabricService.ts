@@ -708,6 +708,7 @@ export async function offerSummary(offer: any) {
     thread_id: offer.thread_id,
     from_node_id: offer.from_node_id,
     to_node_id: offer.to_node_id,
+    request_id: offer.request_id ?? null,
     status: offer.status,
     note: offer.note ?? null,
     accepted_by_from_at: offer.accepted_by_from_at,
@@ -739,28 +740,84 @@ const PREPURCHASE_DAILY_SEARCH_LIMIT = 20;
 const PREPURCHASE_DAILY_OFFER_CREATE_LIMIT = 3;
 const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
 
+type CreateOfferPayload = {
+  unit_ids?: string[];
+  request_id?: string;
+  thread_id?: string | null;
+  note?: string | null;
+  ttl_minutes?: number;
+};
+
+type CreateOfferOptions = {
+  skipPrepurchaseDailyLimit?: boolean;
+  implicitAcceptedByFrom?: boolean;
+  toNodeIdOverride?: string;
+};
+
 (fabricService as any).createOffer = async (
   nodeId: string,
-  unitIds: string[],
-  threadId: string | null,
-  note: string | null,
-  ttlMinutes: number | undefined,
-  options: { skipPrepurchaseDailyLimit?: boolean } = {},
+  payload: CreateOfferPayload,
+  options: CreateOfferOptions = {},
 ) => {
   if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
-  const owners = await repo.getUnitsOwners(unitIds);
-  if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
-  const uniqueOwners = new Set(owners.map((u) => u.node_id));
-  if (uniqueOwners.size !== 1) return { conflict: 'multiple_owners' };
-  const ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
-  const toNodeId = owners[0].node_id;
+
+  const requestId = nonEmptyString(payload.request_id);
+  const unitIds = Array.isArray(payload.unit_ids) ? payload.unit_ids : [];
+  const isRequestTarget = requestId !== null;
+  if (!isRequestTarget && unitIds.length === 0) return { validationError: 'unit_ids_required' };
+
+  let toNodeId = '';
+  let offerUnitId: string | null = null;
+  let offerRequestId: string | null = null;
+  let ownerByUnitId = new Map<string, string>();
+
+  if (isRequestTarget) {
+    const request = await repo.getRequestOfferTarget(requestId);
+    if (!request) return { conflict: 'invalid_request' };
+    if (!request.published_at) return { conflict: 'request_not_published' };
+    if (request.expires_at && new Date(request.expires_at).getTime() <= Date.now()) return { conflict: 'request_expired' };
+    const nextToNodeId = options.toNodeIdOverride ?? request.node_id;
+    if (nextToNodeId === nodeId) return { conflict: 'self_offer' };
+    toNodeId = nextToNodeId;
+    offerRequestId = request.id;
+
+    if (unitIds.length > 0) {
+      const owners = await repo.getUnitsOwners(unitIds);
+      if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
+      ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
+      if (owners.some((owner) => owner.node_id !== nodeId)) return { conflict: 'invalid_units_owner' };
+    }
+
+    const noteText = typeof payload.note === 'string' ? payload.note.trim() : '';
+    if (noteText.length === 0) return { validationError: 'request_note_required' };
+  } else {
+    const owners = await repo.getUnitsOwners(unitIds);
+    if (owners.length !== unitIds.length) return { conflict: 'invalid_units' };
+    const uniqueOwners = new Set(owners.map((u) => u.node_id));
+    if (uniqueOwners.size !== 1) return { conflict: 'multiple_owners' };
+    ownerByUnitId = new Map(owners.map((u) => [u.id, u.node_id]));
+    toNodeId = owners[0].node_id;
+    offerUnitId = unitIds[0];
+  }
+
   if (!options.skipPrepurchaseDailyLimit) {
     const prepurchaseDailyLimit = await prePurchaseOfferCreateLimit(nodeId);
     if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
   }
-  const th = threadId ?? crypto.randomUUID();
-  const offerExpiresAt = offerExpiresAtIso(ttlMinutes);
-  const offer = await repo.createOffer(nodeId, toNodeId, unitIds[0], th, note, offerExpiresAt);
+
+  const implicitAcceptedByFrom = options.implicitAcceptedByFrom ?? !isRequestTarget;
+  const th = payload.thread_id ?? crypto.randomUUID();
+  const offerExpiresAt = offerExpiresAtIso(payload.ttl_minutes);
+  const offer = await repo.createOffer({
+    fromNodeId: nodeId,
+    toNodeId,
+    unitId: offerUnitId,
+    requestId: offerRequestId,
+    threadId: th,
+    note: payload.note ?? null,
+    expiresAt: offerExpiresAt,
+    implicitAcceptedByFrom,
+  });
   const offerExpiresAtIsoValue = toIsoString(offer.expires_at) ?? offerExpiresAt;
   const held: string[] = [];
   const unheld: string[] = [];
@@ -794,15 +851,20 @@ const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
 (fabricService as any).counterOffer = async (
   nodeId: string,
   offerId: string,
-  unitIds: string[],
-  note: string | null,
-  ttlMinutes: number | undefined,
+  payload: { unit_ids?: string[]; note?: string | null; ttl_minutes?: number },
 ) => {
   if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
   const prior = await repo.getOffer(offerId);
   if (!prior) return { notFound: true };
   if (![prior.from_node_id, prior.to_node_id].includes(nodeId)) return { notFound: true };
+  const isRequestThread = Boolean(prior.request_id);
+  const unitIds = Array.isArray(payload.unit_ids) ? payload.unit_ids : undefined;
+  if (!isRequestThread && (!unitIds || unitIds.length === 0)) return { validationError: 'unit_ids_required' };
+  if (isRequestThread) {
+    const noteText = typeof payload.note === 'string' ? payload.note.trim() : '';
+    if (noteText.length === 0) return { validationError: 'request_counter_note_required' };
+  }
   const prepurchaseDailyLimit = await prePurchaseOfferCreateLimit(nodeId);
   if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
   await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
@@ -815,7 +877,32 @@ const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
     toNodeId: prior.to_node_id,
     payload: { status: 'countered', thread_id: prior.thread_id },
   });
-  const next = await (fabricService as any).createOffer(nodeId, unitIds, prior.thread_id, note, ttlMinutes, { skipPrepurchaseDailyLimit: true });
+  const next = isRequestThread
+    ? await (fabricService as any).createOffer(
+      nodeId,
+      {
+        request_id: prior.request_id ?? undefined,
+        unit_ids: unitIds,
+        thread_id: prior.thread_id,
+        note: payload.note ?? null,
+        ttl_minutes: payload.ttl_minutes,
+      },
+      {
+        skipPrepurchaseDailyLimit: true,
+        implicitAcceptedByFrom: true,
+        toNodeIdOverride: prior.from_node_id === nodeId ? prior.to_node_id : prior.from_node_id,
+      },
+    )
+    : await (fabricService as any).createOffer(
+      nodeId,
+      {
+        unit_ids: unitIds,
+        thread_id: prior.thread_id,
+        note: payload.note ?? null,
+        ttl_minutes: payload.ttl_minutes,
+      },
+      { skipPrepurchaseDailyLimit: true },
+    );
   return next;
 };
 
@@ -825,14 +912,21 @@ const PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT = 1;
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
+  if (offer.request_id) {
+    const isRoot = await repo.isOfferThreadRoot(offerId);
+    if (isRoot) return { conflict: 'counter_required_for_request_offer' };
+  }
+  const byFrom = offer.from_node_id === nodeId;
+  if (byFrom && offer.accepted_by_from_at && (offer.status === 'pending' || offer.status === 'accepted_by_a' || offer.status === 'mutually_accepted')) {
+    return { offer: await offerSummary(offer) };
+  }
   if (offer.status !== 'pending' && offer.status !== 'accepted_by_a' && offer.status !== 'accepted_by_b') return { conflict: true };
   const prepurchaseDailyLimit = await prePurchaseOfferAcceptLimit(nodeId);
   if (prepurchaseDailyLimit) return { prepurchaseDailyLimit };
-  if (offer.to_node_id === nodeId) {
+  if (!offer.request_id && offer.to_node_id === nodeId) {
     const holdLock = await ensureSellerOwnedHolds(offerId, nodeId, toIsoString(offer.expires_at) ?? offerExpiresAtIso(undefined));
     if (!holdLock.ok) return { conflict: true };
   }
-  const byFrom = offer.from_node_id === nodeId;
   if (byFrom) {
     if (offer.accepted_by_to_at) {
       const finalized = await repo.finalizeOfferMutualAcceptanceWithFees(

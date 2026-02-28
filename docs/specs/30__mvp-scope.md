@@ -168,6 +168,12 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 - Reject Offer: allowed for authenticated recipients (including non-subscribers).
 - Free users may create/publish Requests.
 
+### Offer targeting modes (locked)
+- `POST /v1/offers` supports exactly one target mode per request:
+  - Unit-targeted: `unit_ids` required.
+  - Request-targeted: `request_id` required, non-empty `note` required, `unit_ids` optional.
+- Initial request-targeted offers are intent-only and cannot be accepted until a counter-offer exists.
+
 ### Offer status model (locked)
 - `pending`
 - `accepted_by_a`
@@ -181,6 +187,16 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 ### Counter-offers (locked)
 - Counter creates a **new Offer** linked by `thread_id`.
 - Prior offer becomes `countered`.
+- Unit-thread counters require `unit_ids`.
+- Request-thread counters require non-empty `note`; `unit_ids` are optional.
+
+### Acceptance semantics (locked)
+- Creator acceptance is implicit at create for termed offers:
+  - unit-targeted creates
+  - request-thread counters
+- If creator calls `/accept` on an offer already implicitly accepted by creator, return `200` no-op with current offer.
+- Recipient acceptance can finalize directly when creator acceptance is already present.
+- Root request-targeted offers return `409 invalid_state_transition` with `details.reason=counter_required_for_request_offer` on accept.
 
 ### Reservation / holds (locked)
 - Holds exist as a separate table.
@@ -188,6 +204,7 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 - Holds reserve **specific Unit IDs**.
 - Partial holds allowed:
   - Offer response includes `held_unit_ids` and `unheld_unit_ids`.
+- Request-targeted offers without `unit_ids` create no holds.
 - Hold TTL = 48 hours; auto-release on expiry.
 - Release on: reject/cancel/counter/expire.
 - Commit on: mutual accept (hold status `committed`).

@@ -595,7 +595,7 @@ export const openApiDocument = {
           '403': { description: 'Forbidden' },
           '404': { description: 'Offer not found' },
           '402': { description: 'Not enough credits' },
-          '409': { description: 'Invalid state transition' },
+          '409': { description: 'Invalid state transition (includes counter_required_for_request_offer for request-root offers)' },
           '422': { description: 'Legal assent required' },
           '429': { description: 'Pre-purchase daily limit exceeded' },
         },
@@ -806,6 +806,7 @@ export const openApiDocument = {
       OfferCreateRequest: {
         type: 'object',
         properties: {
+          request_id: { type: 'string' },
           unit_ids: {
             type: 'array',
             items: { type: 'string' },
@@ -815,7 +816,10 @@ export const openApiDocument = {
           note: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
-        required: ['unit_ids', 'note'],
+        oneOf: [
+          { required: ['unit_ids'] },
+          { required: ['request_id', 'note'] },
+        ],
       },
       OfferCounterRequest: {
         type: 'object',
@@ -828,7 +832,6 @@ export const openApiDocument = {
           note: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
-        required: ['unit_ids', 'note'],
       },
       RequestCreateRequest: {
         type: 'object',
@@ -921,6 +924,7 @@ export const openApiDocument = {
           thread_id: { type: 'string', format: 'uuid' },
           from_node_id: { type: 'string', format: 'uuid' },
           to_node_id: { type: 'string', format: 'uuid' },
+          request_id: { type: 'string', format: 'uuid', nullable: true },
           status: { type: 'string' },
           note: { type: 'string', nullable: true },
           expires_at: { type: 'string' },
@@ -935,7 +939,7 @@ export const openApiDocument = {
           version: { type: 'integer' },
           unit_ids: { type: 'array', items: { type: 'string' } },
         },
-        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids'],
+        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'request_id', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids'],
       },
       OfferResponse: {
         type: 'object',

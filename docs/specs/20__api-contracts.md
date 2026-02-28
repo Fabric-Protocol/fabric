@@ -1365,6 +1365,8 @@ id, thread_id
 
 from_node_id, to_node_id
 
+request_id
+
 status
 
 expires_at (server-computed)
@@ -1381,7 +1383,9 @@ Targeting (LOCKED):
 
 Offers target exactly one: unit_id XOR request_id.
 
-MVP offer endpoints below are unit-based via unit_ids array.
+`POST /v1/offers` supports two request shapes:
+- unit-targeted mode: `unit_ids` required.
+- request-targeted mode: `request_id` required and `note` must be non-empty (`unit_ids` optional).
 
 Pre-purchase daily limits (until first purchase is recorded in Stripe/ledger):
 
@@ -1408,13 +1412,25 @@ None
 
 Purpose
 
-Create an offer referencing exact Unit IDs (single counterparty).
+Create an offer in exactly one target mode:
+- unit-targeted mode references exact Unit IDs (single counterparty).
+- request-targeted mode references one published Request and starts an intent thread.
 
 Request
+Unit-targeted shape:
 {
   "unit_ids": ["uuid"],
   "thread_id": "uuid|null",
   "note": "string|null",
+  "ttl_minutes": 2880
+}
+
+Request-targeted shape:
+{
+  "request_id": "uuid",
+  "note": "string (non-empty)",
+  "unit_ids": ["uuid"], // optional, if present must all belong to creator
+  "thread_id": "uuid|null",
   "ttl_minutes": 2880
 }
 
@@ -1423,13 +1439,23 @@ Response 200
 
 Rules / side effects
 
-Server derives to_node_id from unit ownership; reject if units span multiple owners.
+General:
+- Caller must submit exactly one mode (unit-target or request-target); mixed/invalid shapes return `422 validation_error`.
+- If thread_id is present, this is a counter-offer within an existing thread.
+- `ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
 
-Creates holds immediately (partial holds allowed); returns held/unheld unit ids and expiry.
+Unit-target mode:
+- Server derives `to_node_id` from unit ownership; reject if units span multiple owners.
+- Creates holds immediately (partial holds allowed); returns held/unheld unit ids and expiry.
+- Creator acceptance is implicit at create for termed offers (`accepted_by_from_at` is set at creation).
 
-If thread_id is present, this is a counter-offer within an existing thread.
-
-`ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
+Request-target mode:
+- Server validates request exists, is published, and is not expired/deleted; derives `to_node_id` from request owner.
+- Self-offers are rejected.
+- `note` is required and must be non-empty.
+- If `unit_ids` are provided, they must all belong to the creator; holds apply only to those creator-owned unit ids.
+- If no `unit_ids` are provided, no holds are created.
+- Initial request-targeted offers are intent-only and cannot be accepted until a counter-offer exists.
 
 Errors
 
@@ -1465,7 +1491,11 @@ Purpose
 Create a new offer in the same thread; mark the original as countered.
 
 Request
+Unit-thread counter:
 { "unit_ids": ["uuid"], "note": "string|null", "ttl_minutes": 2880 }
+
+Request-thread counter:
+{ "note": "string (non-empty)", "unit_ids": ["uuid"], "ttl_minutes": 2880 }
 
 Rules / side effects
 
@@ -1473,7 +1503,14 @@ Creates a new offer in same thread_id.
 
 Sets original offer status to countered.
 
-Releases original holds; creates new holds for counter-offer.
+Releases original holds; creates new holds for counter-offer when `unit_ids` are provided.
+
+Thread-specific validation:
+- Unit-thread counters require `unit_ids`.
+- Request-thread counters require non-empty `note`; `unit_ids` are optional.
+- Request-thread counters retain the thread request target (`request_id`).
+
+Creator acceptance is implicit at create for termed counters (`accepted_by_from_at` is set at creation).
 
 `ttl_minutes` is optional. If omitted, default is 2880 minutes (48h). If provided, it must be an integer in [15, 10080]. `offer.expires_at` is server-computed and returned.
 
@@ -1515,9 +1552,14 @@ Request
 
 Rules / side effects
 
-pending → accepted_by_a or accepted_by_b based on caller side.
+For initial request-targeted root offers, accept is blocked:
+- `409 invalid_state_transition` with `details.reason="counter_required_for_request_offer"`.
 
-If other side already accepted → mutually_accepted.
+For other eligible offers:
+- Creator acceptance may already be implicit at create (termed offers).
+- If creator calls accept again after implicit acceptance, return 200 no-op with current offer.
+- Otherwise `pending` transitions to `accepted_by_a` or `accepted_by_b` based on caller side.
+- If the counterparty has already accepted (or was implicitly accepted), a single accept call finalizes to `mutually_accepted`.
 
 On mutually_accepted, holds become committed (units remain unavailable).
 

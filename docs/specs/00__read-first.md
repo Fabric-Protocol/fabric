@@ -36,7 +36,7 @@ If any requirement conflicts, resolve in this order:
 - **Projection**: deterministic derived public record from canonical private objects when explicitly published (e.g., `public_listings`, `public_requests`).
 - **Public Listing / Public Request**: allowlisted public projection payload derived from Unit/Request. Never includes precise geo or contact.
 - **Search**: authenticated, credit-metered query over projections (two endpoints: listings vs requests). Pre-purchase daily limits apply (3/day combined) until first purchase.
-- **Offer**: structured negotiation action targeting either a Unit or a Request (MVP offers are unit-based via `unit_ids` lines); includes state machine, holds summary, concurrency version.
+- **Offer**: structured negotiation action targeting either a Unit or a Request (`POST /v1/offers` supports unit-target mode and request-target mode); includes state machine, holds summary, concurrency version.
 - **Hold**: reservation record created on offer creation (partial holds allowed); released/committed/expired by offer lifecycle rules.
 - **Contact reveal**: controlled handoff returning contact fields only after mutual acceptance; caller must satisfy legal/auth/rate-limit controls.
 - **Credits**: metering currency; primarily charged on search and certain metered reads. Ledger is authoritative.

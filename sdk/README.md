@@ -10,7 +10,7 @@ This is a minimal in-repo SDK under `/sdk`. It is not published to npm yet.
 - Core methods:
   - `me()` -> `GET /v1/me`
   - `searchListings()` -> `POST /v1/search/listings`
-  - `createOffer()` -> `POST /v1/offers`
+  - `createOffer()` -> `POST /v1/offers` (unit-targeted or request-targeted)
 - Recovery helpers:
   - `recoveryStart()` -> `POST /v1/recovery/start`
   - `recoveryComplete()` -> `POST /v1/recovery/complete`
@@ -45,6 +45,15 @@ const me = await client.me();
 await client.createOffer(
   { unit_ids: ['...'], thread_id: null, note: null },
   { idempotencyKey: 'my-fixed-key' },
+);
+```
+
+Request-targeted offer example:
+
+```ts
+await client.createOffer(
+  { request_id: '...', note: 'I can fulfill this request for $25.', unit_ids: ['optional-owned-unit-id'] },
+  { idempotencyKey: 'my-fixed-key-2' },
 );
 ```
 

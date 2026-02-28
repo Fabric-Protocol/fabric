@@ -372,6 +372,8 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const offerSchema = body.components?.schemas?.Offer ?? {};
   assert.equal(Array.isArray(offerSchema.required), true);
   assert.equal(offerSchema.required.includes('expires_at'), true);
+  assert.equal(offerSchema.required.includes('request_id'), true);
+  assert.equal(offerSchema.properties?.request_id?.nullable, true);
   const eventsParams = body.paths?.['/v1/events']?.get?.parameters ?? [];
   const sinceParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsSinceQuery');
   const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
@@ -1230,22 +1232,6 @@ test('search works with credits only (no subscriber gate) and offer progression 
   assert.equal(search.json().budget.breakdown.broadening_cost, 0);
 
   const sellerUnit = await repo.createResource('units', sellerNodeId, unitPayload('No-sub offer unit', 'no-sub-offer-scope'));
-  const created = await app.inject({
-    method: 'POST',
-    url: '/v1/offers',
-    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-create' },
-    payload: { unit_ids: [sellerUnit.id], thread_id: null, note: null },
-  });
-  assert.equal(created.statusCode, 200);
-  const firstOfferId = created.json().offer.id;
-
-  const counter = await app.inject({
-    method: 'POST',
-    url: `/v1/offers/${firstOfferId}/counter`,
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'sg-offer-counter-seller' },
-    payload: { unit_ids: [sellerUnit.id], note: null },
-  });
-  assert.equal(counter.statusCode, 200);
 
   const acceptedFlowOffer = await app.inject({
     method: 'POST',
@@ -1272,6 +1258,23 @@ test('search works with credits only (no subscriber gate) and offer progression 
   });
   assert.equal(buyerAccept.statusCode, 200);
   assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'sg-offer-create' },
+    payload: { unit_ids: [sellerUnit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const firstOfferId = created.json().offer.id;
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${firstOfferId}/counter`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'sg-offer-counter-seller' },
+    payload: { unit_ids: [sellerUnit.id], note: null },
+  });
+  assert.equal(counter.statusCode, 200);
 
   const reveal = await app.inject({
     method: 'POST',
@@ -1306,6 +1309,169 @@ test('POST /v1/offers accepts omitted thread_id and generates one', async () => 
   const offer = created.json().offer;
   assert.ok(typeof offer.thread_id === 'string' && offer.thread_id.length > 0, 'thread_id should be generated');
   assert.match(offer.thread_id, /^[0-9a-f-]{36}$/i, 'thread_id should be a UUID');
+
+  await app.close();
+});
+
+test('request-targeted offers require counter before accept, and request counters require note', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'boot-req-offer-requester');
+  const fulfillerBoot = await bootstrap(app, 'boot-req-offer-fulfiller');
+  const requesterNodeId = requesterBoot.json().node.id;
+  const fulfillerNodeId = fulfillerBoot.json().node.id;
+  const requesterApiKey = requesterBoot.json().api_key.api_key;
+  const fulfillerApiKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestResource = await repo.createResource('requests', requesterNodeId, {
+    ...unitPayload('Need apples', 'request-offer-scope'),
+    public_summary: 'Need apples',
+  });
+  await repo.setPublished('requests', requestResource.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', requesterNodeId, requestResource.id));
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-create' },
+    payload: { request_id: requestResource.id, note: 'I can fulfill this for $25.' },
+  });
+  assert.equal(create.statusCode, 200);
+  assert.equal(create.json().offer.request_id, requestResource.id);
+  assert.deepEqual(create.json().offer.unit_ids, []);
+  const rootOfferId = create.json().offer.id;
+
+  const requesterAcceptBlocked = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${rootOfferId}/accept`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-root-accept-requester' },
+    payload: {},
+  });
+  assert.equal(requesterAcceptBlocked.statusCode, 409);
+  assert.equal(requesterAcceptBlocked.json().error.code, 'invalid_state_transition');
+  assert.equal(requesterAcceptBlocked.json().error.details.reason, 'counter_required_for_request_offer');
+
+  const fulfillerAcceptBlocked = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${rootOfferId}/accept`,
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-root-accept-fulfiller' },
+    payload: {},
+  });
+  assert.equal(fulfillerAcceptBlocked.statusCode, 409);
+  assert.equal(fulfillerAcceptBlocked.json().error.code, 'invalid_state_transition');
+  assert.equal(fulfillerAcceptBlocked.json().error.details.reason, 'counter_required_for_request_offer');
+
+  const missingNoteCounter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${rootOfferId}/counter`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-counter-missing-note' },
+    payload: { note: null },
+  });
+  assert.equal(missingNoteCounter.statusCode, 422);
+  assert.equal(missingNoteCounter.json().error.code, 'validation_error');
+  assert.equal(missingNoteCounter.json().error.details.reason, 'request_counter_note_required');
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${rootOfferId}/counter`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-counter-note-only' },
+    payload: { note: 'I can do $20 if you can deliver tomorrow.' },
+  });
+  assert.equal(counter.statusCode, 200);
+  const counterOffer = counter.json().offer;
+  assert.equal(counterOffer.request_id, requestResource.id);
+  assert.equal(counterOffer.status, 'accepted_by_a');
+
+  const fulfillerAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${counterOffer.id}/accept`,
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-counter-accept-fulfiller' },
+    payload: {},
+  });
+  assert.equal(fulfillerAccept.statusCode, 200);
+  assert.equal(fulfillerAccept.json().offer.status, 'mutually_accepted');
+
+  const requesterNoOpAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${counterOffer.id}/accept`,
+    headers: { authorization: `ApiKey ${requesterApiKey}`, 'idempotency-key': 'req-offer-counter-accept-requester-noop' },
+    payload: {},
+  });
+  assert.equal(requesterNoOpAccept.statusCode, 200);
+  assert.equal(requesterNoOpAccept.json().offer.status, 'mutually_accepted');
+
+  await app.close();
+});
+
+test('request-targeted offer create validates note, creator-owned unit_ids, and idempotency', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'boot-req-offer-validate-requester');
+  const fulfillerBoot = await bootstrap(app, 'boot-req-offer-validate-fulfiller');
+  const requesterNodeId = requesterBoot.json().node.id;
+  const fulfillerNodeId = fulfillerBoot.json().node.id;
+  const fulfillerApiKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestResource = await repo.createResource('requests', requesterNodeId, {
+    ...unitPayload('Need oranges', 'request-offer-validate-scope'),
+    public_summary: 'Need oranges',
+  });
+  await repo.setPublished('requests', requestResource.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', requesterNodeId, requestResource.id));
+
+  const requesterUnit = await repo.createResource('units', requesterNodeId, unitPayload('Requester unit', 'requester-unit-scope'));
+  const fulfillerUnit = await repo.createResource('units', fulfillerNodeId, unitPayload('Fulfiller unit', 'fulfiller-unit-scope'));
+
+  const missingNote = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-missing-note' },
+    payload: { request_id: requestResource.id, note: null },
+  });
+  assert.equal(missingNote.statusCode, 422);
+  assert.equal(missingNote.json().error.code, 'validation_error');
+  assert.equal(missingNote.json().error.details.reason, 'request_note_required');
+
+  const wrongOwnerUnits = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-wrong-owner-unit' },
+    payload: { request_id: requestResource.id, unit_ids: [requesterUnit.id], note: 'I can fulfill this.' },
+  });
+  assert.equal(wrongOwnerUnits.statusCode, 409);
+  assert.equal(wrongOwnerUnits.json().error.code, 'conflict');
+  assert.equal(wrongOwnerUnits.json().error.details.reason, 'invalid_units_owner');
+
+  const createPayload = {
+    request_id: requestResource.id,
+    unit_ids: [fulfillerUnit.id],
+    note: 'Can fulfill with this unit for $12.',
+  };
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-hybrid-create' },
+    payload: createPayload,
+  });
+  assert.equal(created.statusCode, 200);
+  assert.deepEqual(created.json().offer.held_unit_ids, [fulfillerUnit.id]);
+  const offerId = created.json().offer.id;
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-hybrid-create' },
+    payload: createPayload,
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.json().offer.id, offerId);
+
+  const changedReplay = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}`, 'idempotency-key': 'req-offer-hybrid-create' },
+    payload: { ...createPayload, note: 'Can fulfill with this unit for $11.' },
+  });
+  assert.equal(changedReplay.statusCode, 409);
+  assert.equal(changedReplay.json().error.code, 'idempotency_key_reuse_conflict');
 
   await app.close();
 });
@@ -2168,12 +2334,12 @@ test('buyer offer create cannot lock seller inventory; seller-side accept locks;
     payload: {},
   });
   assert.equal(sellerAccept.statusCode, 200);
-  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
+  assert.equal(sellerAccept.json().offer.status, 'mutually_accepted');
   assert.deepEqual(sellerAccept.json().offer.held_unit_ids, [unit.id]);
   assert.deepEqual(sellerAccept.json().offer.unheld_unit_ids, []);
 
-  const activeAfter = await query("select count(*)::text as c from holds where unit_id=$1 and status='active'", [unit.id]);
-  assert.equal(Number(activeAfter[0].c), 1);
+  const committedAfter = await query("select count(*)::text as c from holds where unit_id=$1 and status='committed'", [unit.id]);
+  assert.equal(Number(committedAfter[0].c), 1);
   await app.close();
 });
 
@@ -2206,7 +2372,7 @@ test('mutual acceptance charges one credit per side exactly once', async () => {
     payload: {},
   });
   assert.equal(sellerAccept.statusCode, 200);
-  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
+  assert.equal(sellerAccept.json().offer.status, 'mutually_accepted');
 
   const buyerAccept = await app.inject({
     method: 'POST',
@@ -2239,8 +2405,8 @@ test('mutual acceptance charges one credit per side exactly once', async () => {
     headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-accept-buyer-retry' },
     payload: {},
   });
-  assert.equal(replay.statusCode, 409);
-  assert.equal(replay.json().error.code, 'invalid_state_transition');
+  assert.equal(replay.statusCode, 200);
+  assert.equal(replay.json().offer.status, 'mutually_accepted');
 
   const sellerFeeRowsAfterReplay = await query(
     "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",
@@ -2274,17 +2440,18 @@ test('mutual acceptance is blocked when either side lacks credits', async () => 
   assert.equal(created.statusCode, 200);
   const offerId = created.json().offer.id;
 
+  const sellerBalance = await repo.creditBalance(sellerNodeId);
+  await repo.addCredit(sellerNodeId, 'adjustment_manual', -sellerBalance, { reason: 'test_drain_deal_accept_fee' });
+
   const sellerAccept = await app.inject({
     method: 'POST',
     url: `/v1/offers/${offerId}/accept`,
     headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'deal-fee-block-accept-seller' },
     payload: {},
   });
-  assert.equal(sellerAccept.statusCode, 200);
-  assert.equal(sellerAccept.json().offer.status, 'accepted_by_b');
-
-  const sellerBalance = await repo.creditBalance(sellerNodeId);
-  await repo.addCredit(sellerNodeId, 'adjustment_manual', -sellerBalance, { reason: 'test_drain_deal_accept_fee' });
+  assert.equal(sellerAccept.statusCode, 402);
+  assert.equal(sellerAccept.json().error.code, 'credits_exhausted');
+  assert.equal(sellerAccept.json().error.details.credits_required, config.dealAcceptanceFeeCredits);
 
   const buyerAccept = await app.inject({
     method: 'POST',
@@ -2292,12 +2459,11 @@ test('mutual acceptance is blocked when either side lacks credits', async () => 
     headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'deal-fee-block-accept-buyer' },
     payload: {},
   });
-  assert.equal(buyerAccept.statusCode, 402);
-  assert.equal(buyerAccept.json().error.code, 'credits_exhausted');
-  assert.equal(buyerAccept.json().error.details.credits_required, config.dealAcceptanceFeeCredits);
+  assert.equal(buyerAccept.statusCode, 200);
+  assert.equal(buyerAccept.json().offer.status, 'accepted_by_a');
 
   const offerAfter = await repo.getOffer(offerId);
-  assert.equal(offerAfter.status, 'accepted_by_b');
+  assert.equal(offerAfter.status, 'accepted_by_a');
 
   const feeRows = await query(
     "select count(*)::text as c from credit_ledger where type='deal_accept_fee' and (meta->>'offer_id')=$1",
@@ -2431,7 +2597,7 @@ test('offer outcomes are persisted for accepted, rejected, cancelled, and expire
     [[acceptedOfferId, rejectedOfferId, cancelledOfferId, expiredOfferId]],
   );
   const byId = new Map(outcomeRows.map((row) => [row.id, row]));
-  assert.equal(byId.get(acceptedOfferId)?.status, 'accepted_by_b');
+  assert.equal(byId.get(acceptedOfferId)?.status, 'mutually_accepted');
   assert.equal(byId.get(rejectedOfferId)?.status, 'rejected');
   assert.equal(byId.get(cancelledOfferId)?.status, 'cancelled');
   assert.equal(byId.get(expiredOfferId)?.status, 'expired');
@@ -2664,22 +2830,6 @@ test('offer lifecycle events emit webhooks and /v1/events supports cursor pollin
     webhookCalls.push({ url: String(url), rawBody, body: JSON.parse(rawBody), headers });
     return jsonResponse(200, { ok: true });
   }, async () => {
-    const createdA = await app.inject({
-      method: 'POST',
-      url: '/v1/offers',
-      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-create-a' },
-      payload: { unit_ids: [unit.id], thread_id: null, note: 'create-a' },
-    });
-    assert.equal(createdA.statusCode, 200);
-    const offerAId = createdA.json().offer.id;
-
-    const counterA = await app.inject({
-      method: 'POST',
-      url: `/v1/offers/${offerAId}/counter`,
-      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-offer-counter-a' },
-      payload: { unit_ids: [unit.id], note: 'counter-a' },
-    });
-    assert.equal(counterA.statusCode, 200);
     const acceptedCreate = await app.inject({
       method: 'POST',
       url: '/v1/offers',
@@ -2711,6 +2861,23 @@ test('offer lifecycle events emit webhooks and /v1/events supports cursor pollin
       payload: {},
     });
     assert.equal(reveal.statusCode, 200);
+
+    const createdA = await app.inject({
+      method: 'POST',
+      url: '/v1/offers',
+      headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-offer-create-a' },
+      payload: { unit_ids: [unit.id], thread_id: null, note: 'create-a' },
+    });
+    assert.equal(createdA.statusCode, 200);
+    const offerAId = createdA.json().offer.id;
+
+    const counterA = await app.inject({
+      method: 'POST',
+      url: `/v1/offers/${offerAId}/counter`,
+      headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'events-offer-counter-a' },
+      payload: { unit_ids: [unit.id], note: 'counter-a' },
+    });
+    assert.equal(counterA.statusCode, 200);
 
     const createdB = await app.inject({
       method: 'POST',
@@ -8869,6 +9036,66 @@ test('MCP fabric_get_offer returns offer for party and error for non-party', asy
   const thirdBody = thirdRes.json();
   const thirdData = JSON.parse(thirdBody.result.content[0].text);
   assert.ok(thirdData.error || thirdBody.result.isError, 'non-party must get error for offer via MCP');
+  await app.close();
+});
+
+test('MCP request-targeted offer is created and root accept is blocked until counter', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'mcp-req-offer-requester');
+  const fulfillerBoot = await bootstrap(app, 'mcp-req-offer-fulfiller');
+  const requesterNodeId = requesterBoot.json().node.id;
+  const requesterApiKey = requesterBoot.json().api_key.api_key;
+  const fulfillerApiKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestResource = await repo.createResource('requests', requesterNodeId, {
+    ...unitPayload('MCP Need Service', 'mcp-request-offer-scope'),
+    public_summary: 'MCP Need Service',
+  });
+  await repo.setPublished('requests', requestResource.id, true);
+  await repo.upsertProjection('requests', await repo.getResource('requests', requesterNodeId, requestResource.id));
+
+  const create = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${fulfillerApiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 60,
+      method: 'tools/call',
+      params: {
+        name: 'fabric_create_offer',
+        arguments: { request_id: requestResource.id, note: 'I can fulfill this request for $30.' },
+      },
+    },
+  });
+  assert.equal(create.statusCode, 200);
+  const createBody = create.json();
+  assert.equal(createBody.result.isError, false);
+  const createdOfferPayload = JSON.parse(createBody.result.content[0].text);
+  assert.equal(createdOfferPayload.offer.request_id, requestResource.id);
+  const offerId = createdOfferPayload.offer.id;
+
+  const blockedAccept = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${requesterApiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 61,
+      method: 'tools/call',
+      params: {
+        name: 'fabric_accept_offer',
+        arguments: { offer_id: offerId },
+      },
+    },
+  });
+  assert.equal(blockedAccept.statusCode, 200);
+  const blockedBody = blockedAccept.json();
+  assert.equal(blockedBody.result.isError, true);
+  const blockedPayload = JSON.parse(blockedBody.result.content[0].text);
+  assert.equal(blockedPayload.error.code, 'invalid_state_transition');
+  assert.equal(blockedPayload.error.details.reason, 'counter_required_for_request_offer');
+
   await app.close();
 });
 

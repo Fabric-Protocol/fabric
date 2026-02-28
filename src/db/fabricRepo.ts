@@ -1064,17 +1064,79 @@ export async function getUnitsOwners(unitIds: string[]) {
   return query<{ id: string; node_id: string }>('select id,node_id from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
 }
 
-export async function createOffer(
-  fromNodeId: string,
-  toNodeId: string,
-  unitId: string,
-  threadId: string,
-  note: string | null,
-  expiresAt: string,
-) {
-  const rows = await query<any>(`insert into offers(thread_id,from_node_id,to_node_id,unit_id,request_id,status,expires_at,note)
-    values($1,$2,$3,$4,null,'pending',$5::timestamptz,$6) returning *`, [threadId, fromNodeId, toNodeId, unitId, expiresAt, note]);
+export async function getRequestOfferTarget(requestId: string) {
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    published_at: string | null;
+    expires_at: string | null;
+  }>(
+    `select id,node_id,published_at,expires_at
+     from requests
+     where id=$1
+       and deleted_at is null
+     limit 1`,
+    [requestId],
+  );
+  return rows[0] ?? null;
+}
+
+export type CreateOfferArgs = {
+  fromNodeId: string;
+  toNodeId: string;
+  unitId: string | null;
+  requestId: string | null;
+  threadId: string;
+  note: string | null;
+  expiresAt: string;
+  implicitAcceptedByFrom: boolean;
+};
+
+export async function createOffer(args: CreateOfferArgs) {
+  const rows = await query<any>(
+    `insert into offers(
+       thread_id,from_node_id,to_node_id,unit_id,request_id,status,expires_at,note,accepted_by_from_at
+     )
+     values(
+       $1,$2,$3,$4,$5,$6,$7::timestamptz,$8,
+       case when $9 then now() else null end
+     )
+     returning *`,
+    [
+      args.threadId,
+      args.fromNodeId,
+      args.toNodeId,
+      args.unitId,
+      args.requestId,
+      args.implicitAcceptedByFrom ? 'accepted_by_a' : 'pending',
+      args.expiresAt,
+      args.note,
+      args.implicitAcceptedByFrom,
+    ],
+  );
   return rows[0];
+}
+
+export async function isOfferThreadRoot(offerId: string) {
+  const rows = await query<{ is_root: boolean }>(
+    `select (
+       o.id = (
+         select o2.id
+         from offers o2
+         where o2.thread_id = o.thread_id
+           and o2.deleted_at is null
+         order by o2.created_at asc, o2.id asc
+         limit 1
+       )
+     ) as is_root
+     from offers o
+     where o.id=$1
+       and o.deleted_at is null
+     limit 1`,
+    [offerId],
+  );
+  if (!rows[0]) return null;
+  return rows[0].is_root === true;
 }
 
 export async function addOfferLine(offerId: string, unitId: string) {
