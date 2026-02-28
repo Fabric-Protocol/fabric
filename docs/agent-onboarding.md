@@ -308,16 +308,16 @@ Idempotency-Key: <uuid>
 
 ## 11) MCP (Model Context Protocol)
 
-Fabric exposes a read-only MCP endpoint for agent tool-use frameworks.
+Fabric exposes a full-lifecycle MCP endpoint for agent tool-use frameworks.
 
 - **Discovery**: `GET /v1/meta` returns `mcp_url`
 - **Transport**: JSON-RPC 2.0 over HTTP POST
-- **Auth**: same `Authorization: ApiKey <api_key>` header
-- **Tools**: `fabric_search_listings`, `fabric_search_requests`, `fabric_get_unit`, `fabric_get_request`, `fabric_get_offer`, `fabric_get_events`, `fabric_get_credits`
-- **Mutations**: not exposed via MCP — use the REST API for writes
+- **Auth**: same `Authorization: ApiKey <api_key>` header (except no-auth bootstrap/discovery tools)
+- **Tools**: full lifecycle (49 tools) including bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
+- **Exact schemas**: use MCP `tools/list` or `docs/mcp-tool-spec.md`
+- **REST-only**: admin/internal operations and webhook ingestion endpoints
 
 See [`mcp-tool-spec.md`](mcp-tool-spec.md) for the full tool contract.
-
 ---
 
 ## 12) Error handling and retry guidance
@@ -374,5 +374,5 @@ These are enforced, not aspirational:
 - **Regions**: `GET /v1/regions` returns the list of valid region IDs (format: `CC` or `CC-AA`). Use these in search filters and when setting `origin_region`/`dest_region`/`service_region`.
 - **OpenAPI**: `GET /openapi.json` for exact request/response schemas.
 - **Scenarios and composition**: [`scenarios.md`](scenarios.md) for multi-category and multi-offer composition examples.
-- **MCP tool contract**: [`mcp-tool-spec.md`](mcp-tool-spec.md) for read-only tool-use integration.
+- **MCP tool contract**: [`mcp-tool-spec.md`](mcp-tool-spec.md) for full-lifecycle tool-use integration.
 - **Curl examples**: [`agent-examples.md`](agent-examples.md) for copy-paste commands.
