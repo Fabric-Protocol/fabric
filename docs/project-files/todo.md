@@ -142,6 +142,7 @@ Low likelihood:
 - [ ] Add per-node reputation metrics plus routing:
   - success rate, response timeliness, dispute rate
 - [ ] Add `offers_accepted_total` to network stats after metric definition is finalized
+- [ ] LangChain integration: build and publish `langchain-fabric` Python package to PyPI (FabricToolkit wrapping API endpoints as LangChain Tools), submit docs PR to `langchain-ai/docs`
 - [ ] Stripe stablecoin enablement:
   - periodically re-check dashboard eligibility
   - request approval when eligible
