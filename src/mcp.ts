@@ -506,7 +506,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_reject_offer',
-    description: 'Reject an offer (terminal). Releases all holds immediately. Either party can reject.',
+    description: 'Reject an offer (terminal). Only offers in pending, accepted_by_a, or accepted_by_b status can be rejected. Releases all holds immediately. Either party can reject. Optional reason is stored on the offer.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -520,7 +520,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_cancel_offer',
-    description: 'Cancel an offer you created. Releases all holds immediately. Only the offer creator can cancel.',
+    description: 'Cancel an offer you created. Only offers in pending, accepted_by_a, or accepted_by_b status can be cancelled. Releases all holds immediately. Only the offer creator can cancel.',
     inputSchema: {
       type: 'object' as const,
       properties: {

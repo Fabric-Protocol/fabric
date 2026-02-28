@@ -1371,6 +1371,10 @@ from_node_id, to_node_id
 
 request_id
 
+is_thread_root (boolean — true if this is the first offer in the thread)
+
+requires_counter (boolean — true if this is a request-targeted root offer that cannot be accepted directly)
+
 status
 
 expires_at (server-computed)
@@ -1615,15 +1619,23 @@ Request
 
 Rules / side effects
 
+Only offers in `pending`, `accepted_by_a`, or `accepted_by_b` status can be rejected.
+
+`reason` is stored in `rejection_reason` on the offer row when provided.
+
 Offer status becomes rejected (terminal).
 
 Releases holds immediately.
+
+Emits `offer_rejected` lifecycle event.
 
 Errors
 
 403 forbidden
 
 404 not_found
+
+409 invalid_state_transition (details.reason="offer_not_rejectable") — offer is in a terminal or mutually_accepted state
 
 POST /v1/offers/{offer_id}/cancel
 Auth
@@ -1649,6 +1661,8 @@ Rules / side effects
 
 Only the offer creator can cancel.
 
+Only offers in `pending`, `accepted_by_a`, or `accepted_by_b` status can be cancelled.
+
 Cancelling releases holds immediately.
 
 Errors
@@ -1656,6 +1670,8 @@ Errors
 403 forbidden
 
 404 not_found
+
+409 invalid_state_transition (details.reason="offer_not_cancellable") — offer is in a terminal or mutually_accepted state
 
 422 legal_required
 

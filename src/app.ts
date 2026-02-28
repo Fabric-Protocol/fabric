@@ -2276,9 +2276,12 @@ export function buildApp() {
     return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {
-    const out = await (fabricService as any).rejectOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
+    const body = req.body as any;
+    const reason = typeof body?.reason === 'string' ? body.reason : null;
+    const out = await (fabricService as any).rejectOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, reason);
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
+    if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Offer cannot be rejected in its current state', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/cancel', async (req, reply) => {
@@ -2286,6 +2289,7 @@ export function buildApp() {
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
+    if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Offer cannot be cancelled in its current state', { reason: out.conflict }));
     return out;
   });
   app.post('/v1/offers/:offer_id/reveal-contact', async (req, reply) => {
@@ -2728,6 +2732,14 @@ export function buildApp() {
   app.get('/healthz', async () => ({ ok: true }));
 
   registerMcpRoute(app);
+
+  const RATE_LIMIT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+  const pruneTimer = setInterval(() => {
+    repo.pruneExpiredRateLimitCounters().catch(() => {});
+  }, RATE_LIMIT_PRUNE_INTERVAL_MS);
+  pruneTimer.unref();
+
+  app.addHook('onClose', () => { clearInterval(pruneTimer); });
 
   return app;
 }

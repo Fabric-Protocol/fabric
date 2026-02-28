@@ -9,6 +9,8 @@ create table if not exists rate_limit_counters (
 
 create index if not exists rate_limit_counters_reset_idx on rate_limit_counters(reset_at);
 
+alter table offers add column if not exists rejection_reason text null;
+
 alter table offer_events drop constraint if exists offer_events_event_type_check;
 alter table offer_events add constraint offer_events_event_type_check check (event_type in (
   'offer_created',

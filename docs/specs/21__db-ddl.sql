@@ -536,6 +536,7 @@ create table if not exists offers (
   accepted_by_to_at timestamptz null,
   mutually_accepted_at timestamptz null,
   rejected_at timestamptz null,
+  rejection_reason text null,
   cancelled_at timestamptz null,
   countered_at timestamptz null,
   expired_at timestamptz null,

@@ -683,12 +683,15 @@ export const fabricService = {
 export async function offerSummary(offer: any) {
   const lines = await repo.getOfferLines(offer.id);
   const hold = await repo.getHoldSummary(offer.id);
+  const isRoot = (await repo.isOfferThreadRoot(offer.id)) === true;
   return {
     id: offer.id,
     thread_id: offer.thread_id,
     from_node_id: offer.from_node_id,
     to_node_id: offer.to_node_id,
     request_id: offer.request_id ?? null,
+    is_thread_root: isRoot,
+    requires_counter: isRoot && Boolean(offer.request_id),
     status: offer.status,
     note: offer.note ?? null,
     accepted_by_from_at: offer.accepted_by_from_at,
@@ -883,11 +886,20 @@ type CreateOfferOptions = {
     return next;
   }
   const nextOfferId = (next as any).offer?.id;
-  const countered = await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() });
+  const counterableStatuses = ['pending', 'accepted_by_a', 'accepted_by_b'];
+  const countered = await repo.setOfferStatus(prior.id, 'countered', { countered_at: new Date().toISOString() }, counterableStatuses);
   if (!countered) {
     if (typeof nextOfferId === 'string') {
       await repo.setOfferStatus(nextOfferId, 'cancelled', { cancelled_at: new Date().toISOString() });
       await repo.releaseHolds(nextOfferId);
+      await emitOfferLifecycleEvents({
+        offerId: nextOfferId,
+        eventType: 'offer_cancelled',
+        actorNodeId: nodeId,
+        fromNodeId: (next as any).offer?.from_node_id ?? nodeId,
+        toNodeId: (next as any).offer?.to_node_id ?? prior.from_node_id,
+        payload: { status: 'cancelled', thread_id: prior.thread_id, reason: 'counter_rollback' },
+      });
     }
     return { conflict: true };
   }
@@ -988,12 +1000,18 @@ type CreateOfferOptions = {
   return { offer: await offerSummary(updated) };
 };
 
-(fabricService as any).rejectOffer = async (nodeId: string, offerId: string) => {
+(fabricService as any).rejectOffer = async (nodeId: string, offerId: string, reason?: string | null) => {
   await repo.expireStaleOffers();
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (![offer.from_node_id, offer.to_node_id].includes(nodeId)) return { forbidden: true };
-  const updated = await repo.setOfferStatus(offerId, 'rejected', { rejected_at: new Date().toISOString() });
+  const rejectableStatuses = ['pending', 'accepted_by_a', 'accepted_by_b'];
+  const rejectableStatusesSet = new Set(rejectableStatuses);
+  if (!rejectableStatusesSet.has(offer.status)) return { conflict: 'offer_not_rejectable' };
+  const rejectFields: Record<string, unknown> = { rejected_at: new Date().toISOString() };
+  if (typeof reason === 'string' && reason.trim().length > 0) rejectFields.rejection_reason = reason.trim();
+  const updated = await repo.setOfferStatus(offerId, 'rejected', rejectFields, rejectableStatuses);
+  if (!updated) return { conflict: 'offer_not_rejectable' };
   await repo.releaseHolds(offerId);
   await emitOfferLifecycleEvents({
     offerId: updated.id,
@@ -1012,7 +1030,11 @@ type CreateOfferOptions = {
   const offer = await repo.getOffer(offerId);
   if (!offer) return { notFound: true };
   if (offer.from_node_id !== nodeId) return { forbidden: true };
-  const updated = await repo.setOfferStatus(offerId, 'cancelled', { cancelled_at: new Date().toISOString() });
+  const cancellableStatuses = ['pending', 'accepted_by_a', 'accepted_by_b'];
+  const cancellableStatusesSet = new Set(cancellableStatuses);
+  if (!cancellableStatusesSet.has(offer.status)) return { conflict: 'offer_not_cancellable' };
+  const updated = await repo.setOfferStatus(offerId, 'cancelled', { cancelled_at: new Date().toISOString() }, cancellableStatuses);
+  if (!updated) return { conflict: 'offer_not_cancellable' };
   await repo.releaseHolds(offerId);
   await emitOfferLifecycleEvents({
     offerId: updated.id,

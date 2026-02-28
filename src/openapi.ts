@@ -925,6 +925,8 @@ export const openApiDocument = {
           from_node_id: { type: 'string', format: 'uuid' },
           to_node_id: { type: 'string', format: 'uuid' },
           request_id: { type: 'string', format: 'uuid', nullable: true },
+          is_thread_root: { type: 'boolean', description: 'True if this is the first offer in the thread.' },
+          requires_counter: { type: 'boolean', description: 'True if this is a request-targeted root offer that cannot be accepted directly and must be countered.' },
           status: { type: 'string' },
           note: { type: 'string', nullable: true },
           expires_at: { type: 'string' },
@@ -939,7 +941,7 @@ export const openApiDocument = {
           version: { type: 'integer' },
           unit_ids: { type: 'array', items: { type: 'string' } },
         },
-        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'request_id', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids'],
+        required: ['id', 'thread_id', 'from_node_id', 'to_node_id', 'request_id', 'is_thread_root', 'requires_counter', 'status', 'expires_at', 'created_at', 'updated_at', 'version', 'unit_ids'],
       },
       OfferResponse: {
         type: 'object',

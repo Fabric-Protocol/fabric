@@ -67,6 +67,10 @@ export async function saveAdminIdempotency(key: string, method: string, path: st
   );
 }
 
+export async function pruneExpiredRateLimitCounters() {
+  await query('delete from rate_limit_counters where reset_at < now()', []);
+}
+
 export async function consumeRateLimitCounter(key: string, windowSeconds: number) {
   const safeWindowSeconds = Math.max(1, Math.trunc(windowSeconds));
   const rows = await query<{ count: number; reset_epoch: string }>(
@@ -1234,12 +1238,17 @@ export async function getHoldSummary(offerId: string) {
   return { held_unit_ids: held, unheld_unit_ids: unheld, hold_status: first?.status ?? 'released', hold_expires_at: first?.expires_at ?? null };
 }
 
-export async function setOfferStatus(offerId: string, status: string, fields: Record<string, unknown> = {}) {
+export async function setOfferStatus(offerId: string, status: string, fields: Record<string, unknown> = {}, fromStatuses?: string[]) {
   const sets = ['status=$2'];
   const vals: unknown[] = [offerId, status];
   let idx = 3;
   for (const [k, v] of Object.entries(fields)) { sets.push(`${k}=$${idx++}`); vals.push(v); }
-  const rows = await query<any>(`update offers set ${sets.join(',')} where id=$1 and deleted_at is null returning *`, vals);
+  let where = 'id=$1 and deleted_at is null';
+  if (fromStatuses && fromStatuses.length > 0) {
+    where += ` and status in (${fromStatuses.map(() => `$${idx++}`).join(',')})`;
+    vals.push(...fromStatuses);
+  }
+  const rows = await query<any>(`update offers set ${sets.join(',')} where ${where} returning *`, vals);
   return rows[0] ?? null;
 }
 

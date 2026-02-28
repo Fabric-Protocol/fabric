@@ -2598,6 +2598,8 @@ test('offer outcomes are persisted for accepted, rejected, cancelled, and expire
     payload: { unit_ids: [unit.id], thread_id: null, note: null },
   });
   assert.equal(acceptedCreate.statusCode, 200);
+  assert.equal(acceptedCreate.json().offer.is_thread_root, true);
+  assert.equal(acceptedCreate.json().offer.requires_counter, false);
   const acceptedOfferId = acceptedCreate.json().offer.id;
   const accepted = await app.inject({
     method: 'POST',
@@ -2669,6 +2671,63 @@ test('offer outcomes are persisted for accepted, rejected, cancelled, and expire
   assert.equal(byId.get(cancelledOfferId)?.status, 'cancelled');
   assert.equal(byId.get(expiredOfferId)?.status, 'expired');
   assert.equal(Boolean(byId.get(expiredOfferId)?.expired_at), true);
+  await app.close();
+});
+
+test('mutually accepted offer cannot be rejected or cancelled', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-terminal-guard-seller');
+  const buyerBoot = await bootstrap(app, 'boot-terminal-guard-buyer');
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerNodeId = buyerBoot.json().node.id;
+  const sellerKey = sellerBoot.json().api_key.api_key;
+  const buyerKey = buyerBoot.json().api_key.api_key;
+
+  assert.equal((await activateBasicSubscriber(app, sellerNodeId, 'evt_subscriber_terminal_guard_seller')).statusCode, 200);
+  assert.equal((await activateBasicSubscriber(app, buyerNodeId, 'evt_subscriber_terminal_guard_buyer')).statusCode, 200);
+
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Terminal guard unit', 'terminal-guard-scope'));
+  await repo.setPublished('units', unit.id, true);
+  await repo.upsertProjection('units', await repo.getResource('units', sellerNodeId, unit.id));
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'terminal-guard-create' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: null },
+  });
+  assert.equal(created.statusCode, 200);
+  const offerId = created.json().offer.id;
+
+  const accepted = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/accept`,
+    headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'terminal-guard-accept' },
+    payload: {},
+  });
+  assert.equal(accepted.statusCode, 200);
+  assert.equal(accepted.json().offer.status, 'mutually_accepted');
+
+  const rejectAfterMutual = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/reject`,
+    headers: { authorization: `ApiKey ${sellerKey}`, 'idempotency-key': 'terminal-guard-reject' },
+    payload: {},
+  });
+  assert.equal(rejectAfterMutual.statusCode, 409);
+  assert.equal(rejectAfterMutual.json().error.code, 'invalid_state_transition');
+  assert.equal(rejectAfterMutual.json().error.details.reason, 'offer_not_rejectable');
+
+  const cancelAfterMutual = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerId}/cancel`,
+    headers: { authorization: `ApiKey ${buyerKey}`, 'idempotency-key': 'terminal-guard-cancel' },
+    payload: {},
+  });
+  assert.equal(cancelAfterMutual.statusCode, 409);
+  assert.equal(cancelAfterMutual.json().error.code, 'invalid_state_transition');
+  assert.equal(cancelAfterMutual.json().error.details.reason, 'offer_not_cancellable');
+
   await app.close();
 });
 
@@ -9244,6 +9303,8 @@ test('MCP request-targeted offer is created and root accept is blocked until cou
   assert.equal(createBody.result.isError, false);
   const createdOfferPayload = JSON.parse(createBody.result.content[0].text);
   assert.equal(createdOfferPayload.offer.request_id, requestResource.id);
+  assert.equal(createdOfferPayload.offer.is_thread_root, true);
+  assert.equal(createdOfferPayload.offer.requires_counter, true);
   const offerId = createdOfferPayload.offer.id;
 
   const blockedAccept = await app.inject({
