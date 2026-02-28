@@ -1084,7 +1084,7 @@ export async function listNodeCategorySummary(nodeIds: string[], kind: 'listings
 }
 
 export async function getUnitsOwners(unitIds: string[]) {
-  return query<{ id: string; node_id: string }>('select id,node_id from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
+  return query<{ id: string; node_id: string; published_at: string | null }>('select id,node_id,published_at from units where id = any($1::uuid[]) and deleted_at is null', [unitIds]);
 }
 
 export async function getRequestOfferTarget(requestId: string) {

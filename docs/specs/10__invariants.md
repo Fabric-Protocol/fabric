@@ -167,8 +167,8 @@ Credit Packs (one-time purchases, worse value than subscriptions):
 
 Acquisition:
 - Signup grant: 100 credits one-time
-- Unit milestone grant: 200 credits one-time after 20 Units
-- Request milestone grant: 200 credits one-time after 20 Requests
+- Unit milestone grants: +100 credits at 10 Units, +100 credits at 20 Units (max +200 total, idempotent per node/threshold)
+- Request milestone grants: +100 credits at 10 Requests, +100 credits at 20 Requests (max +200 total, idempotent per node/threshold)
 - Referral grant: 100 credits, paid on referred node first paid invoice, capped at 50 grants per referrer
 - Offer mutual-acceptance fee: 1 credit charged to each side when an offer becomes `mutually_accepted`
 

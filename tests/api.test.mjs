@@ -103,6 +103,12 @@ const cryptoPaymentsMigrationSql = await fs.readFile(
 );
 await query(cryptoPaymentsMigrationSql);
 
+const offerEventsNullableMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-02-28__offer_events_offer_id_nullable.sql', import.meta.url),
+  'utf8',
+);
+await query(offerEventsNullableMigrationSql);
+
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
 await query('DELETE FROM rate_limit_counters');
@@ -544,6 +550,23 @@ test('POST /v1/bootstrap with legal assent stores legal fields', async () => {
   assert.ok(me.legal_accepted_at);
   assert.equal(me.legal_ip, '203.0.113.10');
   assert.equal(me.legal_user_agent, 'fabric-test-agent');
+  await app.close();
+});
+
+test('offer_events supports node-level events with null offer_id', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-node-event-null-offer');
+  const nodeId = b.json().node.id;
+
+  const evt = await repo.addNodeEvent('subscription_changed', nodeId, { plan_code: 'basic', status: 'active' });
+  assert.equal(evt.offer_id, null);
+  assert.equal(evt.event_type, 'subscription_changed');
+
+  const rows = await query('select offer_id,event_type from offer_events where id=$1', [evt.id]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].offer_id, null);
+  assert.equal(rows[0].event_type, 'subscription_changed');
+
   await app.close();
 });
 
@@ -2561,6 +2584,7 @@ test('mutual acceptance charges one credit per side exactly once', async () => {
   });
   assert.equal(sellerAccept.statusCode, 200);
   assert.equal(sellerAccept.json().offer.status, 'mutually_accepted');
+  assert.equal(String(sellerAccept.headers['x-credits-charged']), String(config.dealAcceptanceFeeCredits));
 
   const buyerAccept = await app.inject({
     method: 'POST',
@@ -2570,6 +2594,7 @@ test('mutual acceptance charges one credit per side exactly once', async () => {
   });
   assert.equal(buyerAccept.statusCode, 200);
   assert.equal(buyerAccept.json().offer.status, 'mutually_accepted');
+  assert.equal(String(buyerAccept.headers['x-credits-charged']), '0');
 
   const sellerBalanceAfter = await repo.creditBalance(sellerNodeId);
   const buyerBalanceAfter = await repo.creditBalance(buyerNodeId);
@@ -2595,6 +2620,7 @@ test('mutual acceptance charges one credit per side exactly once', async () => {
   });
   assert.equal(replay.statusCode, 200);
   assert.equal(replay.json().offer.status, 'mutually_accepted');
+  assert.equal(String(replay.headers['x-credits-charged']), '0');
 
   const sellerFeeRowsAfterReplay = await query(
     "select count(*)::text as c from credit_ledger where node_id=$1 and type='deal_accept_fee' and (meta->>'offer_id')=$2",

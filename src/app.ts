@@ -2056,6 +2056,10 @@ export function buildApp() {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
+    if (out.budget) {
+      reply.header('X-Credits-Charged', String(out.budget.credits_charged ?? 0));
+      reply.header('X-Credits-Remaining', String(await repo.creditBalance((req as AuthedRequest).nodeId!)));
+    }
     return out;
   });
   app.post('/v1/search/requests', async (req, reply) => {
@@ -2088,6 +2092,10 @@ export function buildApp() {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid search request', { reason }));
     }
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
+    if (out.budget) {
+      reply.header('X-Credits-Charged', String(out.budget.credits_charged ?? 0));
+      reply.header('X-Credits-Remaining', String(await repo.creditBalance((req as AuthedRequest).nodeId!)));
+    }
     return out;
   });
 
@@ -2095,12 +2103,16 @@ export function buildApp() {
     const q = req.query as any;
     const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'listings', Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
+    reply.header('X-Credits-Charged', String(config.searchCreditCost));
+    reply.header('X-Credits-Remaining', String(await repo.creditBalance((req as AuthedRequest).nodeId!)));
     return out;
   });
   app.get('/v1/public/nodes/:node_id/requests', async (req, reply) => {
     const q = req.query as any;
     const out = await fabricService.nodePublicInventory((req as AuthedRequest).nodeId!, (req.params as any).node_id, 'requests', Number(q.limit ?? 20), q.cursor ?? null);
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, (out as any).creditsExhausted));
+    reply.header('X-Credits-Charged', String(config.searchCreditCost));
+    reply.header('X-Credits-Remaining', String(await repo.creditBalance((req as AuthedRequest).nodeId!)));
     return out;
   });
   async function handleDrilldown(
@@ -2129,6 +2141,10 @@ export function buildApp() {
     const out = await fabricService.nodePublicInventoryByCategory(callerNodeId, targetNodeId, kind, categoryId, limit, cursor, creditsMax);
     if ((out as any).budgetCapExceeded) return reply.status(402).send({ error: { code: 'budget_cap_exceeded', message: 'Budget cap exceeded', details: { ...(out as any).budgetCapExceeded, credit_pack_options: purchaseGuidance(callerNodeId) } } });
     if ((out as any).creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(callerNodeId, (out as any).creditsExhausted));
+    if ((out as any).budget?.credits_charged !== undefined) {
+      reply.header('X-Credits-Charged', String((out as any).budget.credits_charged));
+    }
+    reply.header('X-Credits-Remaining', String(await repo.creditBalance(callerNodeId)));
     return out;
   }
 
@@ -2273,17 +2289,25 @@ export function buildApp() {
     return out;
   });
   app.post('/v1/offers/:offer_id/accept', async (req, reply) => {
-    const out = await (fabricService as any).acceptOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
+    const nodeId = (req as AuthedRequest).nodeId!;
+    const balanceBefore = await repo.creditBalance(nodeId);
+    const out = await (fabricService as any).acceptOffer(nodeId, (req.params as any).offer_id);
     if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
-    if (out.creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope((req as AuthedRequest).nodeId!, out.creditsExhausted));
-    if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
+    if (out.creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(nodeId, out.creditsExhausted));
+    if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope(nodeId, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.conflict) {
       const details = typeof out.conflict === 'string' ? { reason: out.conflict } : {};
       return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Invalid transition', details));
     }
-    return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
+    const balanceAfter = await repo.creditBalance(nodeId);
+    reply.header('X-Credits-Remaining', String(balanceAfter));
+    const creditsCharged = Math.max(0, balanceBefore - balanceAfter);
+    if (creditsCharged > 0) {
+      reply.header('X-Credits-Charged', String(creditsCharged));
+    }
+    return maybeAppendWebhookNudge(nodeId, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {
     const body = req.body as any;
@@ -2452,7 +2476,7 @@ export function buildApp() {
         }
       } catch (err) {
         req.log.error({ err, ...requestErrorLogFields(req) }, 'stripe webhook handler failed');
-        return reply.code(500).send({ ok: false });
+        return reply.code(500).send(errorEnvelope('internal_error', 'Internal error processing webhook'));
       }
     });
 
@@ -2569,7 +2593,7 @@ export function buildApp() {
         return { ok: true };
       } catch (err) {
         req.log.error({ err, ...requestErrorLogFields(req) }, 'nowpayments webhook handler failed');
-        return reply.code(500).send({ ok: false });
+        return reply.code(500).send(errorEnvelope('internal_error', 'Internal error processing webhook'));
       }
     });
 

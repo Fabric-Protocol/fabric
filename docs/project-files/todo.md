@@ -60,7 +60,7 @@ Last updated: 2026-02-24
 
 ### Audit findings (2026-02-26, logic+spec completeness)
 - [ ] Add daily velocity limit (`CREDIT_PACK_MAX_GRANTS_PER_DAY`) enforcement to NOWPayments IPN handler — Stripe path already enforces via `countCreditPackPurchasesSince`; crypto path skips it. Low urgency (idempotency by `order_id` already prevents duplicate grants per payment; velocity limit only matters if a node creates 4+ separate crypto invoices in one UTC day).
-- [ ] Add `crypto_payments` table to `21__db-ddl.sql` (currently only in `supabase_migrations/`).
+- [x] Add `crypto_payments` table to `21__db-ddl.sql` (now mirrored from `supabase_migrations/` in canonical DDL).
 - [ ] Spec `20__api-contracts.md` section 15c response shape drift: code returns `expiration_estimate_date` instead of `valid_until`, plus extra fields (`send_amount`, `chain`, `payment_status`, `warning`). Align spec or code.
 - [ ] Document ops admin endpoints in `20__api-contracts.md`: `POST /internal/admin/health-pulse`, `POST /internal/admin/daily-digest`, `POST /internal/admin/sweep`, `POST /internal/admin/retention`.
 - [ ] Add NOWPayments/crypto billing rows to `26__enforcement-coverage.md` coverage matrix.
