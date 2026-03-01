@@ -114,8 +114,8 @@ curl -sS -X POST "$BASE/v1/billing/checkout-session" \
   -d "{
     \"node_id\":\"$NODE_ID\",
     \"plan_code\":\"basic\",
-    \"success_url\":\"https://fabricprotocol.com/checkout-success\",
-    \"cancel_url\":\"https://fabricprotocol.com/checkout-cancel\"
+    \"success_url\":\"$BASE/docs/agents?checkout=success\",
+    \"cancel_url\":\"$BASE/docs/agents?checkout=cancel\"
   }"
 ```
 
