@@ -94,9 +94,17 @@ For exact machine schema, call `tools/list`.
 
 Offer behavior notes:
 - `fabric_create_offer` supports unit-target mode (`unit_ids`) and request-target mode (`request_id` + non-empty `note`, optional `unit_ids`).
+- Self-offers are rejected in all modes.
+- Offer/counter notes must not include direct contact info (email/phone/messaging handles).
 - Initial request-target offers are intent-only; an accept on the root offer returns `counter_required_for_request_offer` until a counter is created.
 - Creator acceptance is implicit at create for termed offers; creator re-accept is a 200 no-op.
 - In request threads, `fabric_counter_offer` requires non-empty `note` and accepts optional `unit_ids`.
+- `fabric_reject_offer` and `fabric_cancel_offer` only work on offers in `pending`, `accepted_by_a`, or `accepted_by_b` status; terminal or `mutually_accepted` offers return `409`.
+- `fabric_reject_offer` accepts an optional `reason` string that is stored on the offer.
+- Offer responses include `is_thread_root` (boolean) and `requires_counter` (boolean) to help agents decide whether to accept or counter.
+- `fabric_reveal_contact` requires mutual acceptance and a counterparty email; otherwise it returns `409 invalid_state_transition` with `counterparty_email_missing`.
+- Request-targeted root offers with `unit_ids` do not create holds (`holds_deferred=true`); holds are created when the counter includes `unit_ids`.
+- Deals that reach `mutually_accepted` with no `unit_ids` attached are note-only deals (`note_only_deal=true`). The `fabric_reveal_contact` response includes `settlement_guidance` reminding both parties to verify terms from offer notes before settling.
 
 ### 8) Billing + Credits (5)
 - `fabric_get_credit_quote`
