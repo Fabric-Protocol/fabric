@@ -68,6 +68,7 @@ export async function createPayment(params: CreatePaymentParams): Promise<Crypto
     order_id: params.orderId,
     ipn_callback_url: params.ipnCallbackUrl,
     order_description: params.orderDescription ?? undefined,
+    is_fee_paid_by_user: false,
   };
 
   try {

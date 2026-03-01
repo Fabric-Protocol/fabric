@@ -48,6 +48,7 @@ type RateLimitSubject = 'ip' | 'node' | 'global';
 type RateLimitRule = { name: string; limit: number; windowSeconds: number; subject: RateLimitSubject };
 const RATE_LIMIT_MAX_TRACKED_KEYS = 200_000;
 const rateLimitState = new Map<string, { count: number; resetAtMs: number }>();
+let _rateLimitFallbackLastWarnMs = 0;
 const BROAD_QUERY_MAX_TRACKED_NODES = 100_000;
 const _searchBroadQueryStore = new Map<string, number[]>();
 const searchBroadQueryState = {
@@ -106,6 +107,16 @@ async function maybeAppendWebhookNudge(nodeId: string, out: Record<string, unkno
   return out;
 }
 
+function sanitizeErrorMessage(msg: string | undefined): string {
+  if (!msg) return 'Unknown error';
+  return msg
+    .replace(/postgres(ql)?:\/\/[^\s,;]+/gi, '[REDACTED_DB_URL]')
+    .replace(/password\s*[=:]\s*\S+/gi, '[REDACTED_PASSWORD]')
+    .replace(/ApiKey\s+\S+/gi, '[REDACTED_API_KEY]')
+    .replace(/whsec_\S+/gi, '[REDACTED_WEBHOOK_SECRET]')
+    .replace(/sk_(?:live|test)_\S+/gi, '[REDACTED_STRIPE_KEY]');
+}
+
 const _hmacCompareKey = crypto.randomBytes(32);
 function safeTimingSafeCompare(provided: string, expected: string): boolean {
   if (!provided || !expected) return false;
@@ -117,6 +128,13 @@ function safeTimingSafeCompare(provided: string, expected: string): boolean {
 const CRYPTO_CHAIN_LABELS: Record<string, string> = {
   usdcsol: 'Solana',
 };
+
+const USD_STABLECOINS = new Set([
+  'usdcsol', 'usdcmatic', 'usdcbsc', 'usdcarbitrum', 'usdcbase',
+  'usdcavaxc', 'usdctrx', 'usdttrc20', 'usdtbsc', 'usdtsol',
+  'usdterc20', 'usdtmatic', 'usdtarbitrum', 'usdtbase',
+  'dai', 'busd',
+]);
 
 function isAllowedCheckoutRedirectUrl(url: string): boolean {
   try {
@@ -927,6 +945,7 @@ function purchaseGuidance(nodeId: string) {
     price_usd: (p.price_cents / 100).toFixed(2),
   }));
   return {
+    mcp_shortcut: 'If connected via MCP, use fabric_buy_credit_pack_crypto (no browser, fully autonomous) or fabric_buy_credit_pack_stripe / fabric_subscribe_stripe instead of the REST endpoints below.',
     crypto: {
       description: 'One-time credit pack via cryptocurrency. No subscription available.',
       endpoint: 'POST /v1/billing/crypto-credit-pack',
@@ -1105,7 +1124,11 @@ async function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: s
     const consumed = await repo.consumeRateLimitCounter(key, rule.windowSeconds);
     currentCount = consumed.count;
     resetEpochSeconds = consumed.resetEpochSeconds;
-  } catch {
+  } catch (err) {
+    if (Date.now() - _rateLimitFallbackLastWarnMs > 60_000) {
+      _rateLimitFallbackLastWarnMs = Date.now();
+      console.warn('[SECURITY] Rate limiting DB unavailable — falling back to in-memory per-instance counters. Security posture is degraded.', String(err));
+    }
     const now = Date.now();
     let state = rateLimitState.get(key);
     if (!state || now >= state.resetAtMs) {
@@ -1353,6 +1376,26 @@ function requestErrorLogFields(req: FastifyRequest) {
 }
 
 export function buildApp() {
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  const KNOWN_WEAK_ADMIN_KEYS = new Set(['change-me', 'changeme', 'admin', 'test', 'secret', '']);
+  if (KNOWN_WEAK_ADMIN_KEYS.has(config.adminKey)) {
+    throw new Error(
+      'ADMIN_KEY is missing or set to a known default. Set a strong, unique value before starting the server.',
+    );
+  }
+  if (!config.databaseUrl) {
+    throw new Error('DATABASE_URL is required.');
+  }
+  if (isProduction) {
+    if (!config.baseUrl) {
+      throw new Error('BASE_URL is required in production. IPN callback URLs cannot be derived safely from request headers.');
+    }
+    if (!config.stripeWebhookSecret) {
+      throw new Error('STRIPE_WEBHOOK_SECRET is required in production.');
+    }
+  }
+
   const app = Fastify({ logger: true, bodyLimit: 1_048_576 });
 
   if (!startupDbEnvCheckLogged) {
@@ -1394,12 +1437,18 @@ export function buildApp() {
   });
 
   app.setErrorHandler((err, req, reply) => {
-    req.log.error({ err, ...requestErrorLogFields(req) }, 'unhandled error');
+    const safeErr = {
+      message: sanitizeErrorMessage(err.message),
+      code: (err as any).code,
+      statusCode: (err as any).statusCode,
+      name: err.name,
+    };
+    req.log.error({ err: safeErr, ...requestErrorLogFields(req) }, 'unhandled error');
     if (reply.sent) return;
     const statusCode = (err as any).statusCode ?? 500;
     reply.status(statusCode).send(errorEnvelope(
       statusCode >= 500 ? 'internal_error' : (err as any).code ?? 'request_error',
-      statusCode >= 500 ? 'Internal server error' : (err.message || 'Request error'),
+      statusCode >= 500 ? 'Internal server error' : sanitizeErrorMessage(err.message || 'Request error'),
     ));
   });
 
@@ -1409,9 +1458,6 @@ export function buildApp() {
     reply.header('X-RateLimit-Limit', String(config.defaultRateLimitLimit));
     reply.header('X-RateLimit-Remaining', String(config.defaultRateLimitLimit));
     reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + 60));
-    reply.header('X-Credits-Remaining', '0');
-    reply.header('X-Credits-Charged', '0');
-    reply.header('X-Credits-Plan', 'unknown');
 
     if (path === '/v1/bootstrap') {
       if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
@@ -1441,7 +1487,6 @@ export function buildApp() {
     (req as AuthedRequest).plan = found.plan_code;
     (req as AuthedRequest).isSubscriber = isSubscriber;
     reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
-    reply.header('X-Credits-Remaining', String(await repo.creditBalance(found.node_id)));
 
     if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
   });
@@ -1862,10 +1907,12 @@ export function buildApp() {
       return reply.status(result.status === 422 ? 422 : 502).send(errorEnvelope(result.code, result.message));
     }
     const payment = result as nowPayments.CryptoPaymentResult;
+    const effectivePayCurrencyRaw = (payment.pay_currency ?? parsed.data.pay_currency).toLowerCase();
+    const isStablecoin = USD_STABLECOINS.has(effectivePayCurrencyRaw);
     const parsedPayAmount = Number(payment.pay_amount);
-    const effectiveSendAmount = Number.isFinite(parsedPayAmount) && parsedPayAmount > 0
-      ? parsedPayAmount
-      : priceDollars;
+    const effectiveSendAmount = isStablecoin
+      ? priceDollars
+      : (Number.isFinite(parsedPayAmount) && parsedPayAmount > 0 ? parsedPayAmount : priceDollars);
     await repo.insertCryptoPayment(
       parsed.data.node_id,
       payment.payment_id,
@@ -1879,7 +1926,7 @@ export function buildApp() {
       payment.pay_amount,
     );
     const effectivePayCurrency = payment.pay_currency ?? parsed.data.pay_currency;
-    const chainLabel = CRYPTO_CHAIN_LABELS[effectivePayCurrency.toLowerCase()] ?? null;
+    const chainLabel = CRYPTO_CHAIN_LABELS[effectivePayCurrencyRaw] ?? null;
     return {
       node_id: parsed.data.node_id,
       pack_code: pack.pack_code,
@@ -2304,9 +2351,7 @@ export function buildApp() {
     const balanceAfter = await repo.creditBalance(nodeId);
     reply.header('X-Credits-Remaining', String(balanceAfter));
     const creditsCharged = Math.max(0, balanceBefore - balanceAfter);
-    if (creditsCharged > 0) {
-      reply.header('X-Credits-Charged', String(creditsCharged));
-    }
+    reply.header('X-Credits-Charged', String(creditsCharged));
     return maybeAppendWebhookNudge(nodeId, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {
@@ -2480,6 +2525,9 @@ export function buildApp() {
       }
     });
 
+    webhookApp.head('/v1/webhooks/nowpayments', async () => ({ ok: true }));
+    webhookApp.get('/v1/webhooks/nowpayments', async () => ({ ok: true }));
+
     webhookApp.post('/v1/webhooks/nowpayments', async (req, reply) => {
       try {
         const sig = (req.headers['x-nowpayments-sig'] as string | undefined) ?? '';
@@ -2513,8 +2561,17 @@ export function buildApp() {
           webhookApp.log.warn({ payment_id: paymentId, order_id: orderId }, 'NOWPayments IPN for unknown payment');
           return { ok: true };
         }
-        if (existing.status === 'finished') {
-          webhookApp.log.info({ payment_id: paymentId, node_id: existing.node_id, reason: 'already_finished' }, 'NOWPayments IPN skipped — payment already finished');
+        const TERMINAL_CRYPTO_STATUSES = new Set(['finished', 'confirmed', 'expired', 'failed', 'refunded']);
+        if (TERMINAL_CRYPTO_STATUSES.has(existing.status)) {
+          webhookApp.log.info({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'already_terminal' }, 'NOWPayments IPN skipped — payment already in terminal state');
+          return { ok: true };
+        }
+
+        const CRYPTO_STATUS_RANK: Record<string, number> = { waiting: 1, confirming: 2, sending: 3, partially_paid: 4, finished: 5, confirmed: 5, expired: 5, failed: 5, refunded: 5 };
+        const existingRank = CRYPTO_STATUS_RANK[existing.status] ?? 0;
+        const incomingRank = CRYPTO_STATUS_RANK[paymentStatus] ?? 0;
+        if (incomingRank > 0 && incomingRank < existingRank) {
+          webhookApp.log.warn({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'backward_status_transition' }, 'NOWPayments IPN rejected — backward status transition');
           return { ok: true };
         }
 

@@ -513,8 +513,18 @@ export const fabricService = {
       };
     }
 
-    const balance = await repo.creditBalance(nodeId);
-    if (balance < totalCost) return { creditsExhausted: { credits_required: totalCost, credits_balance: balance } };
+    const debited = await repo.debitCreditsAtomic(
+      nodeId,
+      pageIndex > 1 ? 'debit_search_page' : 'debit_search',
+      totalCost,
+      { scope: body.scope },
+      idemKey,
+    );
+    if (!debited) {
+      const balance = await repo.creditBalance(nodeId);
+      return { creditsExhausted: { credits_required: totalCost, credits_balance: balance } };
+    }
+    const creditsCharged = totalCost;
 
     const categoryIdsAny = Array.isArray(body?.filters?.category_ids_any)
       ? body.filters.category_ids_any.filter((value: unknown) => Number.isInteger(value))
@@ -530,9 +540,7 @@ export const fabricService = {
       targetNodeId,
       categoryIdsAny,
     );
-    const creditsCharged = totalCost;
 
-    await repo.addCredit(nodeId, pageIndex > 1 ? 'debit_search_page' : 'debit_search', -creditsCharged, { scope: body.scope }, idemKey);
     await repo.logSearch(nodeId, kind, body.scope, body.q ?? null, body.filters ?? {}, 0, creditsCharged);
 
     const hasMore = rows.length === limit;
@@ -619,10 +627,12 @@ export const fabricService = {
   async nodePublicInventory(nodeId: string, targetNodeId: string, kind: 'listings'|'requests', limit: number, cursor: string | null) {
     if (kind === 'requests') await repo.expireStaleRequests();
     const cost = config.searchCreditCost;
-    const balance = await repo.creditBalance(nodeId);
-    if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
+    const debited = await repo.debitCreditsAtomic(nodeId, 'debit_search_page', cost, { kind: `public_nodes_${kind}` });
+    if (!debited) {
+      const balance = await repo.creditBalance(nodeId);
+      return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
+    }
     const rows = await repo.listNodePublic(targetNodeId, kind, limit, cursor);
-    await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}` }, null);
     const hasMore = rows.length === limit;
     const nextCursor = hasMore ? rows[rows.length - 1]?.published_at ?? null : null;
     return { node_id: targetNodeId, limit, cursor: nextCursor, items: rows.map((r) => r.doc), has_more: hasMore };
@@ -650,10 +660,12 @@ export const fabricService = {
       };
     }
 
-    const balance = await repo.creditBalance(nodeId);
-    if (balance < cost) return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
+    const debited = await repo.debitCreditsAtomic(nodeId, 'debit_search_page', cost, { kind: `public_nodes_${kind}_category`, category_id: categoryId, page_index: pageIndex });
+    if (!debited) {
+      const balance = await repo.creditBalance(nodeId);
+      return { creditsExhausted: { credits_required: cost, credits_balance: balance } };
+    }
     const rows = await repo.listNodePublicByCategory(targetNodeId, kind, categoryId, limit, publishedAt);
-    await repo.addCredit(nodeId, 'debit_search_page', -cost, { kind: `public_nodes_${kind}_category`, category_id: categoryId, page_index: pageIndex }, null);
     const hasMore = rows.length === limit;
     const rawPublishedAt = rows[rows.length - 1]?.published_at ?? null;
     const lastPublishedAtIso = rawPublishedAt instanceof Date
@@ -2289,10 +2301,11 @@ async function applyCreditPackGrant(nodeId: string, eventType: string, eventObje
       const rolloverCap = monthlyAmount * 2;
       const subCreditBalance = await repo.subscriptionCreditBalance(nodeId);
       const grantAmount = rolloverCap > 0 ? Math.max(0, Math.min(monthlyAmount, rolloverCap - subCreditBalance)) : monthlyAmount;
+      const monthlyIdemKey = `subscription_monthly:${nodeId}:${invoiceId ?? periodStart}`;
       if (grantAmount > 0) {
-        await repo.addCredit(nodeId, 'grant_subscription_monthly', grantAmount, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: grantAmount < monthlyAmount });
+        await repo.addCreditIdempotent(nodeId, 'grant_subscription_monthly', grantAmount, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: grantAmount < monthlyAmount }, monthlyIdemKey);
       } else {
-        await repo.addCredit(nodeId, 'grant_subscription_monthly', 0, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: true, reason: 'rollover_cap_reached' });
+        await repo.addCreditIdempotent(nodeId, 'grant_subscription_monthly', 0, { period_start: periodStart, full_amount: monthlyAmount, capped_by_rollover: true, reason: 'rollover_cap_reached' }, monthlyIdemKey);
       }
     }
 

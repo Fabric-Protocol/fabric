@@ -9854,7 +9854,7 @@ test('POST /v1/billing/crypto-credit-pack creates payment and stores record (moc
     assert.ok(body.pay_address.length > 0, 'pay_address should be non-empty');
     assert.equal(typeof body.send_amount, 'number');
     assert.ok(body.send_amount > 0, 'send_amount should be positive');
-    assert.equal(body.send_amount, Number(body.price_amount) * 1.37);
+    assert.equal(body.send_amount, body.price_amount, 'stablecoin send_amount should equal price_amount exactly');
     assert.equal(body.payment_status, 'waiting');
     assert.ok(body.order_id.startsWith('fabric:'), 'order_id should be prefixed');
     assert.equal(body.payment_id, mockPaymentId);

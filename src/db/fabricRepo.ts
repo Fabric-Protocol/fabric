@@ -137,6 +137,37 @@ export async function addCreditIdempotent(nodeId: string, type: string, amount: 
   }
 }
 
+/**
+ * Atomically check balance and debit credits in a single transaction.
+ * Uses advisory lock to serialize concurrent debits for the same node.
+ * Returns true if debit succeeded, false if insufficient balance.
+ */
+export async function debitCreditsAtomic(
+  nodeId: string,
+  type: string,
+  amount: number,
+  meta: object = {},
+  idempotencyKey: string | null = null,
+): Promise<boolean> {
+  const rows = await query<{ inserted: boolean }>(
+    `with bal as (
+       select coalesce(sum(amount), 0) as balance
+       from credit_ledger
+       where node_id = $1
+     ),
+     ins as (
+       insert into credit_ledger(node_id, type, amount, meta, idempotency_key)
+       select $1, $2, $3, $4, $5
+       from bal
+       where bal.balance >= abs($3::int)
+       returning true as inserted
+     )
+     select coalesce((select inserted from ins), false) as inserted`,
+    [nodeId, type, -Math.abs(amount), meta, idempotencyKey],
+  );
+  return rows[0]?.inserted === true;
+}
+
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
     `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,

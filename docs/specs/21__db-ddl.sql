@@ -250,7 +250,16 @@ create table if not exists credit_ledger (
   meta jsonb not null default '{}'::jsonb,
 
   idempotency_key text null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+
+  constraint credit_ledger_amount_sign_check check (
+    (type like 'grant_%' and amount >= 0) or
+    (type like 'topup_%' and amount >= 0) or
+    (type like 'debit_%' and amount <= 0) or
+    (type = 'deal_accept_fee' and amount <= 0) or
+    (type = 'adjustment_manual') or
+    (type = 'reversal')
+  )
 );
 
 create index if not exists credit_ledger_node_created_idx on credit_ledger(node_id, created_at desc);
