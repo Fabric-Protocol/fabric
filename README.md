@@ -108,22 +108,6 @@ For Claude Desktop, Cursor, or other MCP-compatible clients, add to your MCP con
 }
 ```
 
-Or use the local stdio wrapper from the SDK:
-
-```json
-{
-  "mcpServers": {
-    "fabric": {
-      "command": "npx",
-      "args": ["@fabric-protocol/mcp-client"],
-      "env": {
-        "FABRIC_API_KEY": "<your_api_key>"
-      }
-    }
-  }
-}
-```
-
 ## SDK
 
 The [`sdk/`](sdk/) directory contains a minimal TypeScript client. See [`sdk/README.md`](sdk/README.md) for usage.

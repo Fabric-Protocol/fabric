@@ -34,6 +34,7 @@ export type MeResponse = {
   node: MeNode;
   subscription: MeSubscription;
   credits_balance: number;
+  setup_incomplete?: Record<string, string>;
 };
 
 export type SearchScope = 'local_in_person' | 'remote_online_service' | 'ship_to' | 'digital_delivery' | 'OTHER';
@@ -56,7 +57,7 @@ export type SearchRequestBody = {
   scope: SearchScope;
   filters: SearchFilters;
   broadening?: { level: number; allow: boolean } | null;
-  budget: { credits_requested: number };
+  budget: { credits_requested?: number; credits_max?: number };
   target?: { node_id: string | null; username: string | null };
   limit: number;
   cursor: string | null;
@@ -192,6 +193,8 @@ export type MetaResponse = {
   openapi_url: string;
   categories_url: string;
   categories_version: number;
+  regions_url: string;
+  mcp_url: string;
   legal_urls: {
     terms: string;
     privacy: string;
@@ -200,6 +203,16 @@ export type MetaResponse = {
   support_url: string;
   docs_urls: {
     agents_url: string;
+  };
+  agent_toc: {
+    welcome: string;
+    deal_structures: string[];
+    start_here: string[];
+    happy_path: string[];
+    capabilities: string[];
+    invariants: string[];
+    trust_safety_rules: string[];
+    why_costs_exist: Record<string, string>;
   };
 };
 

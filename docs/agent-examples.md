@@ -88,6 +88,7 @@ curl -sS -X POST "$BASE/v1/search/listings" \
     "scope":"OTHER",
     "filters":{"scope_notes":"CAD"},
     "broadening":{"level":0,"allow":false},
+    "budget":{"credits_requested":10},
     "limit":20,
     "cursor":null
   }'
