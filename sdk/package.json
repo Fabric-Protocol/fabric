@@ -2,7 +2,10 @@
   "name": "fabric-sdk-local",
   "private": true,
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "node ../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
   }
 }

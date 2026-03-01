@@ -102,6 +102,7 @@ export const fabricService = {
       };
     } catch (err: any) {
       if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
+      if (isEmailTakenError(err)) return { validationError: 'email_taken' };
       throw err;
     }
   },
@@ -259,6 +260,7 @@ export const fabricService = {
       );
     } catch (err: any) {
       if (isDisplayNameTakenError(err)) return { validationError: 'display_name_taken' };
+      if (isEmailTakenError(err)) return { validationError: 'email_taken' };
       throw err;
     }
     return this.me(nodeId);
@@ -1489,6 +1491,10 @@ async function summarizeSearchNodes(rows: any[]) {
 
 function isDisplayNameTakenError(err: any) {
   return err?.code === '23505' && err?.constraint === 'nodes_display_name_unique_idx';
+}
+
+function isEmailTakenError(err: any) {
+  return err?.code === '23505' && err?.constraint === 'nodes_email_unique_idx';
 }
 
 function paidPlanQuotes() {

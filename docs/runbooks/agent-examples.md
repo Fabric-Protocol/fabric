@@ -57,7 +57,7 @@ UNIT=$(curl -sS -X POST "$BASE/v1/units" \
     "service_region":{"country_code":"US","admin1":"CA"},
     "delivery_format":"download_link",
     "tags":["cad","design"],
-    "category_ids":[101],
+    "category_ids":[2],
     "public_summary":"Remote CAD design services"
   }')
 UNIT_ID=$(printf '%s' "$UNIT" | jq -r '.unit.id')
