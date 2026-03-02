@@ -146,12 +146,11 @@ remote_online_service
 json
 Copy code
 {
-  "regions": ["string"],
-  "languages": ["string"]
+  "regions": ["string"]
 }
-Rule: at least one of regions or languages.
+Rule: regions is required.
 
-If `regions` is provided, each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
+Each region ID must match `^[A-Z]{2}(-[A-Z0-9]{1,3})?$` (`CC` or `CC-AA`).
 
 ship_to
 

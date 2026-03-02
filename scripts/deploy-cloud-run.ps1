@@ -47,7 +47,7 @@ gcloud run deploy $ServiceName `
   --image $ImageName `
   --region $Region `
   --platform managed `
-  --no-allow-unauthenticated `
+  --allow-unauthenticated `
   --max-instances=1 `
   --min-instances=1 `
   --service-account $ServiceAccount `

@@ -755,7 +755,6 @@ export const openApiDocument = {
           center: { type: 'object', additionalProperties: true },
           radius_miles: { type: 'number' },
           regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
-          languages: { type: 'array', items: { type: 'string' } },
           ship_to_regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
           ships_from_regions: { type: 'array', items: { type: 'string', pattern: REGION_ID_PATTERN } },
           max_ship_days: { type: 'integer', minimum: 1, maximum: 30 },

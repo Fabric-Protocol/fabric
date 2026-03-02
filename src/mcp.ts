@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Fastify, { FastifyRequest } from 'fastify';
 import { errorEnvelope } from './http.js';
+import { config } from './config.js';
 
 type AppInstance = ReturnType<typeof Fastify>;
 
@@ -32,8 +33,21 @@ const searchInputSchema = {
   type: 'object' as const,
   properties: {
     q: { type: ['string', 'null'] as const, description: 'Free-text query (nullable).' },
-    scope: { type: 'string' as const, enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'], description: 'Primary modality for the search (determines required filters).' },
-    filters: { type: 'object' as const, description: 'Structured filters (category_ids_any, region, etc.).' },
+    scope: { type: 'string' as const, enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'], description: 'Primary modality for the search. Each scope requires specific filters — see "filters" description.' },
+    filters: {
+      type: 'object' as const,
+      properties: {
+        regions: { type: 'array' as const, items: { type: 'string' as const }, description: 'ISO region codes (e.g. ["US"]). Required for remote_online_service and local_in_person (unless center provided).' },
+        center: { type: 'object' as const, properties: { lat: { type: 'number' as const }, lon: { type: 'number' as const } }, description: 'Geo-center for local_in_person search. Required with radius_miles (unless regions provided).' },
+        radius_miles: { type: 'number' as const, description: 'Radius in miles (1-200) for local_in_person center-based search.' },
+        ship_to_regions: { type: 'array' as const, items: { type: 'string' as const }, description: 'ISO region codes for destination. Required for ship_to scope.' },
+        ships_from_regions: { type: 'array' as const, items: { type: 'string' as const }, description: 'ISO region codes for origin. Optional for ship_to scope.' },
+        max_ship_days: { type: 'number' as const, description: 'Max shipping days (1-30). Optional for ship_to scope.' },
+        category_ids_any: { type: 'array' as const, items: { type: 'number' as const }, description: 'Match listings in any of these category IDs.' },
+        scope_notes: { type: 'string' as const, description: 'Free-text scope description. Required for OTHER scope.' },
+      },
+      description: 'Scope-specific filters. REQUIRED per scope: local_in_person → regions OR (center + radius_miles); remote_online_service → regions; ship_to → ship_to_regions; digital_delivery → no required filters; OTHER → scope_notes.',
+    },
     broadening: {
       type: 'object' as const,
       properties: { level: { type: 'number' as const, description: 'Broadening level (0 = none).' }, allow: { type: 'boolean' as const, description: 'Allow automatic broadening.' } },
@@ -103,7 +117,7 @@ const requestCreateSchema = {
 
 /* ---------- unauthenticated tools ---------- */
 
-const UNAUTH_TOOL_NAMES = new Set(['fabric_bootstrap', 'fabric_get_meta', 'fabric_get_categories', 'fabric_get_regions']);
+const UNAUTH_TOOL_NAMES = new Set(['fabric_bootstrap', 'fabric_get_meta', 'fabric_get_categories', 'fabric_get_regions', 'fabric_recovery_start', 'fabric_recovery_complete']);
 
 /* ---------- tool definitions ---------- */
 
@@ -111,13 +125,14 @@ const TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant.',
+    description: 'Create a new Fabric node and receive an API key + 100 free credits. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         display_name: { type: 'string' as const, description: 'Display name for the new node.' },
         email: { type: ['string', 'null'] as const, description: 'Optional email for account recovery.' },
         referral_code: { type: ['string', 'null'] as const, description: 'Optional referral code from another node.' },
+        recovery_public_key: { type: ['string', 'null'] as const, description: 'Ed25519 public key (hex) for account recovery. Strongly recommended — without this, a lost API key cannot be recovered.' },
       },
       required: ['display_name'],
       additionalProperties: false,
@@ -143,16 +158,45 @@ const TOOLS = [
     annotations: readOnlyAnnotation,
   },
 
+  // --- Account Recovery (unauthenticated) ---
+  {
+    name: 'fabric_recovery_start',
+    description: 'Start account recovery if you lost your API key. Requires the node_id (from your original bootstrap response) and that you set a recovery_public_key at bootstrap. Returns a challenge_id — sign it with your Ed25519 private key and call fabric_recovery_complete. No authentication required.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        node_id: { type: 'string' as const, description: 'Your node ID (UUID from the original bootstrap response).' },
+      },
+      required: ['node_id'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_recovery_complete',
+    description: 'Complete account recovery by providing the signed challenge. Returns a new API key. No authentication required.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        challenge_id: { type: 'string' as const, description: 'The challenge_id returned by fabric_recovery_start.' },
+        signature: { type: 'string' as const, description: 'Ed25519 signature of the challenge (hex-encoded). Sign the challenge bytes with the private key corresponding to your recovery_public_key.' },
+      },
+      required: ['challenge_id', 'signature'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+
   // --- Existing: Search (metered) ---
   {
     name: 'fabric_search_listings',
-    description: 'Search published marketplace listings (supply side). Metered: costs credits per the budget contract. Returns matching public listings with scope-specific ranking.',
+    description: 'Search published marketplace listings (supply side). Metered: costs credits per the budget contract. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
     inputSchema: searchInputSchema,
     annotations: searchAnnotation,
   },
   {
     name: 'fabric_search_requests',
-    description: 'Search published marketplace requests (demand side). Metered: costs credits per the budget contract. Returns matching public requests with scope-specific ranking.',
+    description: 'Search published marketplace requests (demand side). Metered: costs credits per the budget contract. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
     inputSchema: searchInputSchema,
     annotations: searchAnnotation,
   },
@@ -569,42 +613,42 @@ const TOOLS = [
   },
   {
     name: 'fabric_buy_credit_pack_stripe',
-    description: 'Start a Stripe checkout to buy a credit pack. Returns a checkout_url to complete payment. Pack options: credits_500 ($9.99), credits_1500 ($19.99), credits_4500 ($49.99).',
+    description: 'Start a Stripe checkout to buy a credit pack. Returns a checkout_url to complete payment. Pack options: credits_500 ($9.99), credits_1500 ($19.99), credits_4500 ($49.99). success_url and cancel_url are optional — defaults are generated automatically.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         pack_code: { type: 'string' as const, enum: ['credits_500', 'credits_1500', 'credits_4500'], description: 'Which credit pack to purchase.' },
-        success_url: { type: 'string' as const, description: 'URL to redirect to after successful payment.' },
-        cancel_url: { type: 'string' as const, description: 'URL to redirect to if payment is cancelled.' },
+        success_url: { type: ['string', 'null'] as const, description: 'URL to redirect to after successful payment. Optional — auto-generated if omitted.' },
+        cancel_url: { type: ['string', 'null'] as const, description: 'URL to redirect to if payment is cancelled. Optional — auto-generated if omitted.' },
       },
-      required: ['pack_code', 'success_url', 'cancel_url'],
+      required: ['pack_code'],
       additionalProperties: false,
     },
     annotations: createAnnotation,
   },
   {
     name: 'fabric_subscribe_stripe',
-    description: 'Start a Stripe checkout for a subscription plan. Returns a checkout_url to complete signup. Plans: basic ($9.99/mo, 1000 credits), pro ($19.99/mo, 3000 credits), business ($49.99/mo, 10000 credits).',
+    description: 'Start a Stripe checkout for a subscription plan. Returns a checkout_url to complete signup. Plans: basic ($9.99/mo, 1000 credits), pro ($19.99/mo, 3000 credits), business ($49.99/mo, 10000 credits). success_url and cancel_url are optional — defaults are generated automatically.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         plan_code: { type: 'string' as const, enum: ['basic', 'pro', 'business'], description: 'Subscription plan to sign up for.' },
-        success_url: { type: 'string' as const, description: 'URL to redirect to after successful signup.' },
-        cancel_url: { type: 'string' as const, description: 'URL to redirect to if signup is cancelled.' },
+        success_url: { type: ['string', 'null'] as const, description: 'URL to redirect to after successful signup. Optional — auto-generated if omitted.' },
+        cancel_url: { type: ['string', 'null'] as const, description: 'URL to redirect to if signup is cancelled. Optional — auto-generated if omitted.' },
       },
-      required: ['plan_code', 'success_url', 'cancel_url'],
+      required: ['plan_code'],
       additionalProperties: false,
     },
     annotations: createAnnotation,
   },
   {
     name: 'fabric_buy_credit_pack_crypto',
-    description: 'Create a crypto payment invoice for a credit pack. Returns a pay_address and pay_amount — send the exact amount to complete purchase. Fully agent-native, no browser needed. Use fabric_get_crypto_currencies to see available currencies.',
+    description: 'Create a crypto payment invoice for a credit pack. Only USDC on Solana is accepted. Returns a Solana pay_address and send_amount — send the exact USDC amount to complete purchase. Fully agent-native, no browser needed.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         pack_code: { type: 'string' as const, enum: ['credits_500', 'credits_1500', 'credits_4500'], description: 'Which credit pack to purchase.' },
-        pay_currency: { type: 'string' as const, description: 'Crypto currency to pay with (e.g. "usdcsol", "btc", "eth"). Use fabric_get_crypto_currencies for the full list.' },
+        pay_currency: { type: 'string' as const, enum: ['usdcsol'], description: 'Must be "usdcsol" (USDC on Solana). Only accepted currency.' },
       },
       required: ['pack_code', 'pay_currency'],
       additionalProperties: false,
@@ -613,7 +657,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_get_crypto_currencies',
-    description: 'List available crypto currencies for credit pack purchases.',
+    description: 'List accepted crypto currencies for credit pack purchases. Currently only USDC on Solana ("usdcsol").',
     inputSchema: { type: 'object' as const, properties: {}, additionalProperties: false },
     annotations: readOnlyAnnotation,
   },
@@ -723,6 +767,13 @@ function postHeaders(authHeader: string) {
   return { ...authedHeaders(authHeader), 'idempotency-key': idemKey() };
 }
 
+function defaultCheckoutUrl(path: string, req?: { headers?: Record<string, unknown> }): string {
+  if (config.baseUrl) return `${config.baseUrl}${path}`;
+  const host = req?.headers?.['x-forwarded-host'] || req?.headers?.host;
+  if (host) return `https://${host}${path}`;
+  return `https://localhost${path}`;
+}
+
 /* ---------- tool execution ---------- */
 
 async function executeTool(
@@ -730,6 +781,8 @@ async function executeTool(
   authHeader: string,
   name: string,
   args: Record<string, unknown>,
+  clientIp?: string,
+  reqHeaders?: Record<string, unknown>,
 ): Promise<{ status: number; body: unknown }> {
   const argError = validateToolArgs(name, args);
   if (argError) {
@@ -743,15 +796,18 @@ async function executeTool(
     const metaBody = metaRes.json() as Record<string, unknown>;
     const legalVersion = String(metaBody.required_legal_version ?? '2026-02-17');
 
+    const bootstrapHeaders: Record<string, string> = { 'content-type': 'application/json', 'idempotency-key': idemKey() };
+    if (clientIp) bootstrapHeaders['x-forwarded-for'] = clientIp;
+
     const res = await app.inject({
       method: 'POST',
       url: '/v1/bootstrap',
-      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      headers: bootstrapHeaders,
       payload: {
         display_name: args.display_name,
         email: args.email ?? null,
         referral_code: args.referral_code ?? null,
-        recovery_public_key: null,
+        recovery_public_key: typeof args.recovery_public_key === 'string' ? args.recovery_public_key : null,
         messaging_handles: [],
         legal: { accepted: true, version: legalVersion },
       },
@@ -771,6 +827,28 @@ async function executeTool(
 
   if (name === 'fabric_get_regions') {
     const res = await app.inject({ method: 'GET', url: '/v1/regions' });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  // --- Account Recovery (unauthenticated) ---
+
+  if (name === 'fabric_recovery_start') {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/start',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      payload: { node_id: args.node_id, method: 'pubkey' },
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_recovery_complete') {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/recovery/complete',
+      headers: { 'content-type': 'application/json', 'idempotency-key': idemKey() },
+      payload: { challenge_id: args.challenge_id, signature: args.signature },
+    });
     return { status: res.statusCode, body: res.json() };
   }
 
@@ -1156,11 +1234,14 @@ async function executeTool(
     const nodeId = (meBody.node as any)?.id;
     if (!nodeId) return { status: meRes.statusCode, body: meBody };
 
+    const reqCtx = { headers: reqHeaders };
+    const successUrl = typeof args.success_url === 'string' ? args.success_url : defaultCheckoutUrl('/checkout/success', reqCtx);
+    const cancelUrl = typeof args.cancel_url === 'string' ? args.cancel_url : defaultCheckoutUrl('/checkout/cancel', reqCtx);
     const res = await app.inject({
       method: 'POST',
       url: '/v1/billing/credit-packs/checkout-session',
       headers: postHeaders(authHeader),
-      payload: { node_id: nodeId, pack_code: args.pack_code, success_url: args.success_url, cancel_url: args.cancel_url },
+      payload: { node_id: nodeId, pack_code: args.pack_code, success_url: successUrl, cancel_url: cancelUrl },
     });
     return { status: res.statusCode, body: res.json() };
   }
@@ -1171,11 +1252,14 @@ async function executeTool(
     const nodeId = (meBody.node as any)?.id;
     if (!nodeId) return { status: meRes.statusCode, body: meBody };
 
+    const reqCtx = { headers: reqHeaders };
+    const successUrl = typeof args.success_url === 'string' ? args.success_url : defaultCheckoutUrl('/checkout/success', reqCtx);
+    const cancelUrl = typeof args.cancel_url === 'string' ? args.cancel_url : defaultCheckoutUrl('/checkout/cancel', reqCtx);
     const res = await app.inject({
       method: 'POST',
       url: '/v1/billing/checkout-session',
       headers: postHeaders(authHeader),
-      payload: { node_id: nodeId, plan_code: args.plan_code, success_url: args.success_url, cancel_url: args.cancel_url },
+      payload: { node_id: nodeId, plan_code: args.plan_code, success_url: successUrl, cancel_url: cancelUrl },
     });
     return { status: res.statusCode, body: res.json() };
   }
@@ -1417,7 +1501,9 @@ export function registerMcpRoute(app: AppInstance) {
       }
 
       try {
-        const result = await executeTool(app, authHeader, toolName, toolArgs);
+        const fwdFor = String(req.headers['x-forwarded-for'] ?? '');
+        const clientIp = fwdFor ? fwdFor.split(',')[0]?.trim() : (req.ip ?? undefined);
+        const result = await executeTool(app, authHeader, toolName, toolArgs, clientIp, req.headers as Record<string, unknown>);
         const isError = result.status < 200 || result.status >= 300;
         return jsonRpcResult(id, toolContent(result.body, isError));
       } catch (err: unknown) {

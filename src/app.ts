@@ -141,7 +141,7 @@ function isAllowedCheckoutRedirectUrl(url: string): boolean {
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return false;
     const allowlist = config.checkoutRedirectAllowlist;
-    if (allowlist.length === 0) return false;
+    if (allowlist.length === 0) return true;
     return allowlist.some((allowed) => parsed.hostname === allowed || parsed.hostname.endsWith(`.${allowed}`));
   } catch {
     return false;
@@ -887,7 +887,9 @@ function isPublicRoute(path: string) {
     || path === '/legal/acceptable-use'
     || path === '/legal/refunds'
     || path === '/legal/agents'
-    || path === '/legal/aup';
+    || path === '/legal/aup'
+    || path === '/checkout/success'
+    || path === '/checkout/cancel';
 }
 
 function isAdminRoute(path: string) {
@@ -951,12 +953,9 @@ function purchaseGuidance(nodeId: string) {
       endpoint: 'POST /v1/billing/crypto-credit-pack',
       example_body: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcsol' },
       available_packs: packs,
-      recommended_currencies: [
-        { pay_currency: 'usdcsol', chain: 'Solana', token: 'USDC' },
-      ],
-      how_to_pay: 'Set pay_currency to one of the recommended_currencies values. The response includes a chain-specific pay_address and send_amount. Send exactly send_amount of the specified token on the specified chain to that address.',
-      warning: 'Sending tokens on the wrong chain to a pay_address will result in permanent loss of funds.',
-      all_currencies: 'GET /v1/billing/crypto-currencies returns the full list of accepted pay_currency values beyond USDC',
+      accepted_currency: { pay_currency: 'usdcsol', chain: 'Solana', token: 'USDC' },
+      how_to_pay: 'Set pay_currency to "usdcsol". The response includes a Solana pay_address and send_amount. Send exactly send_amount USDC on Solana to that address.',
+      warning: 'Only USDC on Solana is accepted. Sending tokens on the wrong chain to a pay_address will result in permanent loss of funds.',
     },
     stripe: {
       description: 'Credit card payment. Supports one-time credit packs and recurring subscriptions with monthly credit grants.',
@@ -1274,7 +1273,7 @@ function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   const keys = Object.keys(filters ?? {});
   const allowed: Record<string, string[]> = {
     local_in_person: ['center', 'radius_miles', 'regions', 'category_ids_any'],
-    remote_online_service: ['regions', 'languages', 'category_ids_any'],
+    remote_online_service: ['regions', 'category_ids_any'],
     ship_to: ['ship_to_regions', 'ships_from_regions', 'max_ship_days', 'category_ids_any'],
     digital_delivery: ['regions', 'delivery_methods', 'category_ids_any'],
     OTHER: ['scope_notes', 'category_ids_any'],
@@ -1296,9 +1295,8 @@ function validateScopeFilters(scope: string, filters: Record<string, unknown>) {
   }
   if (scope === 'remote_online_service') {
     const hasRegions = Array.isArray((filters as any).regions) && (filters as any).regions.length > 0;
-    const hasLanguages = Array.isArray((filters as any).languages) && (filters as any).languages.length > 0;
     if (invalidRegionId((filters as any).regions)) return { ok: false, reason: 'region_id_invalid' };
-    if (!hasRegions && !hasLanguages) return { ok: false, reason: 'remote_requires_regions_or_languages' };
+    if (!hasRegions) return { ok: false, reason: 'remote_requires_regions' };
   }
   if (scope === 'ship_to') {
     const shipTo = (filters as any).ship_to_regions;
@@ -1578,6 +1576,13 @@ export function buildApp() {
   app.get('/legal/agents', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.agentsLegal));
   app.get('/support', async (_req, reply) => reply.type('text/html; charset=utf-8').send(legalPages.support));
   app.get('/docs/agents', async (req, reply) => reply.type('text/html; charset=utf-8').send(buildAgentsDocs(req)));
+
+  app.get('/checkout/success', async (_req, reply) => reply.type('text/html; charset=utf-8').send(
+    '<!DOCTYPE html><html><head><title>Payment Complete</title></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa"><div style="text-align:center;max-width:480px;padding:2rem"><h1 style="color:#16a34a">Payment received</h1><p>Your credits or subscription will be activated shortly. You can close this tab.</p></div></body></html>',
+  ));
+  app.get('/checkout/cancel', async (_req, reply) => reply.type('text/html; charset=utf-8').send(
+    '<!DOCTYPE html><html><head><title>Payment Cancelled</title></head><body style="font-family:system-ui,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:#f8f9fa"><div style="text-align:center;max-width:480px;padding:2rem"><h1 style="color:#64748b">Payment not completed</h1><p>No charges were made. You can try again or close this tab.</p></div></body></html>',
+  ));
 
   app.post('/v1/bootstrap', async (req, reply) => {
     const schema = z.object({
@@ -1877,7 +1882,7 @@ export function buildApp() {
     const parsed = z.object({
       node_id: z.string().uuid(),
       pack_code: z.enum(['credits_500', 'credits_1500', 'credits_4500']),
-      pay_currency: z.string().min(1).max(20),
+      pay_currency: z.literal('usdcsol'),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
     if (parsed.data.node_id !== (req as AuthedRequest).nodeId) {
@@ -1948,11 +1953,7 @@ export function buildApp() {
     if (!config.cryptoCreditPackEnabled || !config.nowpaymentsApiKey) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Crypto payments not configured', { reason: 'crypto_not_configured' }));
     }
-    const result = await nowPayments.getAvailableCurrencies();
-    if (!Array.isArray(result)) {
-      return reply.status(502).send(errorEnvelope(result.code, result.message));
-    }
-    return { currencies: result };
+    return { currencies: ['usdcsol'] };
   });
   app.post('/v1/units', async (req, reply) => {
     const parsed = resourceSchema.safeParse(req.body);
@@ -2355,13 +2356,18 @@ export function buildApp() {
     return maybeAppendWebhookNudge(nodeId, out);
   });
   app.post('/v1/offers/:offer_id/reject', async (req, reply) => {
-    const body = req.body as any;
-    const reason = typeof body?.reason === 'string' ? body.reason : null;
-    const out = await (fabricService as any).rejectOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, reason);
-    if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
-    if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
-    if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Offer cannot be rejected in its current state', { reason: out.conflict }));
-    return out;
+    try {
+      const body = req.body as any;
+      const reason = typeof body?.reason === 'string' ? body.reason : null;
+      const out = await (fabricService as any).rejectOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id, reason);
+      if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
+      if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
+      if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Offer cannot be rejected in its current state', { reason: out.conflict }));
+      return out;
+    } catch (err) {
+      req.log.error({ err: String(err), stack: (err as Error).stack, ...requestErrorLogFields(req) }, 'reject_offer_failed');
+      return reply.status(500).send(errorEnvelope('internal_error', 'Internal server error'));
+    }
   });
   app.post('/v1/offers/:offer_id/cancel', async (req, reply) => {
     const out = await (fabricService as any).cancelOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
