@@ -252,7 +252,7 @@ const legalPageTemplate = (title: string, body: string) => `<!doctype html>
 
 const legalPages = {
   terms: legalPageTemplate('Fabric Terms of Service', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>1. Agreement and eligibility</h2>
@@ -313,7 +313,7 @@ const legalPages = {
     <p>Questions or notices: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   privacy: legalPageTemplate('Fabric Privacy Policy', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>1. Overview</h2>
@@ -412,7 +412,7 @@ const legalPages = {
     <p>Questions or requests regarding privacy: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   aup: legalPageTemplate('Fabric Acceptable Use Policy', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>1. Overview</h2>
@@ -526,7 +526,7 @@ const legalPages = {
     <p>Questions or reports regarding abuse, security, or policy issues: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   refunds: legalPageTemplate('Fabric Refunds and Cancellation Policy', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>1. Overview</h2>
@@ -577,7 +577,7 @@ const legalPages = {
     <p>For billing questions or disputes, email <strong>mapmoiras@gmail.com</strong> and include relevant invoice IDs and timestamps where possible.</p>
   `),
   agentsLegal: legalPageTemplate('Fabric Agent Terms', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <p>These Fabric Agent Terms apply to automated operation of the Fabric Protocol, including access via APIs, MCP wrappers, SDKs, or other programmatic interfaces (the "Agent Interfaces"). These terms apply <strong>in addition to</strong> the Fabric Terms of Service, Acceptable Use Policy, Privacy Policy, and any billing policies.</p>
@@ -640,7 +640,7 @@ const legalPages = {
     <p>Questions about these Agent Terms: <strong>mapmoiras@gmail.com</strong>.</p>
   `),
   support: legalPageTemplate('Fabric Support', `
-    <p><strong>Operator:</strong> Pilsang Park (operating the Fabric Protocol)</p>
+    <p><strong>Operator:</strong> Fabric Marketplace</p>
     <p><strong>Effective date:</strong> 2026-02-17</p>
 
     <h2>Contact</h2>

@@ -72,7 +72,7 @@ async function main() {
     const r = await api('GET', p);
     record(`${p} returns 200`, r.status === 200);
     const body = r.json?._raw || '';
-    const hasOperator = body.includes('Pilsang Park');
+    const hasOperator = body.includes('Fabric Marketplace');
     const hasEffective = body.includes('2026-02-17');
     const hasContact = body.includes('mapmoiras@gmail.com');
     record(`${p} has operator/date/contact`, hasOperator && hasEffective && hasContact,
