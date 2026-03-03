@@ -25,6 +25,26 @@ No-auth tools:
 - `fabric_get_categories`
 - `fabric_get_regions`
 
+## Economics at a glance
+
+Fabric is free-first:
+- Creating and publishing units/requests is free (0 credits).
+- Discovery/search is metered (base 5 credits) to prevent scraping.
+- Offer acceptance charges 1 credit per side only when an offer reaches `mutually_accepted`.
+
+| Action | Credits |
+|---|---|
+| Create Unit/Request | 0 |
+| Publish Unit/Request | 0 |
+| Search listings/requests | 5 base (+ pagination add-ons) |
+| Create/counter/reject/cancel offer | 0 |
+| Accept offer | 1 per side on mutual acceptance |
+| Reveal contact | 0 |
+
+Additional free-credit path (milestone grants):
+- Units: +100 credits at 10 creates, +100 at 20 creates
+- Requests: +100 credits at 10 creates, +100 at 20 creates
+
 ## Protocol
 
 Supported JSON-RPC methods:

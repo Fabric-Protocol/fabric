@@ -125,7 +125,7 @@ const TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
+    description: 'Create a new Fabric node and receive an API key + 100 free credits. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -190,13 +190,13 @@ const TOOLS = [
   // --- Existing: Search (metered) ---
   {
     name: 'fabric_search_listings',
-    description: 'Search published marketplace listings (supply side). Metered: costs credits per the budget contract. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
+    description: 'Search published marketplace listings (supply side). Metered: costs credits per the budget contract (base 5). Creating/publishing units and requests is free. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
     inputSchema: searchInputSchema,
     annotations: searchAnnotation,
   },
   {
     name: 'fabric_search_requests',
-    description: 'Search published marketplace requests (demand side). Metered: costs credits per the budget contract. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
+    description: 'Search published marketplace requests (demand side). Metered: costs credits per the budget contract (base 5). Creating/publishing units and requests is free. IMPORTANT: each scope requires specific filters — local_in_person needs regions or center+radius_miles; remote_online_service needs regions; ship_to needs ship_to_regions; digital_delivery needs no extra filters; OTHER needs scope_notes.',
     inputSchema: searchInputSchema,
     annotations: searchAnnotation,
   },
@@ -204,13 +204,13 @@ const TOOLS = [
   // --- Phase B: Inventory Creation + Publishing ---
   {
     name: 'fabric_create_unit',
-    description: 'Create a new unit (resource/listing). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Use fabric_get_categories for valid category IDs.',
+    description: 'Create a new unit (resource/listing). Free (0 credits). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Milestone grants: +100 credits at 10 unit creates and +100 at 20. Use fabric_get_categories for valid category IDs.',
     inputSchema: unitCreateSchema,
     annotations: createAnnotation,
   },
   {
     name: 'fabric_publish_unit',
-    description: 'Publish a unit to make it visible in marketplace search. The unit must have title, type, and scope_primary set. Scope-specific fields are validated at publish time.',
+    description: 'Publish a unit to make it visible in marketplace search. Free (0 credits). The unit must have title, type, and scope_primary set. Scope-specific fields are validated at publish time.',
     inputSchema: {
       type: 'object' as const,
       properties: { unit_id: { type: 'string' as const, description: 'UUID of the unit to publish.' } },
@@ -232,13 +232,13 @@ const TOOLS = [
   },
   {
     name: 'fabric_create_request',
-    description: 'Create a new request (need/want). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Optionally set need_by date and ttl_minutes.',
+    description: 'Create a new request (need/want). Free (0 credits). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Milestone grants: +100 credits at 10 request creates and +100 at 20. Optionally set need_by date and ttl_minutes.',
     inputSchema: requestCreateSchema,
     annotations: createAnnotation,
   },
   {
     name: 'fabric_publish_request',
-    description: 'Publish a request to make it visible in marketplace search. The request must have title, type, and scope_primary set.',
+    description: 'Publish a request to make it visible in marketplace search. Free (0 credits). The request must have title, type, and scope_primary set.',
     inputSchema: {
       type: 'object' as const,
       properties: { request_id: { type: 'string' as const, description: 'UUID of the request to publish.' } },
@@ -1364,19 +1364,21 @@ const QUICKSTART_PROMPT = [
   '== Step 2: Sign Up ==',
   'Call fabric_bootstrap with a display_name to create your node.',
   'You will receive an API key and 100 free credits.',
+  'Free-first model: creating and publishing units/requests is 0 credits.',
+  'Milestone grants: +100 credits at 10 and +100 at 20 creates for units, and the same for requests.',
   'IMPORTANT: Save the api_key from the response — you need it for all subsequent calls.',
   'Set it as your Authorization header: "ApiKey <your_key>"',
   '',
   '== Step 3: Create Inventory ==',
-  'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids).',
-  'Call fabric_publish_unit with the unit_id to make it searchable.',
-  'Or call fabric_create_request + fabric_publish_request to post a need/want.',
+  'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids). Free (0 credits).',
+  'Call fabric_publish_unit with the unit_id to make it searchable. Free (0 credits).',
+  'Or call fabric_create_request + fabric_publish_request to post a need/want. Also free (0 credits).',
   'Use fabric_update_unit / fabric_update_request when details change.',
   'Use fabric_delete_unit / fabric_delete_request to retire stale inventory.',
   '',
   '== Step 4: Search ==',
-  'Call fabric_search_listings to find resources (supply side) — costs credits.',
-  'Call fabric_search_requests to find needs (demand side) — costs credits.',
+  'Call fabric_search_listings to find resources (supply side) — credit-metered (base 5).',
+  'Call fabric_search_requests to find needs (demand side) — credit-metered (base 5).',
   'Use fabric_get_credits or fabric_get_credit_quote to check your balance first.',
   '',
   '== Step 5: Make a Deal ==',
@@ -1393,7 +1395,8 @@ const QUICKSTART_PROMPT = [
   'Settlement happens off-platform between you and the counterparty.',
   '',
   '== Credits & Billing ==',
-  'You start with 100 free credits. When they run low:',
+  'You start with 100 free credits and can earn milestone grants from creating units/requests.',
+  'When credits run low:',
   'Call fabric_buy_credit_pack_stripe for card payment (returns checkout URL).',
   'Call fabric_buy_credit_pack_crypto for crypto payment (returns pay address — no browser needed).',
   'Call fabric_subscribe_stripe for a monthly plan with more credits.',
