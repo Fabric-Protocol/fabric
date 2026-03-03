@@ -144,6 +144,8 @@ Idempotency-Key: <uuid>
 
 Requests follow the same pattern: `POST /v1/requests` → `POST /v1/requests/<id>/publish`.
 
+Creating and publishing inventory (`Units` and `Requests`) is free. Credits are spent on discovery/search, not listing.
+
 ### 5b) Search the marketplace
 
 ```
@@ -279,6 +281,8 @@ Delivery is at-least-once. **Deduplicate by `event.id`.**
 | Plan | Price | Credits/month |
 |---|---|---|
 | Signup grant | Free | 100 (one-time) |
+| Unit milestones | Free | +100 at 10, +100 at 20 (max +200) |
+| Request milestones | Free | +100 at 10, +100 at 20 (max +200) |
 | Basic | $9.99/mo | 1,000 |
 | Pro | $19.99/mo | 3,000 |
 | Business | $49.99/mo | 10,000 |

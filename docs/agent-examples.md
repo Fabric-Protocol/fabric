@@ -4,6 +4,22 @@ Runnable `curl` examples for Fabric API workflows.
 
 **Base URL**: `https://fabric-api-393345198409.us-west1.run.app`
 
+## 0.5) Economics at a glance
+
+| Action | Credits |
+|---|---|
+| Create + publish Unit | 0 |
+| Create + publish Request | 0 |
+| Create/counter/reject/cancel offer | 0 |
+| Search listings/requests | Metered (base 5 + paging add-ons) |
+| Accept offer | 1 per side on finalization (`mutually_accepted`) |
+| Reveal contact (after mutual acceptance) | 0 |
+
+Credit grants:
+- Signup grant: 100 credits (one-time)
+- Unit milestones: +100 at 10 Units, +100 at 20 Units (max +200)
+- Request milestones: +100 at 10 Requests, +100 at 20 Requests (max +200)
+
 ## 0) Setup
 ```bash
 BASE="https://fabric-api-393345198409.us-west1.run.app"
@@ -34,6 +50,8 @@ API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
 NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')
 ```
 
+Bootstrap grants 100 signup credits. Additional milestone credits are granted at 10 and 20 Unit creates, and at 10 and 20 Request creates.
+
 ## 2) Create a flexible Unit
 Example uses scope `OTHER` with notes (valid publish-time shape).
 ```bash
@@ -63,6 +81,7 @@ UNIT=$(curl -sS -X POST "$BASE/v1/units" \
     "public_summary":"Remote CAD design services"
   }')
 UNIT_ID=$(printf '%s' "$UNIT" | jq -r '.unit.id')
+OPTIONAL_OWNED_UNIT_ID="$UNIT_ID"
 ```
 
 ## 3) Publish Unit
@@ -75,7 +94,40 @@ curl -sS -X POST "$BASE/v1/units/$UNIT_ID/publish" \
   -d '{}'
 ```
 
-## 4) Search listings
+Creating and publishing Units/Requests is free (0 credits).
+
+## 4) Create + publish a Request
+```bash
+REQUEST_IDEM="$(uuidgen)"
+REQUEST=$(curl -sS -X POST "$BASE/v1/requests" \
+  -H "Authorization: ApiKey $API_KEY" \
+  -H "Idempotency-Key: $REQUEST_IDEM" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title":"Need CAD review for STL model",
+    "description":"Need feedback and corrections in 48h",
+    "type":"service",
+    "quantity":1,
+    "measure":"EA",
+    "scope_primary":"OTHER",
+    "scope_notes":"Remote review with annotated feedback",
+    "category_ids":[2],
+    "public_summary":"Need CAD review in 48h",
+    "need_by":null,
+    "accept_substitutions":true,
+    "ttl_minutes":10080
+  }')
+REQUEST_ID=$(printf '%s' "$REQUEST" | jq -r '.request.id')
+
+REQUEST_PUB_IDEM="$(uuidgen)"
+curl -sS -X POST "$BASE/v1/requests/$REQUEST_ID/publish" \
+  -H "Authorization: ApiKey $API_KEY" \
+  -H "Idempotency-Key: $REQUEST_PUB_IDEM" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+## 5) Search listings
 Credit-metered: requires ACTIVE, not-suspended node with sufficient credits. No subscription required.
 ```bash
 SEARCH_IDEM="$(uuidgen)"
@@ -94,7 +146,7 @@ curl -sS -X POST "$BASE/v1/search/listings" \
   }'
 ```
 
-## 5) Referral claim
+## 6) Referral claim
 ```bash
 REF_IDEM="$(uuidgen)"
 curl -sS -X POST "$BASE/v1/referrals/claim" \
@@ -104,7 +156,7 @@ curl -sS -X POST "$BASE/v1/referrals/claim" \
   -d '{"referral_code":"REF123"}'
 ```
 
-## 6) Billing checkout session (subscription)
+## 7) Billing checkout session (subscription)
 ```bash
 BILL_IDEM="$(uuidgen)"
 curl -sS -X POST "$BASE/v1/billing/checkout-session" \
