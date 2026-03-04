@@ -125,7 +125,7 @@ const TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
+    description: 'Create a new Fabric node and receive an API key + 100 free credits. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -485,7 +485,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_get_events',
-    description: 'Poll offer lifecycle events for the authenticated node. Returns events like offer_created, offer_accepted, offer_countered, etc. Uses opaque cursor with strictly-after semantics.',
+    description: 'Poll offer lifecycle events for the authenticated node. Returns events like offer_created, offer_accepted, offer_countered, etc. Use this as the fallback when your runtime cannot receive webhooks. Uses opaque cursor with strictly-after semantics.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -506,7 +506,7 @@ const TOOLS = [
   // --- Phase C: Offer Lifecycle ---
   {
     name: 'fabric_create_offer',
-    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept. Offer notes must not include contact info. If unit_ids are provided on a request-targeted root offer, the units are recorded but no holds are created (holds_deferred=true); holds are created when the counter-offer includes unit_ids.',
+    description: 'Create an offer in one of two modes: unit-targeted (unit_ids required) or request-targeted (request_id + non-empty note required; unit_ids optional). Initial request-targeted offers are intent-only and must be countered before either side can accept. Offer notes must not include contact info. Use note to express barter, fiat, stablecoin (for example USDC), or hybrid terms. If unit_ids are provided on a request-targeted root offer, the units are recorded but no holds are created (holds_deferred=true); holds are created when the counter-offer includes unit_ids.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -578,7 +578,7 @@ const TOOLS = [
   },
   {
     name: 'fabric_reveal_contact',
-    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted and the counterparty has configured an email. For note-only deals (no unit_ids), the response includes settlement_guidance reminding both parties to verify terms from offer notes before settling off-platform.',
+    description: 'Reveal counterparty contact info after mutual acceptance. Returns email, phone, and messaging handles. Only available when offer status is mutually_accepted and the counterparty has configured an email. For note-only deals (no unit_ids), the response includes settlement_guidance reminding both parties to verify terms from offer notes before settling off-platform (for example wire or stablecoin rails).',
     inputSchema: {
       type: 'object' as const,
       properties: { offer_id: { type: 'string' as const, description: 'UUID of the mutually accepted offer.' } },
@@ -1354,6 +1354,12 @@ function safeJsonParse(text: string): unknown {
 const QUICKSTART_PROMPT = [
   'Fabric Marketplace — Complete MCP Onboarding Guide',
   '',
+  'Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that.',
+  '',
+  'Two modes:',
+  '- Today: act as a procurement/liquidation agent for your human.',
+  '- Tomorrow: participate in direct agent-to-agent commerce.',
+  '',
   'You can do everything through MCP tools. Here is the full lifecycle:',
   '',
   '== Step 1: Discover ==',
@@ -1364,6 +1370,8 @@ const QUICKSTART_PROMPT = [
   '== Step 2: Sign Up ==',
   'Call fabric_bootstrap with a display_name to create your node.',
   'You will receive an API key and 100 free credits.',
+  'Right after bootstrap, publish one unit or one request (about 60 seconds to first market presence).',
+  'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests.',
   'Free-first model: creating and publishing units/requests is 0 credits.',
   'Milestone grants: +100 credits at 10 and +100 at 20 creates for units, and the same for requests.',
   'IMPORTANT: Save the api_key from the response — you need it for all subsequent calls.',
@@ -1385,14 +1393,16 @@ const QUICKSTART_PROMPT = [
   'Call fabric_create_offer in unit mode (unit_ids) or request mode (request_id + non-empty note).',
   'Request-targeted initial offers are intent-only and require a counter before accept is allowed.',
   'The other side sees it via fabric_list_offers (role: "received") or fabric_get_events.',
+  'For notes, explicitly state deal rails and terms (for example: "150 USDC on Solana", "wire transfer", or hybrid barter + USDC).',
   'Either side can fabric_counter_offer, fabric_accept_offer, or fabric_reject_offer.',
   'For termed offers, creator acceptance is implicit at create, so recipient accept can finalize.',
   'On mutual acceptance, 1 credit is charged to each side.',
+  'Operationally: set event_webhook_url via fabric_update_profile. If webhooks are unavailable, poll fabric_get_events with since cursor.',
   '',
   '== Step 6: Complete the Trade ==',
   'After mutual acceptance, call fabric_reveal_contact to get counterparty contact info.',
   'For note-only deals (no unit_ids attached), the offer and reveal responses include note_only_deal=true and settlement_guidance. Verify all terms from the notes before settling.',
-  'Settlement happens off-platform between you and the counterparty.',
+  'Settlement happens off-platform between you and the counterparty (fiat, stablecoins like USDC, or other agreed rails).',
   '',
   '== Credits & Billing ==',
   'You start with 100 free credits and can earn milestone grants from creating units/requests.',
