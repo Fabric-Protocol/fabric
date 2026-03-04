@@ -811,6 +811,42 @@ function toolContent(payload: unknown, isError = false) {
   };
 }
 
+const SESSION_AUTH_HINT = 'If your MCP client cannot reliably set auth headers, call fabric_login_session with your API key and pass session_token in tool arguments.';
+
+function withSessionAuthHintOnUnauthorized(
+  toolName: string,
+  statusCode: number,
+  payload: unknown,
+): unknown {
+  if (statusCode !== 401 || UNAUTH_TOOL_NAMES.has(toolName)) return payload;
+  if (!payload || typeof payload !== 'object' || !('error' in payload)) return payload;
+
+  const body = payload as Record<string, unknown>;
+  const err = body.error;
+  if (!err || typeof err !== 'object') return payload;
+
+  const errObj = err as Record<string, unknown>;
+  const details = (errObj.details && typeof errObj.details === 'object')
+    ? { ...(errObj.details as Record<string, unknown>) }
+    : {};
+  details.auth_fallback_tool = 'fabric_login_session';
+  details.auth_fallback = SESSION_AUTH_HINT;
+
+  let message = typeof errObj.message === 'string' ? errObj.message : 'Unauthorized';
+  if (!message.includes('fabric_login_session')) {
+    message = `${message} ${SESSION_AUTH_HINT}`;
+  }
+
+  return {
+    ...body,
+    error: {
+      ...errObj,
+      message,
+      details,
+    },
+  };
+}
+
 function validateToolArgs(toolName: string, args: Record<string, unknown>): string | null {
   const tool = TOOLS.find((t) => t.name === toolName);
   if (!tool) return null;
@@ -1617,7 +1653,8 @@ export function registerMcpRoute(app: AppInstance) {
         const clientIp = fwdFor ? fwdFor.split(',')[0]?.trim() : (req.ip ?? undefined);
         const result = await executeTool(app, authHeader, toolName, toolArgs, clientIp, req.headers as Record<string, unknown>);
         const isError = result.status < 200 || result.status >= 300;
-        return jsonRpcResult(id, toolContent(result.body, isError));
+        const responseBody = withSessionAuthHintOnUnauthorized(toolName, result.status, result.body);
+        return jsonRpcResult(id, toolContent(responseBody, isError));
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'internal_error';
         return jsonRpcResult(id, toolContent({ error: message }, true));

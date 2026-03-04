@@ -7356,6 +7356,30 @@ test('MCP auth-required tools return auth_required without API key', async () =>
   await app.close();
 });
 
+test('MCP unauthorized tool responses include session-login fallback hint', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: 'ApiKey invalid_key' },
+    payload: {
+      jsonrpc: '2.0',
+      id: 20,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.result.isError, true);
+  const payload = JSON.parse(body.result.content[0].text);
+  assert.equal(payload.error.code, 'unauthorized');
+  assert.equal(payload.error.details.auth_fallback_tool, 'fabric_login_session');
+  assert.equal(typeof payload.error.details.auth_fallback, 'string');
+  assert.match(payload.error.message, /fabric_login_session/);
+  await app.close();
+});
+
 test('MCP fabric_login_session creates a 24h session token', async () => {
   const app = buildApp();
   const boot = await bootstrap(app, 'mcp-login-session');

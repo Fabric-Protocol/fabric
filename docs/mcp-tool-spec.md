@@ -203,6 +203,10 @@ Non-2xx tool failures return Fabric's standard error envelope:
 }
 ```
 
+For `401 unauthorized` on authenticated tools, MCP responses include session-login guidance in `error.details`:
+- `auth_fallback_tool: "fabric_login_session"`
+- `auth_fallback: "<how to use session_token fallback>"`
+
 ## Rate limits and metering
 
 - MCP endpoint rate limits apply.
