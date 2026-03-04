@@ -1821,21 +1821,29 @@ test('pre-purchase daily offer-create limit blocks the fourth offer until first 
   await app.close();
 });
 
-test('pre-purchase daily offer-accept limit blocks second acceptance until first purchase', async () => {
+test('pre-purchase daily offer-accept limit blocks fourth acceptance until first purchase', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-prepurchase-accept-seller');
-  const buyerBoot = await bootstrap(app, 'boot-prepurchase-accept-buyer');
+  const buyerBootA = await bootstrap(app, 'boot-prepurchase-accept-buyer-a');
+  const buyerBootB = await bootstrap(app, 'boot-prepurchase-accept-buyer-b');
+  const buyerBootC = await bootstrap(app, 'boot-prepurchase-accept-buyer-c');
+  const buyerBootD = await bootstrap(app, 'boot-prepurchase-accept-buyer-d');
   const sellerNodeId = sellerBoot.json().node.id;
   const sellerApiKey = sellerBoot.json().api_key.api_key;
-  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const buyerApiKeyA = buyerBootA.json().api_key.api_key;
+  const buyerApiKeyB = buyerBootB.json().api_key.api_key;
+  const buyerApiKeyC = buyerBootC.json().api_key.api_key;
+  const buyerApiKeyD = buyerBootD.json().api_key.api_key;
 
   const unitA = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit A', 'prepurchase-accept-a'));
   const unitB = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit B', 'prepurchase-accept-b'));
+  const unitC = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit C', 'prepurchase-accept-c'));
+  const unitD = await repo.createResource('units', sellerNodeId, unitPayload('Prepurchase accept unit D', 'prepurchase-accept-d'));
 
   const offerA = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-accept-create-a' },
+    headers: { authorization: `ApiKey ${buyerApiKeyA}`, 'idempotency-key': 'prepurchase-accept-create-a' },
     payload: { unit_ids: [unitA.id], thread_id: null, note: null },
   });
   assert.equal(offerA.statusCode, 200);
@@ -1844,11 +1852,29 @@ test('pre-purchase daily offer-accept limit blocks second acceptance until first
   const offerB = await app.inject({
     method: 'POST',
     url: '/v1/offers',
-    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'prepurchase-accept-create-b' },
+    headers: { authorization: `ApiKey ${buyerApiKeyB}`, 'idempotency-key': 'prepurchase-accept-create-b' },
     payload: { unit_ids: [unitB.id], thread_id: null, note: null },
   });
   assert.equal(offerB.statusCode, 200);
   const offerBId = offerB.json().offer.id;
+
+  const offerC = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKeyC}`, 'idempotency-key': 'prepurchase-accept-create-c' },
+    payload: { unit_ids: [unitC.id], thread_id: null, note: null },
+  });
+  assert.equal(offerC.statusCode, 200);
+  const offerCId = offerC.json().offer.id;
+
+  const offerD = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKeyD}`, 'idempotency-key': 'prepurchase-accept-create-d' },
+    payload: { unit_ids: [unitD.id], thread_id: null, note: null },
+  });
+  assert.equal(offerD.statusCode, 200);
+  const offerDId = offerD.json().offer.id;
 
   const firstAccept = await app.inject({
     method: 'POST',
@@ -1858,26 +1884,42 @@ test('pre-purchase daily offer-accept limit blocks second acceptance until first
   });
   assert.equal(firstAccept.statusCode, 200);
 
-  const secondAcceptBlocked = await app.inject({
+  const secondAccept = await app.inject({
     method: 'POST',
     url: `/v1/offers/${offerBId}/accept`,
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-second-blocked' },
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-second' },
     payload: {},
   });
-  assert.equal(secondAcceptBlocked.statusCode, 429);
-  assert.equal(secondAcceptBlocked.json().error.code, 'prepurchase_daily_limit_exceeded');
-  assert.equal(secondAcceptBlocked.json().error.details.action, 'offer_accept');
-  assert.equal(secondAcceptBlocked.json().error.details.limit, 1);
+  assert.equal(secondAccept.statusCode, 200);
+
+  const thirdAccept = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerCId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-third' },
+    payload: {},
+  });
+  assert.equal(thirdAccept.statusCode, 200);
+
+  const fourthAcceptBlocked = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${offerDId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-fourth-blocked' },
+    payload: {},
+  });
+  assert.equal(fourthAcceptBlocked.statusCode, 429);
+  assert.equal(fourthAcceptBlocked.json().error.code, 'prepurchase_daily_limit_exceeded');
+  assert.equal(fourthAcceptBlocked.json().error.details.action, 'offer_accept');
+  assert.equal(fourthAcceptBlocked.json().error.details.limit, 3);
 
   await repo.addCredit(sellerNodeId, 'topup_purchase', 500, { reason: 'test_unlock_prepurchase_accept' }, `test_prepurchase_accept:${sellerNodeId}`);
 
-  const secondAcceptAfterPurchase = await app.inject({
+  const fourthAcceptAfterPurchase = await app.inject({
     method: 'POST',
-    url: `/v1/offers/${offerBId}/accept`,
-    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-second-after-purchase' },
+    url: `/v1/offers/${offerDId}/accept`,
+    headers: { authorization: `ApiKey ${sellerApiKey}`, 'idempotency-key': 'prepurchase-accept-fourth-after-purchase' },
     payload: {},
   });
-  assert.equal(secondAcceptAfterPurchase.statusCode, 200);
+  assert.equal(fourthAcceptAfterPurchase.statusCode, 200);
   await app.close();
 });
 
@@ -10122,7 +10164,7 @@ test('POST /v1/billing/crypto-credit-pack requires auth', async () => {
   const res = await app.inject({
     method: 'POST',
     url: '/v1/billing/crypto-credit-pack',
-    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcsol' },
   });
   assert.equal(res.statusCode, 401);
   await app.close();
@@ -10136,7 +10178,7 @@ test('POST /v1/billing/crypto-credit-pack rejects wrong node_id', async () => {
     method: 'POST',
     url: '/v1/billing/crypto-credit-pack',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-wrong-${TEST_RUN_SUFFIX}` },
-    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+    payload: { node_id: '00000000-0000-0000-0000-000000000000', pack_code: 'credits_500', pay_currency: 'usdcsol' },
   });
   assert.equal(res.statusCode, 403);
   assert.equal(res.json().error.code, 'forbidden');
@@ -10152,7 +10194,7 @@ test('POST /v1/billing/crypto-credit-pack rejects invalid pack_code', async () =
     method: 'POST',
     url: '/v1/billing/crypto-credit-pack',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-badpack-${TEST_RUN_SUFFIX}` },
-    payload: { node_id: nodeId, pack_code: 'credits_999', pay_currency: 'usdcmatic' },
+    payload: { node_id: nodeId, pack_code: 'credits_999', pay_currency: 'usdcsol' },
   });
   assert.equal(res.statusCode, 422);
   assert.equal(res.json().error.code, 'validation_error');
@@ -10192,7 +10234,7 @@ test('POST /v1/billing/crypto-credit-pack creates payment and stores record (moc
       method: 'POST',
       url: '/v1/billing/crypto-credit-pack',
       headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `crypto-create-${TEST_RUN_SUFFIX}` },
-      payload: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcmatic' },
+      payload: { node_id: nodeId, pack_code: 'credits_500', pay_currency: 'usdcsol' },
     });
     assert.equal(res.statusCode, 200, `expected 200, got ${res.statusCode}: ${res.body}`);
     const body = res.json();

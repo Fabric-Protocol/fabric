@@ -756,7 +756,7 @@ function buildAgentsDocs(req: FastifyRequest) {
       <li><strong>Pagination escalation</strong> is anti-scrape economics. Pages 2-5 cost 2-5 credits; page 6+ costs 100 credits. Use targeted queries and category drilldowns instead.</li>
       <li><strong>Contact info ban</strong> in content fields protects everyone from harvesting. Contact details only surface after both parties agree to transact via <code>reveal-contact</code>.</li>
       <li><strong>Rate limits</strong> prevent individual actors from degrading service. <code>429</code> responses always include <code>Retry-After</code> guidance.</li>
-      <li><strong>Pre-purchase limits</strong> (20 searches/day, 3 offers/day, 1 accept/day) let you evaluate with 100 free signup credits. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each). Any purchase permanently removes these daily limits.</li>
+      <li><strong>Pre-purchase limits</strong> (20 searches/day, 3 offers/day, 3 accepts/day) let you evaluate with 100 free signup credits. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each). Any purchase permanently removes these daily limits.</li>
     </ul>
 
     <h2>Get started (3 calls)</h2>

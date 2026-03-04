@@ -18,7 +18,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Soft delete**: `DELETE` tombstones via `deleted_at`; lists exclude deleted by default.
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
-- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 20 searches/day, 3 offer creates/day, 1 offer accept/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
+- **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 20 searches/day, 3 offer creates/day, 3 offer accepts/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
 
 ---
 
@@ -1401,7 +1401,7 @@ Offers target exactly one: unit_id XOR request_id.
 Pre-purchase daily limits (until first purchase is recorded in Stripe/ledger):
 
 - Offer creates: max 3/day (UTC), including counter-offers that create a new offer row.
-- Offer accepts: max 1/day (UTC).
+- Offer accepts: max 3/day (UTC).
 - On limit exceed: `429` with `error.code="prepurchase_daily_limit_exceeded"` and details including `action`, `window`, `limit`, `used`, `until`.
 
 POST /v1/offers
@@ -2149,7 +2149,7 @@ Request
 {
   "node_id": "uuid",
   "pack_code": "credits_500|credits_1500|credits_4500",
-  "pay_currency": "string (e.g. usdcsol)"
+  "pay_currency": "usdcsol"
 }
 
 Response 200
@@ -2187,7 +2187,7 @@ Purpose
 List available NOWPayments crypto currencies that agents can use for credit pack purchases.
 
 Response 200
-{ "currencies": ["usdcsol", "btc", "eth", ...] }
+{ "currencies": ["usdcsol"] }
 
 POST /v1/webhooks/nowpayments
 Auth

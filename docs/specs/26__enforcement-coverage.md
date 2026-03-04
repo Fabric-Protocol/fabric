@@ -25,7 +25,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 | `GET /v1/requests/:id` | ApiKey | No | No | (default read) | `401 unauthorized`, `404 not_found`, `403 forbidden` |
 | `POST /v1/offers` | ApiKey | Legal assent required; pre-purchase daily limit (3 creates/day) | No | `offer_write` (per node, minutely) | `401 unauthorized`, `409 conflict`, `422 validation_error`, `422 legal_required`, `429 rate_limit_exceeded`, `429 prepurchase_daily_limit_exceeded` |
 | `POST /v1/offers/:id/counter` | ApiKey | Legal assent required; pre-purchase daily limit (3 creates/day) | No | `offer_write` (per node, minutely) | `401 unauthorized`, `404 not_found`, `422 validation_error`, `422 legal_required`, `429 rate_limit_exceeded`, `429 prepurchase_daily_limit_exceeded` |
-| `POST /v1/offers/:id/accept` | ApiKey | Legal assent required; pre-purchase daily limit (1 accept/day) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `409 invalid_state_transition`, `422 legal_required`, `429 rate_limit_exceeded`, `429 prepurchase_daily_limit_exceeded` |
+| `POST /v1/offers/:id/accept` | ApiKey | Legal assent required; pre-purchase daily limit (3 accepts/day) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `409 invalid_state_transition`, `422 legal_required`, `429 rate_limit_exceeded`, `429 prepurchase_daily_limit_exceeded` |
 | `POST /v1/offers/:id/reject` | ApiKey | No (auth required) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `429 rate_limit_exceeded` |
 | `POST /v1/offers/:id/cancel` | ApiKey | Legal assent required (not subscriber-only) | No | `offer_decision` (per node, minutely) | `401 unauthorized`, `403 forbidden`, `404 not_found`, `422 legal_required`, `429 rate_limit_exceeded` |
 | `POST /v1/offers/:id/reveal-contact` | ApiKey | Legal assent + mutual acceptance preconditions (not subscriber-only) | No | `reveal_contact` (per node, hourly) | `401 unauthorized`, `403 forbidden`, `409 offer_not_mutually_accepted`, `422 legal_required`, `429 rate_limit_exceeded` |
@@ -34,7 +34,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 | `POST /v1/auth/keys` | ApiKey | No | No | `auth_key_issue` (per node, daily) | `401 unauthorized`, `422 validation_error`, `429 rate_limit_exceeded` |
 
 ## Notes
-- No subscriber gate: credits are sufficient for search/inventory access. Pre-purchase daily limits (20 searches/day, 3 offer creates/day, 1 offer accept/day) apply until the node has ever purchased (subscription or credit pack).
+- No subscriber gate: credits are sufficient for search/inventory access. Pre-purchase daily limits (20 searches/day, 3 offer creates/day, 3 offer accepts/day) apply until the node has ever purchased (subscription or credit pack).
 - Offer lifecycle endpoints require legal assent + auth + rate limits (not subscriber-gated).
 - Metered endpoints charge credits only on successful HTTP 200 responses.
 - Search includes request-level spend ceiling via `budget.credits_requested`; when capped, response is HTTP 200 with `budget.was_capped=true` and actionable guidance.
