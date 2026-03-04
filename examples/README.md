@@ -24,7 +24,12 @@ export API_KEY="<your_api_key>"
 ```bash
 npx tsx examples/bootstrap-recovery-me.ts
 npx tsx examples/search-offer.ts
+node examples/mcp-smoke.mjs
 ```
 
 - `bootstrap-recovery-me.ts` — bootstraps a new node, starts pubkey recovery, completes recovery, then calls `/v1/me`.
 - `search-offer.ts` — searches listings then creates an offer using the first result. Requires `API_KEY`.
+- `mcp-smoke.mjs` — minimal MCP smoke test: tools/list, bootstrap, session login, profile, units, requests, and offers snapshot.
+
+`mcp-smoke.mjs` uses `MCP_URL` if set, otherwise defaults to:
+`https://fabric-api-393345198409.us-west1.run.app/mcp`

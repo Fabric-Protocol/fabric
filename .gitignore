@@ -7,3 +7,10 @@ dist/
 .DS_Store
 Thumbs.db
 .mcpregistry_*
+
+# Local/internal E2E scripts (keep private; do not publish from this repo root)
+e2e-mcp-full.mjs
+e2e-mcp-test.mjs
+gaps-e2e.mjs
+mcp-full-test.mjs
+webhook-e2e.mjs
