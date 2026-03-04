@@ -2,15 +2,17 @@ import crypto from 'node:crypto';
 import Fastify, { FastifyRequest } from 'fastify';
 import { errorEnvelope } from './http.js';
 import { config } from './config.js';
+import * as repo from './db/fabricRepo.js';
 
 type AppInstance = ReturnType<typeof Fastify>;
 
 const MCP_PROTOCOL_VERSION = '2024-11-05';
 const SERVER_NAME = 'fabric-marketplace';
-const SERVER_VERSION = '0.4.0';
+const SERVER_VERSION = '0.5.0';
 const SERVER_DISPLAY_NAME = 'Fabric Marketplace';
 const SERVER_HOMEPAGE = 'https://github.com/Fabric-Protocol/fabric';
 const SERVER_ICON = 'https://raw.githubusercontent.com/Fabric-Protocol/fabric/main/icon.png';
+const MCP_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 type JsonRpcId = string | number | null;
 type JsonRpcMessage = {
@@ -117,11 +119,20 @@ const requestCreateSchema = {
 
 /* ---------- unauthenticated tools ---------- */
 
-const UNAUTH_TOOL_NAMES = new Set(['fabric_bootstrap', 'fabric_get_meta', 'fabric_get_categories', 'fabric_get_regions', 'fabric_recovery_start', 'fabric_recovery_complete']);
+const UNAUTH_TOOL_NAMES = new Set([
+  'fabric_bootstrap',
+  'fabric_get_meta',
+  'fabric_get_categories',
+  'fabric_get_regions',
+  'fabric_recovery_start',
+  'fabric_recovery_complete',
+  'fabric_login_session',
+  'fabric_logout_session',
+]);
 
 /* ---------- tool definitions ---------- */
 
-const TOOLS = [
+const RAW_TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
@@ -185,6 +196,32 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_login_session',
+    description: 'Create a short-lived MCP session token from an API key. Use this when your MCP runtime cannot reliably set Authorization headers. No authentication required.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        api_key: { type: 'string' as const, description: 'Fabric API key from bootstrap or key management.' },
+      },
+      required: ['api_key'],
+      additionalProperties: false,
+    },
+    annotations: createAnnotation,
+  },
+  {
+    name: 'fabric_logout_session',
+    description: 'Revoke an MCP session token early. Idempotent: returns ok even if already revoked or missing.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        session_token: { type: 'string' as const, description: 'Session token returned by fabric_login_session.' },
+      },
+      required: ['session_token'],
+      additionalProperties: false,
+    },
+    annotations: idempotentMutationAnnotation,
   },
 
   // --- Existing: Search (metered) ---
@@ -726,6 +763,31 @@ const TOOLS = [
   },
 ];
 
+const sessionTokenInput = {
+  type: ['string', 'null'] as const,
+  description: 'Optional session token from fabric_login_session. Use when your MCP client cannot set Authorization headers.',
+};
+
+const TOOLS = RAW_TOOLS.map((tool) => {
+  if (UNAUTH_TOOL_NAMES.has(tool.name)) return tool;
+  const inputSchema = (tool.inputSchema && typeof tool.inputSchema === 'object')
+    ? tool.inputSchema
+    : { type: 'object' as const, properties: {}, additionalProperties: false };
+  const properties = (inputSchema as any).properties && typeof (inputSchema as any).properties === 'object'
+    ? (inputSchema as any).properties
+    : {};
+  return {
+    ...tool,
+    inputSchema: {
+      ...inputSchema,
+      properties: {
+        ...properties,
+        session_token: sessionTokenInput,
+      },
+    },
+  };
+});
+
 const TOOL_NAMES = new Set(TOOLS.map((t) => t.name));
 
 /* ---------- helpers ---------- */
@@ -850,6 +912,38 @@ async function executeTool(
       payload: { challenge_id: args.challenge_id, signature: args.signature },
     });
     return { status: res.statusCode, body: res.json() };
+  }
+
+  if (name === 'fabric_login_session') {
+    const rawApiKey = typeof args.api_key === 'string' ? args.api_key.trim() : '';
+    if (!rawApiKey) {
+      return { status: 422, body: errorEnvelope('validation_error', 'Invalid login request', { reason: 'api_key_required' }) };
+    }
+    const found = await repo.findApiKey(rawApiKey);
+    if (!found || found.is_revoked || found.is_suspended) {
+      return { status: 401, body: errorEnvelope('unauthorized', 'Invalid API key') };
+    }
+    const sessionToken = `fms_${crypto.randomUUID()}${crypto.randomUUID().replace(/-/g, '')}`;
+    const expiresAt = new Date(Date.now() + MCP_SESSION_TTL_MS).toISOString();
+    await repo.createMcpSession(found.node_id, sessionToken, expiresAt);
+    return {
+      status: 200,
+      body: {
+        session_token: sessionToken,
+        token_type: 'Session',
+        expires_at: expiresAt,
+        node_id: found.node_id,
+      },
+    };
+  }
+
+  if (name === 'fabric_logout_session') {
+    const sessionToken = typeof args.session_token === 'string' ? args.session_token.trim() : '';
+    if (!sessionToken) {
+      return { status: 422, body: errorEnvelope('validation_error', 'Invalid logout request', { reason: 'session_token_required' }) };
+    }
+    await repo.revokeMcpSession(sessionToken);
+    return { status: 200, body: { ok: true } };
   }
 
   // --- Search ---
@@ -1376,6 +1470,9 @@ const QUICKSTART_PROMPT = [
   'Milestone grants: +100 credits at 10 and +100 at 20 creates for units, and the same for requests.',
   'IMPORTANT: Save the api_key from the response — you need it for all subsequent calls.',
   'Set it as your Authorization header: "ApiKey <your_key>"',
+  'If your MCP runtime cannot set Authorization headers reliably, call fabric_login_session with your api_key and pass session_token on authenticated tool calls.',
+  'Session tokens expire after 24 hours; call fabric_login_session again to re-login. Call fabric_logout_session to revoke early.',
+  'If you lose your API key, run fabric_recovery_start + fabric_recovery_complete first, then call fabric_login_session again.',
   '',
   '== Step 3: Create Inventory ==',
   'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids). Free (0 credits).',
@@ -1502,13 +1599,15 @@ export function registerMcpRoute(app: AppInstance) {
       }
 
       const rawApiKey = String(req.headers['api_key'] ?? req.headers['api-key'] ?? '');
+      const rawAuthorization = String(req.headers.authorization ?? '').trim();
+      const sessionTokenArg = typeof toolArgs.session_token === 'string' ? toolArgs.session_token.trim() : '';
       const authHeader = rawApiKey
         ? `ApiKey ${rawApiKey}`
-        : String(req.headers.authorization ?? '');
+        : (rawAuthorization || (sessionTokenArg ? `Session ${sessionTokenArg}` : ''));
 
       if (!authHeader && !UNAUTH_TOOL_NAMES.has(toolName)) {
         return jsonRpcResult(id, toolContent(
-          { error: 'auth_required', message: 'This tool requires authentication. Provide an API key via the Authorization header or api_key header. Use fabric_bootstrap to create a node and get an API key.' },
+          { error: 'auth_required', message: 'This tool requires authentication. Use Authorization/api_key headers, or call fabric_login_session and pass session_token in tool arguments. Use fabric_bootstrap to create a node and get an API key.' },
           true,
         ));
       }

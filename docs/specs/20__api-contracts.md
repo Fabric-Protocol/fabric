@@ -10,7 +10,8 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 
 - **Auth**: unless noted, endpoints are authenticated via `Authorization: ApiKey <api_key>`.
 - **Auth key state**: revoked API keys return `403 forbidden`; missing/invalid keys return `401 unauthorized`.
-- **Auth factor boundary**: API key is the only standard runtime auth factor; email is not a runtime auth factor.
+- **Auth factor boundary**: API key is the root runtime auth factor; MCP session tokens are derived short-lived credentials; email is not a runtime auth factor.
+- **MCP session auth (derived)**: `Authorization: Session <session_token>` is accepted for authenticated routes when using MCP session login (`fabric_login_session`). Session tokens are short-lived (24h) and derived from an API key.
 - **Admin auth**: endpoints under `/v1/admin/*` and `/internal/admin/*` require `X-Admin-Key: <admin_key>`.
 - **Idempotency-Key**: required on all non-GET endpoints except webhooks.
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.
@@ -424,6 +425,7 @@ Response 200
 Rules / side effects
 
 - Successful completion revokes all prior active API keys for node, then mints one new key.
+- After recovery, MCP clients that use session login must call `fabric_login_session` again to mint a fresh session token.
 - Recovery challenge is one-time use (`used_at`).
 - Writes audit event (`api_key_recovery_completed`).
 - Code-based email recovery payloads are rejected in MVP with `422 validation_error` and `details.reason="email_recovery_not_supported"`.

@@ -42,7 +42,7 @@ Key response fields:
 
 ## MCP capabilities
 
-The MCP endpoint exposes 49 tools covering:
+The MCP endpoint exposes 51 tools covering:
 
 - Bootstrap + discovery
 - Search

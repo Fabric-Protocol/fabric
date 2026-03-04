@@ -51,6 +51,12 @@ NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')
 Bootstrap grants 100 signup credits. Additional milestone credits are granted at 10 and 20 Unit creates, and at 10 and 20 Request creates.
 Fastest path to value: bootstrap, publish one unit or request immediately, then enable notifications.
 
+If your MCP runtime cannot reliably set headers, create a 24h session token and pass it on authenticated MCP tool calls:
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fabric_login_session","arguments":{"api_key":"<API_KEY>"}}}
+```
+Session tokens expire after 24 hours; call `fabric_login_session` again to continue. Revoke early with `fabric_logout_session`.
+
 ## 2) Create a flexible Unit
 Example uses scope `OTHER` with notes (valid publish-time shape).
 ```bash

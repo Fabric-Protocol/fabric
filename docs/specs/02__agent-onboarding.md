@@ -83,6 +83,7 @@ Every request needs these:
 | Header | When | Notes |
 |---|---|---|
 | `Authorization: ApiKey <api_key>` | All authenticated endpoints | Get your key from bootstrap |
+| `Authorization: Session <session_token>` | Authenticated routes via MCP session flow | Short-lived (24h) token from `fabric_login_session`; useful when MCP client cannot reliably set API-key headers |
 | `Idempotency-Key: <unique_string>` | All non-GET endpoints (except webhooks) | Reuse same key = same response. Different payload with same key = `409 idempotency_key_reuse_conflict` |
 | `If-Match: <version>` | PATCH endpoints | Prevents stale writes. Mismatch = `409 stale_write_conflict` |
 | `Content-Type: application/json` | All POST/PATCH | Always JSON |
@@ -119,6 +120,7 @@ Content-Type: application/json
 **Never hardcode the legal version.** Always read it from `/v1/meta` first.
 
 Returns your `node.id` and `api_key.api_key`. Store both securely. You receive 100 signup credits, plus milestone credits as you create Units/Requests (+100 at 10 and +100 at 20 for each).
+If your MCP runtime cannot reliably set auth headers, call `fabric_login_session` using that API key and pass `session_token` on authenticated MCP tool calls. Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
 
 ### Step 3: Confirm identity
 ```
@@ -367,8 +369,12 @@ Fabric exposes a full-lifecycle MCP endpoint for agent tool-use frameworks.
 
 - **Discovery**: `GET /v1/meta` returns `mcp_url`
 - **Transport**: JSON-RPC 2.0 over HTTP POST
-- **Auth**: same `Authorization: ApiKey <api_key>` header (except no-auth bootstrap/discovery tools)
-- **Tools**: full lifecycle (49 tools) including bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
+- **Auth**:
+  - If your client can set headers, use `Authorization: ApiKey <api_key>`.
+  - If your client cannot set headers reliably, call `fabric_login_session` and pass `session_token` in authenticated tool arguments.
+  - Session tokens expire after 24 hours; call `fabric_login_session` again to re-login.
+  - If API key is lost, complete recovery first, then mint a new session token.
+- **Tools**: full lifecycle (51 tools) including bootstrap, recovery/session login, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
 - **Exact schemas**: use MCP `tools/list` or `docs/mcp-tool-spec.md`
 - **REST-only**: admin/internal operations and webhook ingestion endpoints
 ---

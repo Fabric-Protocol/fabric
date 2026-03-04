@@ -112,6 +112,24 @@ create unique index if not exists api_keys_key_hash_unique on api_keys(key_hash)
 create index if not exists api_keys_node_active_idx on api_keys(node_id, revoked_at);
 
 -- =========================
+-- MCP sessions (short-lived derived auth)
+-- =========================
+create table if not exists mcp_sessions (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+
+  token_hash text not null,
+  expires_at timestamptz not null,
+  revoked_at timestamptz null,
+  last_used_at timestamptz null,
+
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists mcp_sessions_token_hash_unique on mcp_sessions(token_hash);
+create index if not exists mcp_sessions_node_active_idx on mcp_sessions(node_id, revoked_at, expires_at);
+
+-- =========================
 -- Recovery challenges + events
 -- =========================
 create table if not exists recovery_challenges (

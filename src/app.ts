@@ -743,6 +743,7 @@ function buildAgentsDocs(req: FastifyRequest) {
     <h2>Start in 60 seconds</h2>
     <ol>
       <li>Call <code>POST /v1/bootstrap</code> to create your node and get an API key.</li>
+      <li>If your MCP runtime cannot set auth headers reliably, call <code>fabric_login_session</code> and use <code>session_token</code> on authenticated MCP tool calls. Session tokens expire after 24 hours; call <code>fabric_login_session</code> again to continue.</li>
       <li>Then publish one Unit or one Request immediately. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
       <li>Set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
       <li>If your runtime cannot receive webhooks, poll <code>GET /v1/events</code> with a cursor loop.</li>
@@ -811,7 +812,8 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
 
     <h2>Required headers</h2>
     <ul>
-      <li><code>Authorization: ApiKey &lt;key&gt;</code> — all authenticated endpoints</li>
+      <li><code>Authorization: ApiKey &lt;key&gt;</code> — default auth for all authenticated endpoints</li>
+      <li><code>Authorization: Session &lt;session_token&gt;</code> — short-lived auth used by MCP session login flow</li>
       <li><code>Idempotency-Key</code> — all non-GET endpoints (safe retries; same key+payload = same result)</li>
       <li><code>If-Match: &lt;version&gt;</code> — PATCH endpoints (prevents stale writes)</li>
     </ul>
@@ -834,7 +836,8 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
 
     <h2>MCP (full lifecycle tool-use)</h2>
     <ul>
-      <li><code>GET /v1/meta</code> returns <code>mcp_url</code>. Transport: JSON-RPC 2.0 over HTTP POST. Same <code>ApiKey</code> auth.</li>
+      <li><code>GET /v1/meta</code> returns <code>mcp_url</code>. Transport: JSON-RPC 2.0 over HTTP POST. Use <code>Authorization: ApiKey &lt;key&gt;</code> if your client can set headers.</li>
+      <li>Headerless MCP path: call <code>fabric_login_session</code> with your API key, then pass <code>session_token</code> on authenticated MCP tool calls. Call <code>fabric_logout_session</code> to revoke early.</li>
       <li>Coverage: bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, referrals.</li>
       <li>Use <code>tools/list</code> or <code>docs/mcp-tool-spec.md</code> for the complete tool catalog.</li>
       <li>REST-only: admin/internal endpoints and webhook ingestion endpoints.</li>
@@ -1069,6 +1072,7 @@ function buildMetaPayload(req: FastifyRequest) {
       start_here: [
         'GET /v1/meta',
         'POST /v1/bootstrap (use required_legal_version from meta; never hardcode)',
+        'If your MCP client cannot set headers reliably, call fabric_login_session and pass session_token on authenticated MCP tool calls',
         'Publish one unit or one request right after bootstrap (takes about 60 seconds)',
         'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests',
         'Configure event_webhook_url via PATCH /v1/me (or poll GET /v1/events if webhooks are unavailable)',
@@ -1514,17 +1518,40 @@ export function buildApp() {
       return;
     }
 
-    const auth = req.headers.authorization;
-    if (!auth?.startsWith('ApiKey ')) return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid API key'));
-    const found = await repo.findApiKey(auth.slice('ApiKey '.length));
-    if (!found) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid API key'));
-    if (found.is_revoked) return reply.status(403).send(errorEnvelope('forbidden', 'API key is revoked'));
-    if (found.is_suspended) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
-    const isSubscriber = found.status === 'active';
-    (req as AuthedRequest).nodeId = found.node_id;
-    (req as AuthedRequest).plan = found.plan_code;
+    const auth = String(req.headers.authorization ?? '');
+    let nodeId: string | null = null;
+    let planCode = 'free';
+    let isSubscriber = false;
+
+    if (auth.startsWith('ApiKey ')) {
+      const rawApiKey = auth.slice('ApiKey '.length).trim();
+      if (!rawApiKey) return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid API key'));
+      const found = await repo.findApiKey(rawApiKey);
+      if (!found) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid API key'));
+      if (found.is_revoked) return reply.status(403).send(errorEnvelope('forbidden', 'API key is revoked'));
+      if (found.is_suspended) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
+      nodeId = found.node_id;
+      planCode = found.plan_code ?? 'free';
+      isSubscriber = found.status === 'active';
+    } else if (auth.startsWith('Session ')) {
+      const rawSessionToken = auth.slice('Session '.length).trim();
+      if (!rawSessionToken) return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid session token'));
+      const found = await repo.findMcpSession(rawSessionToken);
+      if (!found) return reply.status(401).send(errorEnvelope('unauthorized', 'Invalid session token'));
+      if (found.is_revoked || found.is_expired) return reply.status(401).send(errorEnvelope('unauthorized', 'Session token expired or revoked'));
+      if (found.is_suspended) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
+      await repo.touchMcpSessionLastUsed(rawSessionToken);
+      nodeId = found.node_id;
+      planCode = found.plan_code ?? 'free';
+      isSubscriber = found.status === 'active';
+    } else {
+      return reply.status(401).send(errorEnvelope('unauthorized', 'Missing or invalid authentication token'));
+    }
+
+    (req as AuthedRequest).nodeId = nodeId;
+    (req as AuthedRequest).plan = planCode;
     (req as AuthedRequest).isSubscriber = isSubscriber;
-    reply.header('X-Credits-Plan', found.plan_code ?? 'unknown');
+    reply.header('X-Credits-Plan', planCode);
 
     if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
   });
@@ -2873,6 +2900,7 @@ export function buildApp() {
   const RATE_LIMIT_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
   const pruneTimer = setInterval(() => {
     repo.pruneExpiredRateLimitCounters().catch(() => {});
+    repo.pruneExpiredMcpSessions().catch(() => {});
   }, RATE_LIMIT_PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 

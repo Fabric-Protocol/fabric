@@ -109,6 +109,7 @@ MVP note:
 
 ## 14) Subscription + abuse controls are built-in (incl. rate limits)
 - Offer create / accept / counter / cancel / reveal-contact **MUST** be auth-gated, legal-assent-gated, and rate-limited.
+- API key remains the root credential; MCP session tokens are short-lived derived credentials and **MUST NOT** replace recovery/key-ownership flows.
 - Offer recipients **MAY** reject even if not subscribed (still authenticated as a Node).
 - Free users **MAY** create/publish Requests (growth wedge).
 - Admin controls **MUST** exist for suspension/takedown and anomaly response hooks.
@@ -196,6 +197,7 @@ Acquisition:
 ## 21) Self-serve API key recovery invariants (MVP)
 - Recovery **MUST** be self-serve via public-key challenge/response (`nonce` + signature) in MVP.
 - Email-based API key recovery is **Phase 2** and is not available in MVP runtime endpoints.
+- Session tokens **MUST** be re-established after key recovery (recover API key first, then mint a new MCP session token).
 - Recovery challenges **MUST** be single-use, time-bounded, and attempt-bounded:
   - TTL default 10 minutes,
   - max attempts default 5,

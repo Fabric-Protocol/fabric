@@ -2,8 +2,8 @@
 
 Definitive contract for the Fabric MCP endpoint for agent integrations.
 
-Version: 0.4.0
-Tool count: 49 tools (full lifecycle + inventory maintenance + public node discovery + auth key management + referrals)
+Version: 0.5.0
+Tool count: 51 tools (full lifecycle + inventory maintenance + public node discovery + auth/session key management + referrals)
 
 Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that.
 Two modes:
@@ -24,11 +24,22 @@ Most tools require:
 
 `Authorization: ApiKey <api_key>`
 
+If your MCP client cannot reliably set headers:
+- Call `fabric_login_session` with your API key.
+- Pass `session_token` in authenticated tool arguments.
+- Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
+- Revoke early with `fabric_logout_session`.
+- If API key is lost, run recovery (`fabric_recovery_start` + `fabric_recovery_complete`) first, then call `fabric_login_session`.
+
 No-auth tools:
 - `fabric_bootstrap`
 - `fabric_get_meta`
 - `fabric_get_categories`
 - `fabric_get_regions`
+- `fabric_recovery_start`
+- `fabric_recovery_complete`
+- `fabric_login_session`
+- `fabric_logout_session`
 
 ## Economics at a glance
 
@@ -73,6 +84,12 @@ For exact machine schema, call `tools/list`.
 - `fabric_get_meta`
 - `fabric_get_categories`
 - `fabric_get_regions`
+
+### 1b) Recovery + Session Login (4)
+- `fabric_recovery_start`
+- `fabric_recovery_complete`
+- `fabric_login_session`
+- `fabric_logout_session`
 
 ### 2) Search (2)
 - `fabric_search_listings`
@@ -151,6 +168,8 @@ Offer behavior notes:
 - `fabric_get_referral_stats`
 - `fabric_claim_referral`
 
+For all authenticated tools above, `session_token` is an optional argument accepted as an auth fallback when header-based auth is unavailable.
+
 ## Functional coverage notes
 
 The MCP endpoint now covers user-facing Fabric flows for:
@@ -168,7 +187,7 @@ The MCP endpoint now covers user-facing Fabric flows for:
 These remain REST-only:
 - admin/internal operations (`/v1/admin/*`, `/internal/admin/*`)
 - webhook ingestion endpoints (`/v1/webhooks/*`)
-- email verification and account recovery endpoints
+- email verification endpoints
 
 ## Error envelope
 

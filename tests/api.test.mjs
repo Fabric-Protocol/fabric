@@ -109,9 +109,16 @@ const offerEventsNullableMigrationSql = await fs.readFile(
 );
 await query(offerEventsNullableMigrationSql);
 
+const mcpSessionsMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-04__apply_mcp_sessions.sql', import.meta.url),
+  'utf8',
+);
+await query(mcpSessionsMigrationSql);
+
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
 await query('DELETE FROM rate_limit_counters');
+await query('DELETE FROM mcp_sessions');
 
 async function bootstrap(
   app,
@@ -7349,6 +7356,322 @@ test('MCP auth-required tools return auth_required without API key', async () =>
   await app.close();
 });
 
+test('MCP fabric_login_session creates a 24h session token', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-login-session');
+  const apiKey = boot.json().api_key.api_key;
+  const nodeId = boot.json().node.id;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 21,
+      method: 'tools/call',
+      params: { name: 'fabric_login_session', arguments: { api_key: apiKey } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.result.isError, false);
+  const payload = JSON.parse(body.result.content[0].text);
+  assert.equal(payload.token_type, 'Session');
+  assert.equal(payload.node_id, nodeId);
+  assert.equal(typeof payload.session_token, 'string');
+  assert.ok(payload.session_token.length > 20);
+  assert.ok(typeof payload.expires_at === 'string' && payload.expires_at.length > 10);
+  const rows = await query('select token_hash, expires_at from mcp_sessions where node_id=$1 order by created_at desc limit 1', [nodeId]);
+  assert.equal(rows.length, 1);
+  assert.notEqual(rows[0].token_hash, payload.session_token);
+  const ttlMs = Date.parse(rows[0].expires_at) - Date.now();
+  assert.ok(ttlMs > 23 * 60 * 60 * 1000 && ttlMs <= 24 * 60 * 60 * 1000 + 10_000);
+  await app.close();
+});
+
+test('MCP auth-required tool succeeds with session_token argument only', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-session-only-auth');
+  const apiKey = boot.json().api_key.api_key;
+  const nodeId = boot.json().node.id;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 22,
+      method: 'tools/call',
+      params: { name: 'fabric_login_session', arguments: { api_key: apiKey } },
+    },
+  });
+  const sessionToken = JSON.parse(login.json().result.content[0].text).session_token;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 23,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: { session_token: sessionToken } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.result.isError, false);
+  const payload = JSON.parse(body.result.content[0].text);
+  assert.equal(typeof payload.credits_balance, 'number');
+  const sessionRows = await query(
+    'select last_used_at from mcp_sessions where node_id=$1 order by created_at desc limit 1',
+    [nodeId],
+  );
+  assert.ok(sessionRows[0].last_used_at, 'last_used_at should be updated');
+  await app.close();
+});
+
+test('MCP invalid session_token returns unauthorized envelope', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 24,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: { session_token: 'invalid_session_token' } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.result.isError, true);
+  const payload = JSON.parse(body.result.content[0].text);
+  assert.equal(payload.error.code, 'unauthorized');
+  await app.close();
+});
+
+test('MCP expired session_token returns unauthorized envelope', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-expired-session');
+  const apiKey = boot.json().api_key.api_key;
+  const nodeId = boot.json().node.id;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 25,
+      method: 'tools/call',
+      params: { name: 'fabric_login_session', arguments: { api_key: apiKey } },
+    },
+  });
+  const sessionToken = JSON.parse(login.json().result.content[0].text).session_token;
+  await query('update mcp_sessions set expires_at=now()-interval \'1 minute\' where node_id=$1', [nodeId]);
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 26,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: { session_token: sessionToken } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.result.isError, true);
+  const payload = JSON.parse(body.result.content[0].text);
+  assert.equal(payload.error.code, 'unauthorized');
+  await app.close();
+});
+
+test('MCP fabric_logout_session revokes token and future calls fail', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-logout-session');
+  const apiKey = boot.json().api_key.api_key;
+  const nodeId = boot.json().node.id;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 27,
+      method: 'tools/call',
+      params: { name: 'fabric_login_session', arguments: { api_key: apiKey } },
+    },
+  });
+  const sessionToken = JSON.parse(login.json().result.content[0].text).session_token;
+  const logout = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 28,
+      method: 'tools/call',
+      params: { name: 'fabric_logout_session', arguments: { session_token: sessionToken } },
+    },
+  });
+  assert.equal(logout.statusCode, 200);
+  assert.equal(logout.json().result.isError, false);
+  assert.equal(JSON.parse(logout.json().result.content[0].text).ok, true);
+  const revoked = await query('select revoked_at from mcp_sessions where node_id=$1 order by created_at desc limit 1', [nodeId]);
+  assert.ok(revoked[0].revoked_at, 'revoked_at should be set');
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 29,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: { session_token: sessionToken } },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().result.isError, true);
+  const payload = JSON.parse(res.json().result.content[0].text);
+  assert.equal(payload.error.code, 'unauthorized');
+  await app.close();
+});
+
+test('MCP existing Authorization header auth still works', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-auth-header-still-works');
+  const apiKey = boot.json().api_key.api_key;
+  const res = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: { authorization: `ApiKey ${apiKey}` },
+    payload: {
+      jsonrpc: '2.0',
+      id: 30,
+      method: 'tools/call',
+      params: { name: 'fabric_get_credits', arguments: {} },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().result.isError, false);
+  await app.close();
+});
+
+test('MCP billing tools work with session_token auth (quote + stripe + crypto)', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'mcp-session-billing');
+  const apiKey = boot.json().api_key.api_key;
+  const login = await app.inject({
+    method: 'POST',
+    url: '/mcp',
+    payload: {
+      jsonrpc: '2.0',
+      id: 31,
+      method: 'tools/call',
+      params: { name: 'fabric_login_session', arguments: { api_key: apiKey } },
+    },
+  });
+  const sessionToken = JSON.parse(login.json().result.content[0].text).session_token;
+
+  let stripeCalls = 0;
+  let nowpaymentsCalls = 0;
+  const mockPaymentId = 8800000 + Math.floor(Math.random() * 100000);
+
+  await withMockFetch(async (url, init = {}) => {
+    const urlStr = typeof url === 'string' ? url : url.toString();
+    if (urlStr === 'https://api.stripe.com/v1/checkout/sessions') {
+      stripeCalls += 1;
+      return jsonResponse(200, {
+        id: 'cs_mcp_session_credit_pack',
+        url: 'https://checkout.stripe.com/c/pay/cs_mcp_session_credit_pack',
+        mode: 'payment',
+      });
+    }
+    if (urlStr.includes('nowpayments.io') && urlStr.includes('/payment')) {
+      nowpaymentsCalls += 1;
+      const reqBody = JSON.parse(String(init.body ?? '{}'));
+      const payAmount = Number(reqBody.price_amount) * 1.25;
+      return jsonResponse(200, {
+        payment_id: mockPaymentId,
+        payment_status: 'waiting',
+        pay_address: '0xMCPSESSIONPAYMENT',
+        pay_amount: payAmount,
+        pay_currency: reqBody.pay_currency,
+        price_amount: reqBody.price_amount,
+        price_currency: reqBody.price_currency,
+        order_id: reqBody.order_id,
+        expiration_estimate_date: new Date(Date.now() + 3600000).toISOString(),
+      });
+    }
+    throw new Error(`Unexpected outbound fetch URL in MCP billing test: ${urlStr}`);
+  }, async () => {
+    const quoteRes = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      payload: {
+        jsonrpc: '2.0',
+        id: 32,
+        method: 'tools/call',
+        params: { name: 'fabric_get_credit_quote', arguments: { session_token: sessionToken } },
+      },
+    });
+    assert.equal(quoteRes.statusCode, 200);
+    const quoteBody = quoteRes.json();
+    assert.equal(quoteBody.result.isError, false);
+    const quote = JSON.parse(quoteBody.result.content[0].text);
+    assert.equal(typeof quote.credits_balance, 'number');
+    assert.equal(Array.isArray(quote.credit_packs), true);
+    assert.equal(quote.credit_packs.length > 0, true);
+
+    const stripeRes = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      payload: {
+        jsonrpc: '2.0',
+        id: 33,
+        method: 'tools/call',
+        params: {
+          name: 'fabric_buy_credit_pack_stripe',
+          arguments: {
+            pack_code: 'credits_500',
+            success_url: 'https://example.com/success',
+            cancel_url: 'https://example.com/cancel',
+            session_token: sessionToken,
+          },
+        },
+      },
+    });
+    assert.equal(stripeRes.statusCode, 200);
+    const stripeBody = stripeRes.json();
+    assert.equal(stripeBody.result.isError, false);
+    const stripe = JSON.parse(stripeBody.result.content[0].text);
+    assert.equal(stripe.pack_code, 'credits_500');
+    assert.equal(stripe.credits, 500);
+    assert.equal(typeof stripe.checkout_url, 'string');
+    assert.match(stripe.checkout_url, /^https:\/\/checkout\.stripe\.com\//);
+
+    const cryptoRes = await app.inject({
+      method: 'POST',
+      url: '/mcp',
+      payload: {
+        jsonrpc: '2.0',
+        id: 34,
+        method: 'tools/call',
+        params: {
+          name: 'fabric_buy_credit_pack_crypto',
+          arguments: { pack_code: 'credits_500', pay_currency: 'usdcsol', session_token: sessionToken },
+        },
+      },
+    });
+    assert.equal(cryptoRes.statusCode, 200);
+    const cryptoBody = cryptoRes.json();
+    assert.equal(cryptoBody.result.isError, false);
+    const cryptoPayload = JSON.parse(cryptoBody.result.content[0].text);
+    assert.equal(cryptoPayload.pack_code, 'credits_500');
+    assert.equal(cryptoPayload.pay_currency, 'usdcsol');
+    assert.equal(cryptoPayload.payment_id, mockPaymentId);
+    assert.equal(typeof cryptoPayload.send_amount, 'number');
+    assert.equal(cryptoPayload.send_amount > 0, true);
+  });
+
+  assert.equal(stripeCalls, 1);
+  assert.equal(nowpaymentsCalls, 1);
+  await app.close();
+});
+
 test('MCP initialize returns server info', async () => {
   const app = buildApp();
   const boot = await bootstrap(app, 'mcp-init');
@@ -7386,6 +7709,8 @@ test('MCP tools/list returns full MCP tool surface', async () => {
   assert.ok(names.includes('fabric_search_listings'), 'must include fabric_search_listings');
   assert.ok(names.includes('fabric_search_requests'), 'must include fabric_search_requests');
   assert.ok(names.includes('fabric_bootstrap'), 'must include fabric_bootstrap');
+  assert.ok(names.includes('fabric_login_session'), 'must include fabric_login_session');
+  assert.ok(names.includes('fabric_logout_session'), 'must include fabric_logout_session');
   assert.ok(names.includes('fabric_update_unit'), 'must include fabric_update_unit');
   assert.ok(names.includes('fabric_delete_unit'), 'must include fabric_delete_unit');
   assert.ok(names.includes('fabric_update_request'), 'must include fabric_update_request');
@@ -7404,7 +7729,7 @@ test('MCP tools/list returns full MCP tool surface', async () => {
   assert.ok(names.includes('fabric_get_offer'), 'must include fabric_get_offer');
   assert.ok(names.includes('fabric_get_events'), 'must include fabric_get_events');
   assert.ok(names.includes('fabric_get_credits'), 'must include fabric_get_credits');
-  assert.ok(names.length >= 49, 'must expose at least 49 tools');
+  assert.ok(names.length >= 51, 'must expose at least 51 tools');
   await app.close();
 });
 

@@ -105,6 +105,7 @@ export const config = {
   rateLimitMcpPerMinute: Number(process.env.RATE_LIMIT_MCP_PER_MINUTE ?? 60),
   checkoutRedirectAllowlist: parseCsv(process.env.CHECKOUT_REDIRECT_ALLOWLIST),
   apiKeyPepper: process.env.API_KEY_PEPPER ?? '',
+  mcpSessionPepper: process.env.MCP_SESSION_PEPPER ?? '',
   opsDigestEmail: process.env.OPS_DIGEST_EMAIL ?? '',
   slackOpsWebhookUrl: process.env.SLACK_OPS_WEBHOOK_URL ?? '',
   nowpaymentsApiKey: process.env.NOWPAYMENTS_API_KEY ?? '',

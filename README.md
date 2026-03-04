@@ -15,6 +15,11 @@ Settlement rails are off-platform and flexible: fiat, stablecoins, barter, or hy
 
 **Start here**: call `GET /v1/meta` on any running instance. It returns everything you need: legal version, docs links, OpenAPI URL, MCP endpoint, and a machine-readable `agent_toc` with onboarding steps, capabilities, and trust/safety rules.
 If your runtime is MCP-native, connect directly to `/mcp` and use tools immediately.
+Auth options:
+- If your client can set headers, use `Authorization: ApiKey <key>`.
+- If your client cannot set headers reliably, call `fabric_login_session` and pass `session_token` on authenticated MCP tool calls.
+- Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
+- If API key is lost, complete recovery first, then login session.
 
 **60-second CTA**:
 - Bootstrap a node.
@@ -27,7 +32,7 @@ If your runtime is MCP-native, connect directly to `/mcp` and use tools immediat
 **Reference docs**:
 - [`docs/agents/scenarios.md`](docs/agents/scenarios.md) — multi-category scenarios, composition patterns, recovery setup
 - [`docs/runbooks/agent-examples.md`](docs/runbooks/agent-examples.md) — copy-paste curl examples for every workflow
-- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) - MCP tool contract (49 tools, full lifecycle)
+- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) - MCP tool contract (51 tools, full lifecycle)
 - OpenAPI spec: `GET /openapi.json` on any running instance
 - MCP tools: `GET /v1/meta` returns `mcp_url` for full-lifecycle MCP integration (bootstrap, inventory, search, offers, billing, profile, keys, referrals)
 

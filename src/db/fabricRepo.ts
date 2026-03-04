@@ -14,6 +14,13 @@ function hashApiKey(rawKey: string): string {
   return crypto.createHash('sha256').update(rawKey).digest('hex');
 }
 
+function hashMcpSessionToken(rawToken: string): string {
+  if (config.mcpSessionPepper) {
+    return crypto.createHmac('sha256', config.mcpSessionPepper).update(rawToken).digest('hex');
+  }
+  return crypto.createHash('sha256').update(rawToken).digest('hex');
+}
+
 export async function findApiKey(rawKey: string) {
   const keyHash = hashApiKey(rawKey);
   const rows = await query<{ node_id: string; plan_code: string; status: string; is_suspended: boolean; is_revoked: boolean }>(
@@ -31,6 +38,68 @@ export async function findApiKey(rawKey: string) {
     [keyHash],
   );
   return rows[0] ?? null;
+}
+
+export async function createMcpSession(nodeId: string, rawToken: string, expiresAt: string) {
+  const tokenHash = hashMcpSessionToken(rawToken);
+  const rows = await query<{ id: string; created_at: string; expires_at: string }>(
+    `insert into mcp_sessions(node_id, token_hash, expires_at)
+     values($1,$2,$3)
+     returning id,created_at,expires_at`,
+    [nodeId, tokenHash, expiresAt],
+  );
+  return rows[0] ?? null;
+}
+
+export async function findMcpSession(rawToken: string) {
+  const tokenHash = hashMcpSessionToken(rawToken);
+  const rows = await query<{
+    id: string;
+    node_id: string;
+    plan_code: string;
+    status: string;
+    is_suspended: boolean;
+    is_revoked: boolean;
+    is_expired: boolean;
+  }>(
+    `select
+       ms.id,
+       ms.node_id,
+       coalesce(s.plan_code, 'free') as plan_code,
+       coalesce(s.status, 'none') as status,
+       (n.status <> 'ACTIVE' or n.suspended_at is not null) as is_suspended,
+       (ms.revoked_at is not null) as is_revoked,
+       (ms.expires_at <= now()) as is_expired
+     from mcp_sessions ms
+     join nodes n on n.id = ms.node_id and n.deleted_at is null
+     left join subscriptions s on s.node_id = ms.node_id
+     where ms.token_hash = $1
+     limit 1`,
+    [tokenHash],
+  );
+  return rows[0] ?? null;
+}
+
+export async function touchMcpSessionLastUsed(rawToken: string) {
+  const tokenHash = hashMcpSessionToken(rawToken);
+  await query(
+    `update mcp_sessions
+     set last_used_at=now()
+     where token_hash=$1 and revoked_at is null and expires_at > now()`,
+    [tokenHash],
+  );
+}
+
+export async function revokeMcpSession(rawToken: string) {
+  const tokenHash = hashMcpSessionToken(rawToken);
+  const rows = await query<{ id: string }>(
+    `update mcp_sessions
+     set revoked_at=now()
+     where token_hash=$1 and revoked_at is null
+     returning id`,
+    [tokenHash],
+  );
+  return !!rows[0];
 }
 
 export async function getIdempotency(nodeId: string, key: string, method: string, path: string) {
@@ -69,6 +138,10 @@ export async function saveAdminIdempotency(key: string, method: string, path: st
 
 export async function pruneExpiredRateLimitCounters() {
   await query('delete from rate_limit_counters where reset_at < now()', []);
+}
+
+export async function pruneExpiredMcpSessions() {
+  await query('delete from mcp_sessions where expires_at < now()', []);
 }
 
 export async function consumeRateLimitCounter(key: string, windowSeconds: number) {

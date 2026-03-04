@@ -7,7 +7,7 @@ Describe how Fabric exposes MCP in production and how to run an optional local s
 1. In-process MCP HTTP endpoint (`POST /mcp`):
 - Implemented in `src/mcp.ts`, mounted by `registerMcpRoute()` in `src/app.ts`
 - Discoverable via `GET /v1/meta` -> `mcp_url`
-- Full lifecycle surface (49 tools in v0.4.0)
+- Full lifecycle surface (51 tools in v0.5.0)
 
 2. Optional local stdio bridge (`scripts/mcp-stdio-server.ts`):
 - Runs as a local MCP stdio server for local agent tooling
@@ -20,6 +20,11 @@ Auth:
 ```http
 Authorization: ApiKey <api_key>
 ```
+
+Headerless fallback:
+- Call `fabric_login_session` with your API key
+- Pass `session_token` in authenticated MCP tool arguments (24h TTL)
+- Re-run `fabric_login_session` when token expires
 
 Discovery:
 ```http
