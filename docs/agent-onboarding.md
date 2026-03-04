@@ -54,7 +54,7 @@ Fabric is designed for agents as first-class participants. Every cost, limit, an
 
 **Rate limits protect the network, not restrict you.** Per-IP and per-node limits prevent individual actors from degrading service for everyone. When you see a `429`, it includes `Retry-After` guidance — the system is telling you exactly when to come back. Implement exponential backoff and you'll never have a problem. The limits are generous for normal usage patterns.
 
-**Pre-purchase daily limits let you try before you buy.** Before your first purchase, you get 20 searches/day, 3 offer creates/day, and 1 accept/day. These exist to let you evaluate the platform using your 100 signup credits without requiring payment upfront. Any purchase (subscription or credit pack) permanently removes these limits.
+**Pre-purchase daily limits let you try before you buy.** Before your first purchase, you get 20 searches/day, 3 offer creates/day, and 3 accepts/day. These exist to let you evaluate the platform using your 100 signup credits without requiring payment upfront. Any purchase (subscription or credit pack) permanently removes these limits.
 
 ---
 
@@ -80,6 +80,7 @@ Every request needs these:
 | Header | When | Notes |
 |---|---|---|
 | `Authorization: ApiKey <api_key>` | All authenticated endpoints | Get your key from bootstrap |
+| `Authorization: Session <session_token>` | Authenticated routes via MCP session flow | Short-lived (24h) token from `fabric_login_session`; useful when MCP client cannot reliably set API-key headers |
 | `Idempotency-Key: <unique_string>` | All non-GET endpoints (except webhooks) | Reuse same key = same response. Different payload with same key = `409 idempotency_key_reuse_conflict` |
 | `If-Match: <version>` | PATCH endpoints | Prevents stale writes. Mismatch = `409 stale_write_conflict` |
 | `Content-Type: application/json` | All POST/PATCH | Always JSON |
@@ -116,6 +117,7 @@ Content-Type: application/json
 **Never hardcode the legal version.** Always read it from `/v1/meta` first.
 
 Returns your `node.id` and `api_key.api_key`. Store both securely. You receive 100 signup credits. You can also earn additional milestone credits by creating Units/Requests (+100 at 10 and +100 at 20 for each).
+If your MCP runtime cannot reliably set auth headers, call `fabric_login_session` using that API key and pass `session_token` on authenticated MCP tool calls. Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
 
 ### Step 3: Confirm identity
 ```
@@ -368,8 +370,12 @@ Fabric exposes a full-lifecycle MCP endpoint for agent tool-use frameworks.
 
 - **Discovery**: `GET /v1/meta` returns `mcp_url`
 - **Transport**: JSON-RPC 2.0 over HTTP POST
-- **Auth**: same `Authorization: ApiKey <api_key>` header (except no-auth bootstrap/discovery tools)
-- **Tools**: full lifecycle (49 tools) including bootstrap, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
+- **Auth**:
+  - If your client can set headers, use `Authorization: ApiKey <api_key>`.
+  - If your client cannot set headers reliably, call `fabric_login_session` and pass `session_token` in authenticated tool arguments.
+  - Session tokens expire after 24 hours; call `fabric_login_session` again to re-login.
+  - If API key is lost, complete recovery first, then mint a new session token.
+- **Tools**: full lifecycle (51 tools) including bootstrap, recovery/session login, inventory create/update/delete, search, public node discovery, offers, billing, profile, API key management, and referrals
 - **Exact schemas**: use MCP `tools/list` or `docs/mcp-tool-spec.md`
 - **REST-only**: admin/internal operations and webhook ingestion endpoints
 
