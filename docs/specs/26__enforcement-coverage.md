@@ -8,7 +8,7 @@ This checklist maps endpoint groups to required enforcement behavior from `10__i
 
 | Endpoint(s) | Auth | Gate | Credits meter | Rate limit rule | Primary non-2xx codes |
 |---|---|---|---|---|---|
-| `POST /v1/bootstrap` | None | No | No | `bootstrap` (per IP, hourly) | `422 validation_error`, `422 legal_required`, `422 legal_version_mismatch`, `409 idempotency_key_reuse_conflict`, `429 rate_limit_exceeded` |
+| `POST /v1/bootstrap` | None | No | No | `bootstrap` (per IP, hourly; successful bootstraps only) | `422 validation_error`, `422 legal_required`, `422 legal_version_mismatch`, `409 idempotency_key_reuse_conflict`, `429 rate_limit_exceeded` |
 | `POST /v1/email/start-verify` | ApiKey | No | No | `email_verify_start` (per node, hourly) | `401 unauthorized`, `422 validation_error`, `503 email_delivery_failed`, `429 rate_limit_exceeded` |
 | `POST /v1/email/complete-verify` | ApiKey | No | No | challenge attempt bound | `401 unauthorized`, `422 validation_error`, `404 not_found`, `429 rate_limit_exceeded` |
 | `POST /v1/recovery/start` | None | No | No | `recovery_start_ip` (per IP, hourly) + `recovery_start_node` (per node, hourly) | `422 validation_error`, `404 not_found`, `429 rate_limit_exceeded` |

@@ -139,7 +139,8 @@ async function bootstrap(
     referral_code: basePayload.referral_code ?? null,
     legal: basePayload.legal ?? { accepted: true, version: REQUIRED_LEGAL_VERSION },
   };
-  const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': idk }, payload: requestPayload });
+  const requestHeaders = { 'idempotency-key': idk, ...(options.headers ?? {}) };
+  const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: requestHeaders, payload: requestPayload });
   return res;
 }
 
@@ -633,6 +634,80 @@ test('POST /v1/bootstrap rejects duplicate display_name', async () => {
   assert.equal(caseVariant.json().error.code, 'validation_error');
   assert.equal(caseVariant.json().error.details.reason, 'display_name_taken');
   await app.close();
+});
+
+test('bootstrap IP rate limit counts successful bootstraps only (legal failure does not consume)', async () => {
+  await withConfigOverrides({ rateLimitBootstrapPerHour: 1 }, async () => {
+    const app = buildApp();
+    const testIp = '198.51.100.201';
+
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/v1/bootstrap',
+      headers: { 'idempotency-key': `boot-success-only-invalid-${TEST_RUN_SUFFIX}`, 'x-forwarded-for': testIp },
+      payload: { display_name: `Invalid ${TEST_RUN_SUFFIX}`, email: null, referral_code: null },
+    });
+    assert.equal(invalid.statusCode, 422);
+    assert.equal(invalid.json().error.code, 'legal_required');
+
+    const ok = await bootstrap(app, `boot-success-only-ok-${TEST_RUN_SUFFIX}`, {
+      display_name: `Success Only A ${TEST_RUN_SUFFIX}`,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(ok.statusCode, 200);
+
+    const limited = await bootstrap(app, `boot-success-only-limited-${TEST_RUN_SUFFIX}`, {
+      display_name: `Success Only B ${TEST_RUN_SUFFIX}`,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+    assert.equal(limited.json().error.details.rule, 'bootstrap');
+    await app.close();
+  });
+});
+
+test('bootstrap IP rate limit counts successful bootstraps only (display_name_taken does not consume)', async () => {
+  await withConfigOverrides({ rateLimitBootstrapPerHour: 2 }, async () => {
+    const app = buildApp();
+    const testIp = '198.51.100.202';
+    const duplicateName = `Success Limit Duplicate ${TEST_RUN_SUFFIX}`;
+
+    const first = await bootstrap(app, `boot-success-limit-first-${TEST_RUN_SUFFIX}`, {
+      display_name: duplicateName,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(first.statusCode, 200);
+
+    const duplicate = await bootstrap(app, `boot-success-limit-dup-${TEST_RUN_SUFFIX}`, {
+      display_name: duplicateName,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(duplicate.statusCode, 422);
+    assert.equal(duplicate.json().error.code, 'validation_error');
+    assert.equal(duplicate.json().error.details.reason, 'display_name_taken');
+
+    const second = await bootstrap(app, `boot-success-limit-second-${TEST_RUN_SUFFIX}`, {
+      display_name: `Success Limit Second ${TEST_RUN_SUFFIX}`,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(second.statusCode, 200);
+
+    const limited = await bootstrap(app, `boot-success-limit-third-${TEST_RUN_SUFFIX}`, {
+      display_name: `Success Limit Third ${TEST_RUN_SUFFIX}`,
+      email: null,
+      referral_code: null,
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+    assert.equal(limited.json().error.details.rule, 'bootstrap');
+    await app.close();
+  });
 });
 
 test('PATCH /v1/me rejects duplicate display_name', async () => {

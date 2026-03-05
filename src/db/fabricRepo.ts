@@ -163,6 +163,22 @@ export async function consumeRateLimitCounter(key: string, windowSeconds: number
   };
 }
 
+export async function releaseRateLimitCounter(key: string) {
+  const rows = await query<{ count: number; reset_epoch: string }>(
+    `update rate_limit_counters
+     set
+       count = greatest((case when reset_at <= now() then 0 else count end) - 1, 0),
+       updated_at = now()
+     where key = $1
+     returning count, extract(epoch from reset_at)::text as reset_epoch`,
+    [key],
+  );
+  return {
+    count: Number(rows[0]?.count ?? 0),
+    resetEpochSeconds: Number(rows[0]?.reset_epoch ?? Math.floor(Date.now() / 1000)),
+  };
+}
+
 export async function createNode(
   displayName: string,
   email: string | null,

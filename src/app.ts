@@ -1232,6 +1232,27 @@ async function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: s
   return true;
 }
 
+async function rollbackRateLimitSubject(rule: RateLimitRule, subject: string) {
+  const key = `${rule.name}:${subject}`;
+  try {
+    await repo.releaseRateLimitCounter(key);
+  } catch (err) {
+    if (Date.now() - _rateLimitFallbackLastWarnMs > 60_000) {
+      _rateLimitFallbackLastWarnMs = Date.now();
+      console.warn('[SECURITY] Rate limiting DB unavailable while rolling back counter; using in-memory fallback.', String(err));
+    }
+    const now = Date.now();
+    const state = rateLimitState.get(key);
+    if (!state) return;
+    if (now >= state.resetAtMs) {
+      state.count = 0;
+      state.resetAtMs = now + (rule.windowSeconds * 1000);
+      return;
+    }
+    state.count = Math.max(0, state.count - 1);
+  }
+}
+
 async function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
   const subject = rateLimitSubjectValue(req, rule);
   return applyRateLimitSubject(reply, rule, subject);
@@ -1526,7 +1547,6 @@ export function buildApp() {
     reply.header('X-RateLimit-Reset', String(Math.floor(Date.now() / 1000) + 60));
 
     if (path === '/v1/bootstrap') {
-      if (rateLimitRule && !(await applyRateLimit(req, reply, rateLimitRule))) return;
       return;
     }
 
@@ -1700,23 +1720,41 @@ export function buildApp() {
     if (legalVersion !== config.requiredLegalVersion) {
       return reply.status(422).send(errorEnvelope('legal_version_mismatch', 'Legal version mismatch', legalAssentDetails(req)));
     }
+    const bootstrapRule = selectRateLimitRule('POST', '/v1/bootstrap');
+    const bootstrapSubject = bootstrapRule ? rateLimitSubjectValue(req, bootstrapRule) : null;
+    let bootstrapRateSlotReserved = false;
 
-    const out = await fabricService.bootstrap({
-      display_name: parsed.data.display_name,
-      email: parsed.data.email,
-      referral_code: parsed.data.referral_code,
-      recovery_public_key: parsed.data.recovery_public_key ?? null,
-      messaging_handles: parsed.data.messaging_handles ?? [],
-      legal_version: legalVersion,
-      legal_ip: extractClientIp(req),
-      legal_user_agent: extractUserAgent(req),
-    });
-    if ((out as any).validationError) {
-      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid bootstrap request', {
-        reason: (out as any).validationError,
-      }));
+    if (bootstrapRule && bootstrapSubject) {
+      if (!(await applyRateLimitSubject(reply, bootstrapRule, bootstrapSubject))) return;
+      bootstrapRateSlotReserved = true;
     }
-    return out;
+
+    try {
+      const out = await fabricService.bootstrap({
+        display_name: parsed.data.display_name,
+        email: parsed.data.email,
+        referral_code: parsed.data.referral_code,
+        recovery_public_key: parsed.data.recovery_public_key ?? null,
+        messaging_handles: parsed.data.messaging_handles ?? [],
+        legal_version: legalVersion,
+        legal_ip: extractClientIp(req),
+        legal_user_agent: extractUserAgent(req),
+      });
+      if ((out as any).validationError) {
+        if (bootstrapRateSlotReserved && bootstrapRule && bootstrapSubject) {
+          await rollbackRateLimitSubject(bootstrapRule, bootstrapSubject);
+        }
+        return reply.status(422).send(errorEnvelope('validation_error', 'Invalid bootstrap request', {
+          reason: (out as any).validationError,
+        }));
+      }
+      return out;
+    } catch (err) {
+      if (bootstrapRateSlotReserved && bootstrapRule && bootstrapSubject) {
+        await rollbackRateLimitSubject(bootstrapRule, bootstrapSubject);
+      }
+      throw err;
+    }
   });
 
   app.post('/v1/auth/keys', async (req, reply) => {

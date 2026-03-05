@@ -191,6 +191,8 @@ If referral_code is provided, it is recorded as a referral claim (subject to the
 
 `legal.accepted` MUST be `true` and `legal.version` MUST match `required_legal_version` from `GET /v1/meta`.
 
+Bootstrap IP rate limiting counts successful bootstrap creations only. Validation/legal/conflict failures do not consume the bootstrap quota.
+
 Email is account identity/recovery contact data and is not used as a runtime auth factor.
 
 Errors
