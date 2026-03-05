@@ -1720,6 +1720,23 @@ function recoverySignedMessage(challengeId: string, nonce: string) {
   return `fabric-recovery:${challengeId}:${nonce}`;
 }
 
+const ED25519_SPKI_DER_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
+
+function parseRecoveryPublicKey(rawPublicKey: string) {
+  const candidate = String(rawPublicKey ?? '').trim();
+  if (!candidate) return null;
+
+  // Backward-compatibility: some nodes store a raw 32-byte Ed25519 public key as hex.
+  if (/^[0-9a-f]{64}$/i.test(candidate)) {
+    const raw = Buffer.from(candidate, 'hex');
+    const der = Buffer.concat([ED25519_SPKI_DER_PREFIX, raw]);
+    return crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+  }
+
+  // Preferred path: parseable public key material (for example SPKI PEM).
+  return crypto.createPublicKey(candidate);
+}
+
 function decodeSignature(rawSignature: string) {
   const sig = rawSignature.trim();
   if (!sig) return null;
@@ -1735,7 +1752,8 @@ function decodeSignature(rawSignature: string) {
 
 function verifyRecoverySignature(publicKey: string, message: string, signature: string) {
   try {
-    const key = crypto.createPublicKey(publicKey);
+    const key = parseRecoveryPublicKey(publicKey);
+    if (!key) return false;
     const signatureBytes = decodeSignature(signature);
     if (!signatureBytes) return false;
     const keyType = key.asymmetricKeyType;

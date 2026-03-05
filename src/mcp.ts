@@ -136,14 +136,14 @@ const RAW_TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 hex) so you can recover your account if you lose your API key.',
+    description: 'Create a new Fabric node and receive an API key + 100 free credits. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         display_name: { type: 'string' as const, description: 'Display name for the new node.' },
         email: { type: ['string', 'null'] as const, description: 'Optional email for account recovery.' },
         referral_code: { type: ['string', 'null'] as const, description: 'Optional referral code from another node.' },
-        recovery_public_key: { type: ['string', 'null'] as const, description: 'Ed25519 public key (hex) for account recovery. Strongly recommended — without this, a lost API key cannot be recovered.' },
+        recovery_public_key: { type: ['string', 'null'] as const, description: 'Ed25519 public key for account recovery. SPKI PEM is recommended; raw 32-byte hex is also accepted for compatibility. Strongly recommended — without this, a lost API key cannot be recovered.' },
       },
       required: ['display_name'],
       additionalProperties: false,
@@ -190,7 +190,7 @@ const RAW_TOOLS = [
       type: 'object' as const,
       properties: {
         challenge_id: { type: 'string' as const, description: 'The challenge_id returned by fabric_recovery_start.' },
-        signature: { type: 'string' as const, description: 'Ed25519 signature of the challenge (hex-encoded). Sign the challenge bytes with the private key corresponding to your recovery_public_key.' },
+        signature: { type: 'string' as const, description: 'Ed25519 signature of the challenge (hex or base64). Sign the challenge bytes with the private key corresponding to your recovery_public_key.' },
       },
       required: ['challenge_id', 'signature'],
       additionalProperties: false,

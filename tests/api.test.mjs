@@ -6891,6 +6891,44 @@ test('pubkey recovery rotates keys and old keys are revoked', async () => {
   await app.close();
 });
 
+test('pubkey recovery accepts raw 32-byte hex recovery_public_key', async () => {
+  const app = buildApp();
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const spkiDer = pair.publicKey.export({ type: 'spki', format: 'der' });
+  const recoveryPublicKeyHex = spkiDer.subarray(spkiDer.length - 32).toString('hex');
+
+  const b = await bootstrap(app, 'boot-pubkey-recovery-raw-hex', {
+    display_name: 'Recovery Raw Hex',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKeyHex,
+  });
+  assert.equal(b.statusCode, 200);
+  const nodeId = b.json().node.id;
+
+  const start = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-raw-hex-start' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(start.statusCode, 200);
+  const challengeId = start.json().challenge_id;
+  const nonce = start.json().nonce;
+  const signature = signRecoveryChallenge(challengeId, nonce, pair.privateKey);
+
+  const complete = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-raw-hex-complete' },
+    payload: { challenge_id: challengeId, signature },
+  });
+  assert.equal(complete.statusCode, 200);
+  assert.equal(complete.json().node_id, nodeId);
+  assert.equal(typeof complete.json().api_key, 'string');
+  await app.close();
+});
+
 test('pubkey recovery rejects wrong signature and expired nonce', async () => {
   const app = buildApp();
   const pair = crypto.generateKeyPairSync('ed25519');

@@ -135,7 +135,7 @@ Creates a Node and issues the first API key; applies one-time signup grant.
   "display_name": "string",
   "email": "string|null",
   "referral_code": "string|null",
-  "recovery_public_key": "string|null",
+  "recovery_public_key": "string|null (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted)",
   "messaging_handles": [
     {
       "kind": "string",
@@ -512,7 +512,7 @@ Request
 {
   "display_name": "string|null",
   "email": "string|null",
-  "recovery_public_key": "string|null",
+  "recovery_public_key": "string|null (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted)",
   "messaging_handles": [
     {
       "kind": "string(1..32, [A-Za-z0-9._-]+)",
@@ -527,6 +527,7 @@ Request
 Validation notes
 
 - `messaging_handles` max length: 10.
+- `recovery_public_key` accepts Ed25519 public key material in SPKI PEM (recommended) or raw 32-byte hex (compatibility).
 - Server normalizes `messaging_handles` values (trimmed; `kind` lower-cased) before persistence and reveal responses.
 - `event_webhook_secret` is optional and write-only. If provided as a string, it is trimmed, must be non-empty, and max length 256.
 - Setting `event_webhook_secret` to `null` clears the secret; subsequent webhook deliveries are unsigned until a new secret is set.
