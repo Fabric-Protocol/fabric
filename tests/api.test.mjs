@@ -528,6 +528,9 @@ test('POST /v1/bootstrap without legal assent returns legal_required', async () 
   assert.equal(res.statusCode, 422);
   assert.equal(res.json().error.code, 'legal_required');
   assert.equal(res.json().error.details.required_legal_version, REQUIRED_LEGAL_VERSION);
+  assert.equal(res.json().error.details.expected_legal.accepted, true);
+  assert.equal(res.json().error.details.expected_legal.version, REQUIRED_LEGAL_VERSION);
+  assert.equal(typeof res.json().error.details.hint, 'string');
   assert.equal(typeof res.json().error.details.legal_urls.terms, 'string');
   await app.close();
 });

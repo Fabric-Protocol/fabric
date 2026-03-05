@@ -203,6 +203,13 @@ Errors
 
 422 validation error
 
+Legal error detail contract (bootstrap):
+- `legal_required` and `legal_version_mismatch` include:
+  - `required_legal_version`
+  - `legal_urls`
+  - `expected_legal` (shape: `{ "accepted": true, "version": "<required_legal_version>" }`)
+  - `hint` with a concrete payload example using `legal.accepted` + `legal.version`
+
 POST /v1/auth/keys
 Auth
 

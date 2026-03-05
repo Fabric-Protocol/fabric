@@ -1121,6 +1121,30 @@ function buildMetaPayload(req: FastifyRequest) {
   };
 }
 
+function legalAssentDetails(req: FastifyRequest) {
+  const meta = buildMetaPayload(req);
+  return {
+    required_legal_version: config.requiredLegalVersion,
+    legal_urls: meta.legal_urls,
+    expected_legal: {
+      accepted: true,
+      version: config.requiredLegalVersion,
+    },
+    hint: 'Include legal object in bootstrap payload: {"legal":{"accepted":true,"version":"<required_legal_version>"}}',
+  };
+}
+
+function legalAssentCompactDetails() {
+  return {
+    required_legal_version: config.requiredLegalVersion,
+    expected_legal: {
+      accepted: true,
+      version: config.requiredLegalVersion,
+    },
+    hint: 'Use /v1/meta.required_legal_version and send legal.accepted=true at bootstrap.',
+  };
+}
+
 function extractClientIp(req: FastifyRequest) {
   const forwardedFor = firstHeaderValue(req.headers['x-forwarded-for'] as string | string[] | undefined);
   if (forwardedFor) return forwardedFor.split(',')[0]?.trim() || null;
@@ -1663,28 +1687,18 @@ export function buildApp() {
     const parsed = schema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', parsed.error.flatten()));
 
-    const meta = buildMetaPayload(req);
     const legal = parsed.data.legal;
     if (!legal || typeof legal !== 'object') {
-      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', {
-        required_legal_version: config.requiredLegalVersion,
-        legal_urls: meta.legal_urls,
-      }));
+      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentDetails(req)));
     }
 
     const legalAccepted = (legal as any).accepted === true;
     const legalVersion = typeof (legal as any).version === 'string' ? (legal as any).version : '';
     if (!legalAccepted) {
-      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', {
-        required_legal_version: config.requiredLegalVersion,
-        legal_urls: meta.legal_urls,
-      }));
+      return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentDetails(req)));
     }
     if (legalVersion !== config.requiredLegalVersion) {
-      return reply.status(422).send(errorEnvelope('legal_version_mismatch', 'Legal version mismatch', {
-        required_legal_version: config.requiredLegalVersion,
-        legal_urls: meta.legal_urls,
-      }));
+      return reply.status(422).send(errorEnvelope('legal_version_mismatch', 'Legal version mismatch', legalAssentDetails(req)));
     }
 
     const out = await fabricService.bootstrap({
@@ -2360,7 +2374,7 @@ export function buildApp() {
         ttl_minutes: parsed.data.ttl_minutes,
       },
     );
-    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentCompactDetails()));
     if (out.validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: out.validationError }));
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.conflict) return reply.status(409).send(errorEnvelope('conflict', 'Offer conflict', { reason: out.conflict }));
@@ -2396,7 +2410,7 @@ export function buildApp() {
         ttl_minutes: parsed.data.ttl_minutes,
       },
     );
-    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentCompactDetails()));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: out.validationError }));
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope((req as AuthedRequest).nodeId!, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
@@ -2407,7 +2421,7 @@ export function buildApp() {
     const nodeId = (req as AuthedRequest).nodeId!;
     const balanceBefore = await repo.creditBalance(nodeId);
     const out = await (fabricService as any).acceptOffer(nodeId, (req.params as any).offer_id);
-    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentCompactDetails()));
     if (out.creditsExhausted) return reply.status(402).send(creditsExhaustedEnvelope(nodeId, out.creditsExhausted));
     if (out.prepurchaseDailyLimit) return reply.status(429).send(prepurchaseLimitEnvelope(nodeId, 'prepurchase_daily_limit_exceeded', 'Pre-purchase daily limit exceeded', out.prepurchaseDailyLimit));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
@@ -2438,7 +2452,7 @@ export function buildApp() {
   });
   app.post('/v1/offers/:offer_id/cancel', async (req, reply) => {
     const out = await (fabricService as any).cancelOffer((req as AuthedRequest).nodeId!, (req.params as any).offer_id);
-    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentCompactDetails()));
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     if (out.conflict) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Offer cannot be cancelled in its current state', { reason: out.conflict }));
@@ -2449,7 +2463,7 @@ export function buildApp() {
     if (out.notFound) return reply.status(404).send(errorEnvelope('not_found', 'Offer not found'));
     if (out.notAccepted) return reply.status(409).send(errorEnvelope('offer_not_mutually_accepted', 'Offer not mutually accepted'));
     if (out.contactUnavailable) return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Counterparty contact is not ready', { reason: 'counterparty_email_missing' }));
-    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', { required_legal_version: config.requiredLegalVersion }));
+    if (out.legalRequired) return reply.status(422).send(errorEnvelope('legal_required', 'Legal assent is required', legalAssentCompactDetails()));
     if (out.forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Not allowed'));
     return maybeAppendWebhookNudge((req as AuthedRequest).nodeId!, out);
   });

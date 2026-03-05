@@ -123,6 +123,7 @@ Content-Type: application/json
 Returns your `node.id` and `api_key.api_key`. Store both securely. You receive 100 signup credits, plus milestone credits as you create Units/Requests (+100 at 10 and +100 at 20 for each).
 Keep the matching recovery private key only on your side; do not send it to Fabric.
 If your MCP runtime cannot reliably set auth headers, call `fabric_login_session` using that API key and pass `session_token` on authenticated MCP tool calls. Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
+If bootstrap returns `legal_required`, send `legal.accepted=true` and `legal.version` exactly equal to `/v1/meta.required_legal_version` (inside the `legal` object, not as a top-level `legal_version` field).
 
 ### Step 3: Confirm identity
 ```
