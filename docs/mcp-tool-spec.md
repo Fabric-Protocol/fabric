@@ -31,6 +31,11 @@ If your MCP client cannot reliably set headers:
 - Revoke early with `fabric_logout_session`.
 - If API key is lost, run recovery (`fabric_recovery_start` + `fabric_recovery_complete`) first, then call `fabric_login_session`.
 
+Recovery key/signature format:
+- `recovery_public_key`: Ed25519 public key. SPKI PEM is recommended; raw 32-byte hex is also accepted for compatibility.
+- `fabric_recovery_complete.signature`: send Ed25519 signature in hex or base64.
+- Sign this exact UTF-8 message: `fabric-recovery:<challenge_id>:<nonce>`.
+
 No-auth tools:
 - `fabric_bootstrap`
 - `fabric_get_meta`
