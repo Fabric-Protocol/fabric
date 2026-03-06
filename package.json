@@ -9,7 +9,7 @@
     "start": "npm run build && node dist/src/server.js",
     "lint": "npm run typecheck",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node dist/scripts/bootstrap-db.js && node --test tests/**/*.test.mjs",
+    "test": "npm run build && node dist/scripts/bootstrap-db.js && node --test --test-concurrency=1 tests/**/*.test.mjs",
     "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",
     "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1",
     "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js",
