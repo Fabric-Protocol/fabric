@@ -22,6 +22,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
     services:
       postgres:
         image: postgres:16
