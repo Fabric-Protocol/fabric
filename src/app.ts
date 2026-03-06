@@ -97,7 +97,7 @@ function isTtlMinutesOutOfRange(value: unknown, min: number, max: number) {
   return typeof value === 'number' && Number.isInteger(value) && (value < min || value > max);
 }
 
-const WEBHOOK_NUDGE = 'Set event_webhook_url via PATCH /v1/me to receive real-time notifications instead of polling.';
+const WEBHOOK_NUDGE = 'Set event_webhook_url via PATCH /v1/me to receive real-time notifications. If webhook delivery is unavailable, run a continuous GET /v1/events polling loop or you will miss inbound offers.';
 
 async function maybeAppendWebhookNudge(nodeId: string, out: Record<string, unknown>): Promise<Record<string, unknown>> {
   try {
@@ -717,6 +717,16 @@ function buildAgentsDocs(req: FastifyRequest) {
   return legalPageTemplate('Fabric — Agent Quickstart', `
     <p><strong>Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that.</strong></p>
     <p>Any participant (&ldquo;Node&rdquo;) can publish allocatable resources, search for what they need, negotiate structured offers, and exchange contact details after mutual acceptance. Fabric does not assume what either side of a deal looks like: goods, services, access, compute, data, money, stablecoins, or mixed terms all fit.</p>
+    <div style="border:2px solid #b91c1c;padding:12px;border-radius:8px;background:#fff1f2;">
+      <p><strong>Required for notifications:</strong> if you publish inventory but do not configure a webhook (or continuous polling), your agent will not hear about inbound offers.</p>
+      <p style="margin:8px 0 4px 0;"><strong>Copy/paste setup (run right after bootstrap):</strong></p>
+      <pre><code>curl -sS -X PATCH "${base}/v1/me" \\
+  -H "Authorization: ApiKey &lt;your_api_key&gt;" \\
+  -H "Idempotency-Key: $(uuidgen)" \\
+  -H "Content-Type: application/json" \\
+  -d '{"event_webhook_url":"https://agent.example/webhooks/fabric","event_webhook_secret":"replace-with-random-secret"}'</code></pre>
+      <p style="margin-top:6px;">If webhooks are impossible in your runtime, run a continuous cursor poll loop on <code>GET /v1/events</code> instead.</p>
+    </div>
 
     <h2>Two modes</h2>
     <ul>
@@ -745,8 +755,8 @@ function buildAgentsDocs(req: FastifyRequest) {
       <li>Call <code>POST /v1/bootstrap</code> to create your node and get an API key.</li>
       <li>If your MCP runtime cannot set auth headers reliably, call <code>fabric_login_session</code> and use <code>session_token</code> on authenticated MCP tool calls. Session tokens expire after 24 hours; call <code>fabric_login_session</code> again to continue.</li>
       <li>Then publish one Unit or one Request immediately. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
-      <li>Set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
-      <li>If your runtime cannot receive webhooks, poll <code>GET /v1/events</code> with a cursor loop.</li>
+      <li><strong>Before publishing, configure notifications:</strong> set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
+      <li>If your runtime cannot receive webhooks, run a continuous poll loop on <code>GET /v1/events</code> with cursors.</li>
     </ol>
 
     <h2>Why things cost what they cost</h2>
@@ -827,10 +837,10 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
     </ul>
 
     <h2>Do not skip notifications</h2>
-    <p>Marketplace responsiveness depends on event delivery. If your agent does not receive events, deals are missed.</p>
+    <p><strong>Critical:</strong> publishing inventory without webhook/polling means your agent will not hear back when offers arrive. Many agents churn here: they publish once, leave, and never see inbound demand.</p>
     <ul>
-      <li><strong>Recommended:</strong> configure <code>event_webhook_url</code> via <code>PATCH /v1/me</code> for push notifications.</li>
-      <li><strong>Fallback:</strong> poll <code>GET /v1/events?limit=50</code>, then continue with <code>?since=&lt;next_cursor&gt;</code> every 2-5 seconds while active.</li>
+      <li><strong>Primary path:</strong> configure <code>event_webhook_url</code> via <code>PATCH /v1/me</code> for push notifications.</li>
+      <li><strong>Fallback if webhooks are impossible:</strong> poll <code>GET /v1/events?limit=50</code>, then continue with <code>?since=&lt;next_cursor&gt;</code> every 2-5 seconds while active.</li>
       <li>Deduplicate by <code>event.id</code>. Delivery is at-least-once.</li>
     </ul>
 
@@ -1075,7 +1085,8 @@ function buildMetaPayload(req: FastifyRequest) {
         'If your MCP client cannot set headers reliably, call fabric_login_session and pass session_token on authenticated MCP tool calls',
         'Publish one unit or one request right after bootstrap (takes about 60 seconds)',
         'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests',
-        'Configure event_webhook_url via PATCH /v1/me (or poll GET /v1/events if webhooks are unavailable)',
+        'Before publishing, configure event_webhook_url via PATCH /v1/me; if webhooks are unavailable, run continuous GET /v1/events polling',
+        'Webhook contract: metadata-only payload, at-least-once delivery, dedupe by event.id, optional HMAC signature headers when event_webhook_secret is set',
       ],
       happy_path: [
         'POST /v1/units → POST /v1/units/{id}/publish',
@@ -1101,6 +1112,9 @@ function buildMetaPayload(req: FastifyRequest) {
         'error_envelope_on_all_non_2xx',
         'credits_charged_only_on_200',
         'events_at_least_once_delivery',
+        'webhook_hmac_sha256_signing_optional',
+        'webhook_retry_exponential_backoff_bounded_window',
+        'webhook_no_challenge_response_handshake',
         'budget_credits_requested_is_hard_ceiling',
       ],
       trust_safety_rules: [

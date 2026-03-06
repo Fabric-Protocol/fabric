@@ -229,8 +229,25 @@ export const openApiDocument = {
     '/v1/bootstrap': {
       post: {
         summary: 'Bootstrap node and issue initial API key',
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/BootstrapRequest' },
+            },
+          },
+        },
         responses: {
-          '200': { description: 'Bootstrap result' },
+          '200': {
+            description: 'Bootstrap result',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/BootstrapResponse' },
+              },
+            },
+          },
+          '409': { description: 'Display name conflict' },
           '422': { description: 'Validation or legal assent error' },
         },
       },
@@ -262,8 +279,24 @@ export const openApiDocument = {
     '/v1/recovery/start': {
       post: {
         summary: 'Start public API key recovery challenge (pubkey only in MVP)',
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/RecoveryStartRequest' },
+            },
+          },
+        },
         responses: {
-          '200': { description: 'Recovery challenge created' },
+          '200': {
+            description: 'Recovery challenge created',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RecoveryStartResponse' },
+              },
+            },
+          },
           '404': { description: 'Node not found' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
@@ -273,8 +306,24 @@ export const openApiDocument = {
     '/v1/recovery/complete': {
       post: {
         summary: 'Complete public API key recovery challenge (signature only in MVP)',
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/RecoveryCompleteRequest' },
+            },
+          },
+        },
         responses: {
-          '200': { description: 'New API key minted' },
+          '200': {
+            description: 'New API key minted',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/RecoveryCompleteResponse' },
+              },
+            },
+          },
           '404': { description: 'Challenge not found' },
           '409': { description: 'Challenge already used' },
           '422': { description: 'Validation error' },
@@ -300,6 +349,7 @@ export const openApiDocument = {
       },
       patch: {
         summary: 'Update current node profile',
+        description: 'Use event_webhook_url (and optional event_webhook_secret) to receive signed offer/subscription lifecycle webhooks. Delivery is at-least-once; deduplicate by event id.',
         security: [{ ApiKeyAuth: [] }],
         parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
         requestBody: {
@@ -322,6 +372,35 @@ export const openApiDocument = {
           '401': { description: 'Unauthorized' },
           '422': { description: 'Validation error' },
           '429': { description: 'Rate limit exceeded' },
+        },
+        callbacks: {
+          eventWebhookDelivery: {
+            '{$request.body#/event_webhook_url}': {
+              post: {
+                summary: 'Outbound event webhook (push delivery)',
+                description: 'When event_webhook_url is configured, Fabric POSTs lifecycle events to this URL. Signed headers are present only when event_webhook_secret is configured. There is no challenge-response verification handshake.',
+                parameters: [
+                  { $ref: '#/components/parameters/EventWebhookTimestampHeader' },
+                  { $ref: '#/components/parameters/EventWebhookSignatureHeader' },
+                ],
+                requestBody: {
+                  required: true,
+                  content: {
+                    'application/json': {
+                      schema: { $ref: '#/components/schemas/EventWebhookDelivery' },
+                    },
+                  },
+                },
+                responses: {
+                  '200': { description: 'Received' },
+                  '202': { description: 'Accepted for async processing' },
+                  '204': { description: 'Received (no response body)' },
+                  '4XX': { description: 'Delivery failed; Fabric retries with exponential backoff (bounded retry window)' },
+                  '5XX': { description: 'Delivery failed; Fabric retries with exponential backoff (bounded retry window)' },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -656,8 +735,8 @@ export const openApiDocument = {
     },
     '/v1/events': {
       get: {
-        summary: 'List offer lifecycle events for the authenticated node',
-        description: 'Polling fallback for offer lifecycle events. Use next_cursor as the next since value. Delivery is at-least-once; dedupe by event id.',
+        summary: 'List offer/subscription lifecycle events for the authenticated node',
+        description: 'Polling fallback for lifecycle events. Use next_cursor as the next since value. Delivery is at-least-once; dedupe by event id. For subscription_changed events, offer_id is null.',
         security: [{ ApiKeyAuth: [] }],
         parameters: [
           { $ref: '#/components/parameters/EventsSinceQuery' },
@@ -724,6 +803,20 @@ export const openApiDocument = {
         in: 'query',
         required: false,
         schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
+      },
+      EventWebhookTimestampHeader: {
+        name: 'X-Fabric-Timestamp',
+        in: 'header',
+        required: false,
+        schema: { type: 'string' },
+        description: 'Unix epoch seconds. Present only when event_webhook_secret is configured for the recipient node.',
+      },
+      EventWebhookSignatureHeader: {
+        name: 'X-Fabric-Signature',
+        in: 'header',
+        required: false,
+        schema: { type: 'string' },
+        description: 'Present only when event_webhook_secret is configured. Format: t=<timestamp>,v1=<hex_hmac_sha256>. Verify over `${t}.${rawBody}` and reject stale timestamps (recommended ±300s).',
       },
     },
     schemas: {
@@ -991,6 +1084,101 @@ export const openApiDocument = {
         },
         required: ['kind', 'handle', 'url'],
       },
+      BootstrapLegalAssent: {
+        type: 'object',
+        properties: {
+          accepted: { type: 'boolean', enum: [true] },
+          version: { type: 'string' },
+        },
+        required: ['accepted', 'version'],
+      },
+      BootstrapRequest: {
+        type: 'object',
+        properties: {
+          display_name: { type: 'string' },
+          email: { type: 'string', nullable: true },
+          referral_code: { type: 'string', nullable: true },
+          recovery_public_key: {
+            type: 'string',
+            nullable: true,
+            description: 'Ed25519 public key; SPKI PEM recommended. Raw 32-byte hex also accepted.',
+          },
+          messaging_handles: {
+            type: 'array',
+            maxItems: 10,
+            items: { $ref: '#/components/schemas/MessagingHandle' },
+          },
+          legal: { $ref: '#/components/schemas/BootstrapLegalAssent' },
+        },
+        required: ['display_name', 'legal'],
+      },
+      BootstrapApiKey: {
+        type: 'object',
+        properties: {
+          key_id: { type: 'string', format: 'uuid' },
+          api_key: { type: 'string' },
+          created_at: { type: 'string' },
+        },
+        required: ['key_id', 'api_key', 'created_at'],
+      },
+      BootstrapCredits: {
+        type: 'object',
+        properties: {
+          granted: { type: 'integer' },
+          reason: { type: 'string' },
+        },
+        required: ['granted', 'reason'],
+      },
+      BootstrapResponse: {
+        type: 'object',
+        properties: {
+          node: { $ref: '#/components/schemas/NodeProfile' },
+          api_key: { $ref: '#/components/schemas/BootstrapApiKey' },
+          credits: { $ref: '#/components/schemas/BootstrapCredits' },
+        },
+        required: ['node', 'api_key', 'credits'],
+      },
+      RecoveryStartRequest: {
+        type: 'object',
+        properties: {
+          node_id: { type: 'string', format: 'uuid' },
+          method: {
+            type: 'string',
+            enum: ['pubkey', 'email'],
+            description: 'MVP supports pubkey only. method=email is rejected with 422.',
+          },
+        },
+        required: ['node_id', 'method'],
+      },
+      RecoveryStartResponse: {
+        type: 'object',
+        properties: {
+          challenge_id: { type: 'string', format: 'uuid' },
+          nonce: { type: 'string' },
+          expires_at: { type: 'string' },
+        },
+        required: ['challenge_id', 'nonce', 'expires_at'],
+      },
+      RecoveryCompleteRequest: {
+        type: 'object',
+        properties: {
+          challenge_id: { type: 'string', format: 'uuid' },
+          signature: {
+            type: 'string',
+            description: 'Ed25519 signature over `fabric-recovery:<challenge_id>:<nonce>`. Hex and base64 encodings are accepted.',
+          },
+        },
+        required: ['challenge_id', 'signature'],
+      },
+      RecoveryCompleteResponse: {
+        type: 'object',
+        properties: {
+          node_id: { type: 'string', format: 'uuid' },
+          key_id: { type: 'string', format: 'uuid' },
+          api_key: { type: 'string' },
+        },
+        required: ['node_id', 'key_id', 'api_key'],
+      },
       NodeProfile: {
         type: 'object',
         properties: {
@@ -1100,12 +1288,32 @@ export const openApiDocument = {
           id: { type: 'string', format: 'uuid' },
           type: {
             type: 'string',
-            enum: ['offer_created', 'offer_countered', 'offer_accepted', 'offer_rejected', 'offer_cancelled', 'offer_contact_revealed'],
+            enum: ['offer_created', 'offer_countered', 'offer_accepted', 'offer_rejected', 'offer_cancelled', 'offer_contact_revealed', 'subscription_changed'],
           },
-          offer_id: { type: 'string', format: 'uuid' },
+          offer_id: { type: 'string', format: 'uuid', nullable: true },
           actor_node_id: { type: 'string', format: 'uuid' },
           recipient_node_id: { type: 'string', format: 'uuid' },
           payload: { type: 'object', additionalProperties: true },
+          created_at: { type: 'string' },
+        },
+        required: ['id', 'type', 'offer_id', 'actor_node_id', 'recipient_node_id', 'payload', 'created_at'],
+      },
+      EventWebhookDelivery: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          type: {
+            type: 'string',
+            enum: ['offer_created', 'offer_countered', 'offer_accepted', 'offer_rejected', 'offer_cancelled', 'offer_contact_revealed', 'subscription_changed'],
+          },
+          offer_id: { type: 'string', format: 'uuid', nullable: true },
+          actor_node_id: { type: 'string', format: 'uuid' },
+          recipient_node_id: { type: 'string', format: 'uuid' },
+          payload: {
+            type: 'object',
+            additionalProperties: false,
+            description: 'Metadata-only in webhook deliveries (currently an empty object). Contact PII is never included.',
+          },
           created_at: { type: 'string' },
         },
         required: ['id', 'type', 'offer_id', 'actor_node_id', 'recipient_node_id', 'payload', 'created_at'],
