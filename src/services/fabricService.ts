@@ -1634,6 +1634,13 @@ function isBlockedWebhookIp(address: string) {
   return false;
 }
 
+function normalizeWebhookHostname(hostname: string) {
+  if (hostname.startsWith('[') && hostname.endsWith(']')) {
+    return hostname.slice(1, -1);
+  }
+  return hostname;
+}
+
 async function normalizeWebhookUrl(value: string | null | undefined): Promise<{ value: string | null | undefined; validationError?: string }> {
   if (value === undefined) return { value: undefined };
   if (value === null) return { value: null };
@@ -1654,7 +1661,8 @@ async function normalizeWebhookUrl(value: string | null | undefined): Promise<{ 
   if (parsed.username || parsed.password) return { value: undefined, validationError: 'event_webhook_url_auth_not_allowed' };
   if (parsed.hash) return { value: undefined, validationError: 'event_webhook_url_fragment_not_allowed' };
 
-  const hostname = parsed.hostname.trim().toLowerCase();
+  const rawHostname = parsed.hostname.trim().toLowerCase();
+  const hostname = normalizeWebhookHostname(rawHostname);
   if (!hostname) return { value: undefined, validationError: 'event_webhook_url_invalid' };
   if (hostname === 'localhost') return { value: undefined, validationError: 'event_webhook_url_ssrf_blocked' };
 

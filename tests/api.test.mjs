@@ -995,6 +995,37 @@ test('PATCH /v1/me rejects invalid and SSRF-blocked webhook URLs', async () => {
   await app.close();
 });
 
+test('PATCH /v1/me rejects bracketed IPv6 webhook URL even when DNS lookup fails', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-webhook-ipv6-literal');
+  assert.equal(b.statusCode, 200);
+  const apiKey = b.json().api_key.api_key;
+  const displayName = b.json().node.display_name;
+  const email = b.json().node.email;
+
+  await withMockWebhookDnsLookup(async () => {
+    throw new Error('dns unavailable');
+  }, async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/v1/me',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-webhook-ipv6-literal' },
+      payload: {
+        display_name: displayName,
+        email,
+        recovery_public_key: null,
+        messaging_handles: [],
+        event_webhook_url: 'https://[::1]/hook',
+      },
+    });
+    assert.equal(res.statusCode, 422);
+    assert.equal(res.json().error.code, 'validation_error');
+    assert.equal(res.json().error.details.reason, 'event_webhook_url_ssrf_blocked');
+  });
+
+  await app.close();
+});
+
 test('PATCH /v1/me rejects webhook URL when DNS resolves to blocked address', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-webhook-dns');
