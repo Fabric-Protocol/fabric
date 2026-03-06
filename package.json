@@ -17,6 +17,7 @@
     "smoke:mcp": "powershell -ExecutionPolicy Bypass -File scripts/smoke-mcp.ps1"
   },
   "dependencies": {
+    "@noble/ed25519": "^2.3.0",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
     "pg": "^8.13.1",

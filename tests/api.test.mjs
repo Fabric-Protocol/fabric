@@ -7038,6 +7038,45 @@ test('pubkey recovery accepts raw 32-byte hex recovery_public_key', async () => 
   await app.close();
 });
 
+test('pubkey recovery accepts hex-encoded signatures', async () => {
+  const app = buildApp();
+  const pair = crypto.generateKeyPairSync('ed25519');
+  const recoveryPublicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+  const b = await bootstrap(app, 'boot-pubkey-recovery-hex-signature', {
+    display_name: 'Recovery Hex Sig',
+    email: null,
+    referral_code: null,
+    recovery_public_key: recoveryPublicKey,
+  });
+  assert.equal(b.statusCode, 200);
+  const nodeId = b.json().node.id;
+
+  const start = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/start',
+    headers: { 'idempotency-key': 'pubkey-recovery-hex-signature-start' },
+    payload: { node_id: nodeId, method: 'pubkey' },
+  });
+  assert.equal(start.statusCode, 200);
+  const challengeId = start.json().challenge_id;
+  const nonce = start.json().nonce;
+
+  const payload = Buffer.from(`fabric-recovery:${challengeId}:${nonce}`, 'utf8');
+  const signatureHex = crypto.sign(null, payload, pair.privateKey).toString('hex');
+
+  const complete = await app.inject({
+    method: 'POST',
+    url: '/v1/recovery/complete',
+    headers: { 'idempotency-key': 'pubkey-recovery-hex-signature-complete' },
+    payload: { challenge_id: challengeId, signature: signatureHex },
+  });
+  assert.equal(complete.statusCode, 200);
+  assert.equal(complete.json().node_id, nodeId);
+  assert.equal(typeof complete.json().api_key, 'string');
+  await app.close();
+});
+
 test('pubkey recovery rejects wrong signature and expired nonce', async () => {
   const app = buildApp();
   const pair = crypto.generateKeyPairSync('ed25519');

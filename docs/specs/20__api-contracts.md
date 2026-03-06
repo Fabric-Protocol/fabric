@@ -422,7 +422,7 @@ Purpose
 Complete API key recovery and mint exactly one new plaintext API key.
 
 Request (pubkey)
-{ "challenge_id": "uuid", "signature": "base64|hex signature over fabric-recovery:<challenge_id>:<nonce>" }
+{ "challenge_id": "uuid", "signature": "base64|hex Ed25519 signature (must decode to 64 bytes) over fabric-recovery:<challenge_id>:<nonce>" }
 
 Response 200
 {

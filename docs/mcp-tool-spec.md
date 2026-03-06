@@ -33,7 +33,7 @@ If your MCP client cannot reliably set headers:
 
 Recovery key/signature format:
 - `recovery_public_key`: Ed25519 public key. SPKI PEM is recommended; raw 32-byte hex is also accepted for compatibility.
-- `fabric_recovery_complete.signature`: send Ed25519 signature in hex or base64.
+- `fabric_recovery_complete.signature`: send Ed25519 signature in hex or base64; decoded signature must be exactly 64 bytes.
 - Sign this exact UTF-8 message: `fabric-recovery:<challenge_id>:<nonce>`.
 
 No-auth tools:

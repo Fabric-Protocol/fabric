@@ -1,11 +1,14 @@
 import crypto from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import net from 'node:net';
+import { verify as verifyEd25519, etc as ed25519Utils } from '@noble/ed25519';
 import { config } from '../config.js';
 import * as repo from '../db/fabricRepo.js';
 import { sendEmail } from './emailProvider.js';
 
 type DnsLookupAll = (hostname: string, options: { all: true; verbatim?: boolean }) => Promise<Array<{ address: string; family: number }>>;
+
+ed25519Utils.sha512Sync = (...messages) => crypto.createHash('sha512').update(ed25519Utils.concatBytes(...messages)).digest();
 
 let webhookDnsLookup: DnsLookupAll = dnsLookup as DnsLookupAll;
 const webhookIpBlockList = new net.BlockList();
@@ -320,7 +323,7 @@ export const fabricService = {
 
     if (challenge.type !== 'pubkey') return { validationError: 'challenge_type_mismatch' };
     const message = recoverySignedMessage(challenge.id, challenge.nonce_or_code_hash);
-    const verified = verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
+    const verified = await verifyRecoverySignature(challenge.recovery_public_key ?? '', message, payload.signature);
     const completion = await repo.completeRecoveryChallenge(
       payload.challenge_id,
       'pubkey',
@@ -1730,43 +1733,68 @@ function recoverySignedMessage(challengeId: string, nonce: string) {
 
 const ED25519_SPKI_DER_PREFIX = Buffer.from('302a300506032b6570032100', 'hex');
 
-function parseRecoveryPublicKey(rawPublicKey: string) {
+function decodeEd25519SpkiDerToRaw(der: Buffer): Buffer | null {
+  if (der.length !== ED25519_SPKI_DER_PREFIX.length + 32) return null;
+  if (!der.subarray(0, ED25519_SPKI_DER_PREFIX.length).equals(ED25519_SPKI_DER_PREFIX)) return null;
+  return der.subarray(ED25519_SPKI_DER_PREFIX.length);
+}
+
+function decodeRecoveryPublicKey(rawPublicKey: string) {
   const candidate = String(rawPublicKey ?? '').trim();
   if (!candidate) return null;
 
   // Backward-compatibility: some nodes store a raw 32-byte Ed25519 public key as hex.
   if (/^[0-9a-f]{64}$/i.test(candidate)) {
-    const raw = Buffer.from(candidate, 'hex');
-    const der = Buffer.concat([ED25519_SPKI_DER_PREFIX, raw]);
-    return crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+    return Buffer.from(candidate, 'hex');
   }
 
-  // Preferred path: parseable public key material (for example SPKI PEM).
-  return crypto.createPublicKey(candidate);
-}
+  // Most callers provide PEM SPKI; parse it directly and extract 32-byte raw key.
+  const pemBody = candidate
+    .replace(/-----BEGIN PUBLIC KEY-----/g, '')
+    .replace(/-----END PUBLIC KEY-----/g, '')
+    .replace(/\s+/g, '');
+  if (pemBody) {
+    try {
+      const der = Buffer.from(pemBody, 'base64');
+      const fromPem = decodeEd25519SpkiDerToRaw(der);
+      if (fromPem) return fromPem;
+    } catch {
+      // Fall through to runtime key parsing below.
+    }
+  }
 
-function decodeSignature(rawSignature: string) {
-  const sig = rawSignature.trim();
-  if (!sig) return null;
-  if (/^[0-9a-f]+$/i.test(sig) && sig.length % 2 === 0) return Buffer.from(sig, 'hex');
+  // Fallback: let runtime parse, then normalize back to SPKI DER and extract raw key.
   try {
-    const decoded = Buffer.from(sig, 'base64');
-    if (!decoded.length) return null;
-    return decoded;
+    const key = crypto.createPublicKey(candidate);
+    const der = key.export({ format: 'der', type: 'spki' });
+    return decodeEd25519SpkiDerToRaw(Buffer.from(der));
   } catch {
     return null;
   }
 }
 
-function verifyRecoverySignature(publicKey: string, message: string, signature: string) {
+function decodeSignature(rawSignature: string) {
+  const sig = rawSignature.trim();
+  if (!sig) return null;
+  if (/^[0-9a-f]+$/i.test(sig) && sig.length % 2 === 0) {
+    const decoded = Buffer.from(sig, 'hex');
+    return decoded.length === 64 ? decoded : null;
+  }
   try {
-    const key = parseRecoveryPublicKey(publicKey);
-    if (!key) return false;
+    const decoded = Buffer.from(sig, 'base64');
+    return decoded.length === 64 ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyRecoverySignature(publicKey: string, message: string, signature: string) {
+  try {
+    const key = decodeRecoveryPublicKey(publicKey);
+    if (!key || key.length !== 32) return false;
     const signatureBytes = decodeSignature(signature);
     if (!signatureBytes) return false;
-    const keyType = key.asymmetricKeyType;
-    const algorithm = keyType === 'ed25519' || keyType === 'ed448' ? null : 'sha256';
-    return crypto.verify(algorithm as any, Buffer.from(message, 'utf8'), key, signatureBytes);
+    return await verifyEd25519(signatureBytes, Buffer.from(message, 'utf8'), key);
   } catch {
     return false;
   }
