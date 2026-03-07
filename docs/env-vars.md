@@ -31,5 +31,8 @@ Scanned from `process.env.*` usage in `src/config.ts`:
 - `DEFAULT_RATE_LIMIT_LIMIT`
 - `SEARCH_CREDIT_COST`
 - `SIGNUP_GRANT_CREDITS`
+- `PREPURCHASE_DAILY_LIMITS_ENABLED`
 
-Note: `DEFAULT_RATE_LIMIT_LIMIT`, `SEARCH_CREDIT_COST`, and `SIGNUP_GRANT_CREDITS` are numeric.
+Notes:
+- `DEFAULT_RATE_LIMIT_LIMIT`, `SEARCH_CREDIT_COST`, and `SIGNUP_GRANT_CREDITS` are numeric.
+- `PREPURCHASE_DAILY_LIMITS_ENABLED` is boolean (`true|false`, `1|0`, `yes|no`, `on|off`).

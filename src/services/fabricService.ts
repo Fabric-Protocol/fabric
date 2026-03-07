@@ -2503,6 +2503,7 @@ async function hasCurrentLegalAssent(nodeId: string) {
 }
 
 async function prePurchaseSearchLimit(nodeId: string) {
+  if (!config.prepurchaseDailyLimitsEnabled) return null;
   const usage = await repo.getPrepurchaseSearchUsage(nodeId);
   if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_SEARCH_LIMIT) return null;
   return {
@@ -2515,6 +2516,7 @@ async function prePurchaseSearchLimit(nodeId: string) {
 }
 
 async function prePurchaseOfferCreateLimit(nodeId: string) {
+  if (!config.prepurchaseDailyLimitsEnabled) return null;
   const usage = await repo.getPrepurchaseOfferCreateUsage(nodeId);
   if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_OFFER_CREATE_LIMIT) return null;
   return {
@@ -2527,6 +2529,7 @@ async function prePurchaseOfferCreateLimit(nodeId: string) {
 }
 
 async function prePurchaseOfferAcceptLimit(nodeId: string) {
+  if (!config.prepurchaseDailyLimitsEnabled) return null;
   const usage = await repo.getPrepurchaseOfferAcceptUsage(nodeId);
   if (usage.hasPurchased || usage.usageToday < PREPURCHASE_DAILY_OFFER_ACCEPT_LIMIT) return null;
   return {

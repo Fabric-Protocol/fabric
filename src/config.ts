@@ -49,6 +49,7 @@ export const config = {
   searchPageProhibitiveFrom: Number(process.env.SEARCH_PAGE_PROHIBITIVE_FROM ?? 6),
   searchPageProhibitiveCost: Number(process.env.SEARCH_PAGE_PROHIBITIVE_COST ?? 100),
   signupGrantCredits: Number(process.env.SIGNUP_GRANT_CREDITS ?? 100),
+  prepurchaseDailyLimitsEnabled: parseBoolean(process.env.PREPURCHASE_DAILY_LIMITS_ENABLED, true),
   requestMilestoneThreshold: Number(process.env.REQUEST_MILESTONE_THRESHOLD ?? 20),
   requestMilestoneCreditGrant: Number(process.env.REQUEST_MILESTONE_CREDIT_GRANT ?? 200),
   referralMaxGrantsPerReferrer: Number(process.env.REFERRAL_MAX_GRANTS_PER_REFERRER ?? 50),
