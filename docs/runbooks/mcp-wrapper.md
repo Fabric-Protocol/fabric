@@ -19,7 +19,13 @@ Describe how Fabric exposes MCP in production and how to run an optional local s
 Auth:
 ```http
 Authorization: ApiKey <api_key>
+Authorization: Session <session_token>
 ```
+
+Important:
+- Use exact Fabric auth schemes `ApiKey` or `Session`.
+- Do not use `Authorization: Bearer ...` for Fabric auth.
+- `session_token` in MCP tool arguments is fallback transport for MCP only; REST endpoints require `Authorization` header.
 
 Headerless fallback:
 - Call `fabric_login_session` with your API key

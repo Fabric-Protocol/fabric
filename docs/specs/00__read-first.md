@@ -53,6 +53,8 @@ Vision line (non-functional): **Fabric is the shared substrate of allocatable re
 - **Primary auth (all non-webhook endpoints):** `Authorization: ApiKey <api_key>`
 - API key auth is the root runtime auth factor for normal endpoints; Session tokens are derived short-lived MCP credentials.
 - **MCP session auth (derived, short-lived):** `Authorization: Session <session_token>` (24h token minted via MCP `fabric_login_session`; intended for MCP runtimes that cannot reliably set headers with API keys).
+- Use exact Fabric auth schemes `ApiKey` or `Session`. `Authorization: Bearer ...` is not a Fabric auth scheme.
+- MCP `session_token` tool argument is MCP transport fallback only; REST endpoints require `Authorization` header.
 - Email is collected for account identity/recovery and operator contact, not as a runtime auth factor.
 - Revoked API key: `403 forbidden`; missing/invalid key: `401 unauthorized`.
   - Missing/invalid/revoked/expired session token: `401 unauthorized`.

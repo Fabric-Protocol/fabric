@@ -763,7 +763,7 @@ export const openApiDocument = {
         type: 'apiKey',
         in: 'header',
         name: 'Authorization',
-        description: 'Format: ApiKey <api_key>',
+        description: 'Formats: ApiKey <api_key> (primary) or Session <session_token> (derived, short-lived); Bearer is not supported',
       },
       AdminKeyAuth: {
         type: 'apiKey',

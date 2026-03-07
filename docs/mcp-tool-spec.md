@@ -24,6 +24,14 @@ Most tools require:
 
 `Authorization: ApiKey <api_key>`
 
+Also supported on authenticated routes:
+
+`Authorization: Session <session_token>`
+
+Important:
+- Fabric auth schemes are `ApiKey` and `Session`. `Authorization: Bearer ...` is not a Fabric auth scheme.
+- `session_token` in tool arguments is an MCP fallback transport only (for clients that cannot set headers). REST endpoints require the `Authorization` header.
+
 If your MCP client cannot reliably set headers:
 - Call `fabric_login_session` with your API key.
 - Pass `session_token` in authenticated tool arguments.

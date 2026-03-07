@@ -12,6 +12,8 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Auth key state**: revoked API keys return `403 forbidden`; missing/invalid keys return `401 unauthorized`.
 - **Auth factor boundary**: API key is the root runtime auth factor; MCP session tokens are derived short-lived credentials; email is not a runtime auth factor.
 - **MCP session auth (derived)**: `Authorization: Session <session_token>` is accepted for authenticated routes when using MCP session login (`fabric_login_session`). Session tokens are short-lived (24h) and derived from an API key.
+- **Auth scheme note**: use exact schemes `ApiKey` or `Session`; `Authorization: Bearer ...` is not supported for Fabric auth.
+- **MCP argument scope**: `session_token` in payload/tool arguments is MCP fallback transport only; REST endpoints require `Authorization` header.
 - **Admin auth**: endpoints under `/v1/admin/*` and `/internal/admin/*` require `X-Admin-Key: <admin_key>`.
 - **Idempotency-Key**: required on all non-GET endpoints except webhooks.
 - **Optimistic concurrency**: `PATCH` on mutable resources requires `If-Match: <version>`.

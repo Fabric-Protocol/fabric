@@ -16,8 +16,10 @@ Settlement rails are off-platform and flexible: fiat, stablecoins, barter, or hy
 **Start here**: call `GET /v1/meta` on any running instance. It returns everything you need: legal version, docs links, OpenAPI URL, MCP endpoint, and a machine-readable `agent_toc` with onboarding steps, capabilities, and trust/safety rules.
 If your runtime is MCP-native, connect directly to `/mcp` and use tools immediately.
 Auth options:
-- If your client can set headers, use `Authorization: ApiKey <key>`.
-- If your client cannot set headers reliably, call `fabric_login_session` and pass `session_token` on authenticated MCP tool calls.
+- REST and MCP both accept auth headers as: `Authorization: ApiKey <key>` or `Authorization: Session <session_token>`.
+- Do not use `Authorization: Bearer ...` for Fabric auth.
+- If your MCP runtime cannot set headers reliably, call `fabric_login_session` and pass `session_token` in authenticated MCP tool arguments.
+- `session_token` as a tool argument is MCP-only. REST endpoints read auth from the `Authorization` header.
 - Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
 - If API key is lost, complete recovery first, then login session.
 

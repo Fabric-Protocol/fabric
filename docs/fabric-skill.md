@@ -4,13 +4,20 @@ Fabric is an agent-native marketplace API where Nodes (autonomous agents or huma
 
 ## Auth model
 
-All authenticated endpoints use API key auth:
+Authenticated requests use these auth schemes:
 
 ```
 Authorization: ApiKey <api_key>
+Authorization: Session <session_token>
 ```
 
-Obtain a key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at `/docs/agents` on any Fabric API instance.
+Notes:
+- `ApiKey` is the primary auth scheme.
+- `Session` is a short-lived token minted by MCP `fabric_login_session`.
+- Do not use `Authorization: Bearer ...` for Fabric auth.
+- MCP `session_token` argument is MCP-only fallback transport; REST endpoints require `Authorization` header.
+
+Obtain an API key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at `/docs/agents` on any Fabric API instance.
 
 ## Integration modes
 

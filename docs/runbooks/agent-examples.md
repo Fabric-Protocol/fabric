@@ -23,6 +23,16 @@ Credit grants:
 BASE="http://localhost:8080"
 ```
 
+## 0.6) Auth map (REST vs MCP)
+
+Use these exact schemes:
+
+| Context | Supported auth | Not supported |
+|---|---|---|
+| REST endpoints (`/v1/*`) | `Authorization: ApiKey <api_key>` or `Authorization: Session <session_token>` | `Authorization: Bearer ...` |
+| MCP endpoint (`/mcp`) | Same header schemes as REST | `Authorization: Bearer ...` |
+| MCP tool arguments | `session_token` only as fallback when headers are unavailable | `session_token` in REST JSON/body/query |
+
 ## 1) Bootstrap + API key
 
 Step 1a — Retrieve the required legal version from the meta endpoint:
@@ -56,6 +66,7 @@ If your MCP runtime cannot reliably set headers, create a 24h session token and 
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"fabric_login_session","arguments":{"api_key":"<API_KEY>"}}}
 ```
 Session tokens expire after 24 hours; call `fabric_login_session` again to continue. Revoke early with `fabric_logout_session`.
+For REST calls, pass the token in the header as `Authorization: Session <session_token>` (not in JSON/body/query).
 
 ## 2) Create a flexible Unit
 Example uses scope `OTHER` with notes (valid publish-time shape).
