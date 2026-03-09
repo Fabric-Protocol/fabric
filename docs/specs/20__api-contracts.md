@@ -130,6 +130,7 @@ None
 
 ### Purpose
 Creates a Node and issues the first API key; applies one-time signup grant.
+This endpoint is for creating a new participant identity, not for routine credential refresh.
 
 ### Request
 ```json
@@ -188,6 +189,8 @@ Response 200
 Rules / side effects
 
 Signup grant (100 credits) applies once per Node.
+
+Clients should not call bootstrap for normal ongoing operations after identity creation. Reuse the existing node via API key/session auth; if credentials are unavailable, use auth/recovery flows instead of creating a replacement node.
 
 If referral_code is provided, it is recorded as a referral claim (subject to the referral rules in section 13).
 
