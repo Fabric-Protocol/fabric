@@ -11,6 +11,7 @@ export type NodeMessagingHandle = {
 export type MeNode = {
   id: string;
   display_name: string;
+  language_tag: string | null;
   email: string | null;
   email_verified_at: string | null;
   recovery_public_key_configured: boolean;
@@ -131,6 +132,7 @@ export type OfferObject = {
   to_node_id: string;
   request_id: string | null;
   status: OfferStatus;
+  language_tag?: string | null;
   expires_at: string;
   accepted_by_from_at: string | null;
   accepted_by_to_at: string | null;
@@ -150,6 +152,7 @@ export type CreateOfferRequest =
       request_id?: never;
       thread_id?: string | null;
       note?: string | null;
+      language_tag?: string | null;
       ttl_minutes?: number;
     }
   | {
@@ -157,6 +160,7 @@ export type CreateOfferRequest =
       unit_ids?: string[];
       thread_id?: string | null;
       note: string;
+      language_tag?: string | null;
       ttl_minutes?: number;
     };
 
@@ -205,6 +209,7 @@ export type MetaResponse = {
 
 export type BootstrapRequest = {
   display_name: string;
+  language_tag?: string | null;
   email: string | null;
   referral_code: string | null;
   recovery_public_key: string | null;

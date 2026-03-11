@@ -19,7 +19,7 @@
 - Day-to-day access is via **API keys** (`Authorization: ApiKey <api_key>`).
 - Multiple agents per Node implemented as **multiple API keys per Node** (label + revoke/rotate); no fine-grained permissions in MVP.
 - **Bootstrap is unauthenticated** and rate-limited; it creates a Node and issues the first API key.
-- **Signup grant:** 100 credits applied **once per Node** at bootstrap (ledger entry).
+- **Signup grant:** 500 credits applied **once per Node** at bootstrap (ledger entry).
 
 ---
 
@@ -244,7 +244,7 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 - 4,500 credits = $49.99 (≈ $0.01111/credit)
 
 ### Acquisition
-- Signup grant: **100 credits one-time**
+- Signup grant: **500 credits one-time**
 
 ---
 

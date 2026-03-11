@@ -97,6 +97,15 @@ Rationale:
 Scope/impact:
 - Docs only; code unchanged.
 
+## 2026-03-11 - Signup grant increased to 500 credits
+Decision:
+- Signup grant is 500 credits one-time per Node.
+- Runtime default `SIGNUP_GRANT_CREDITS` is 500.
+Rationale:
+- Product decision to make the initial trial budget materially more useful before first purchase.
+Scope/impact:
+- Updated normative specs, onboarding/runbook docs, and runtime default.
+
 ## 2026-02-24 - Spec-audit: plan monthly credits are 1000/3000/10000 (25__plans wins)
 Decision:
 - Monthly subscription credits: Basic=1000, Pro=3000, Business=10000 per `25__plans-credits-gating.md`.

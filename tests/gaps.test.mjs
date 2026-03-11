@@ -55,7 +55,7 @@ process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR = '1000';
 process.env.SEARCH_CREDIT_COST = '5';
 process.env.SEARCH_TARGET_CREDIT_COST = '1';
 process.env.SEARCH_PAGE_PROHIBITIVE_COST = '100';
-process.env.SIGNUP_GRANT_CREDITS = '100';
+process.env.SIGNUP_GRANT_CREDITS = '500';
 process.env.PREPURCHASE_DAILY_LIMITS_ENABLED = 'true';
 process.env.UPLOAD_TRIAL_THRESHOLD = '20';
 process.env.UPLOAD_TRIAL_CREDIT_GRANT = '200';
@@ -108,6 +108,18 @@ const offerEventsNullableMigrationSql = await fs.readFile(
   'utf8',
 );
 await query(offerEventsNullableMigrationSql);
+
+const languageLocaleSearchMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-11__apply_language_locale_search.sql', import.meta.url),
+  'utf8',
+);
+await query(languageLocaleSearchMigrationSql);
+
+const languageLocaleSearchVerifySql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-11__verify_language_locale_search.sql', import.meta.url),
+  'utf8',
+);
+await query(languageLocaleSearchVerifySql);
 
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');

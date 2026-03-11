@@ -48,7 +48,7 @@ process.env.RATE_LIMIT_EMAIL_VERIFY_START_PER_HOUR = '1000';
 process.env.SEARCH_CREDIT_COST = '5';
 process.env.SEARCH_TARGET_CREDIT_COST = '1';
 process.env.SEARCH_PAGE_PROHIBITIVE_COST = '100';
-process.env.SIGNUP_GRANT_CREDITS = '100';
+process.env.SIGNUP_GRANT_CREDITS = '500';
 process.env.PREPURCHASE_DAILY_LIMITS_ENABLED = 'true';
 process.env.UPLOAD_TRIAL_THRESHOLD = '20';
 process.env.UPLOAD_TRIAL_CREDIT_GRANT = '200';
@@ -116,6 +116,18 @@ const mcpSessionsMigrationSql = await fs.readFile(
   'utf8',
 );
 await query(mcpSessionsMigrationSql);
+
+const languageLocaleSearchMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-11__apply_language_locale_search.sql', import.meta.url),
+  'utf8',
+);
+await query(languageLocaleSearchMigrationSql);
+
+const languageLocaleSearchVerifySql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-11__verify_language_locale_search.sql', import.meta.url),
+  'utf8',
+);
+await query(languageLocaleSearchVerifySql);
 
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
@@ -346,6 +358,338 @@ test('GET /v1/categories returns stable registry and version hook', async () => 
   await app.close();
 });
 
+test('GET /v1/categories localizes human-readable fields for Simplified Chinese and falls back to English otherwise', async () => {
+  const app = buildApp();
+  const zh = await app.inject({
+    method: 'GET',
+    url: '/v1/categories',
+    headers: { 'accept-language': 'zh-CN', host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(zh.statusCode, 200);
+  const zhBody = zh.json();
+  assert.equal(zhBody.categories[0].id, 1);
+  assert.equal(zhBody.categories[0].slug, 'goods');
+  assert.equal(zhBody.categories[0].name, '实物商品');
+  assert.equal(zhBody.categories[0].description, '实体物品');
+  assert.equal(typeof zhBody.categories[0].examples[0], 'string');
+  assert.notEqual(zhBody.categories[0].examples[0], 'Specific dress/outfit (brand/model/size/color) for same-day pickup + delivery');
+
+  const fallback = await app.inject({
+    method: 'GET',
+    url: '/v1/categories',
+    headers: { 'accept-language': 'fr', host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(fallback.statusCode, 200);
+  const fallbackBody = fallback.json();
+  assert.equal(fallbackBody.categories[0].name, 'Goods');
+  assert.equal(fallbackBody.categories[0].description, 'Physical items');
+  await app.close();
+});
+
+test('localized errors change only error.message when Accept-Language requests Simplified Chinese', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { 'accept-language': 'zh-CN' },
+  });
+  assert.equal(res.statusCode, 401);
+  const body = res.json();
+  assert.equal(body.error.code, 'unauthorized');
+  assert.equal(body.error.message, '缺少认证令牌或认证令牌无效');
+  assert.deepEqual(body.error.details, {});
+  await app.close();
+});
+
+test('bootstrap and PATCH /v1/me round-trip node language_tag without inferring it from Accept-Language', async () => {
+  const app = buildApp();
+  const boot = await bootstrap(app, 'boot-language-tag-node', {
+    display_name: '中文节点',
+    language_tag: 'zh-CN',
+    email: null,
+    referral_code: null,
+  }, {
+    headers: { 'user-agent': `phase1-langtag-node-${TEST_RUN_SUFFIX}` },
+  });
+  assert.equal(boot.statusCode, 200);
+  const bootBody = boot.json();
+  const apiKey = bootBody.api_key.api_key;
+  assert.equal(bootBody.node.language_tag, 'zh-CN');
+
+  const me = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(me.statusCode, 200);
+  assert.equal(me.json().node.language_tag, 'zh-CN');
+
+  const patch = await app.inject({
+    method: 'PATCH',
+    url: '/v1/me',
+    headers: {
+      authorization: `ApiKey ${apiKey}`,
+      'idempotency-key': `boot-language-tag-node-patch-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      language_tag: 'zh-Hans',
+    },
+  });
+  assert.equal(patch.statusCode, 200);
+  assert.equal(patch.json().node.language_tag, 'zh-Hans');
+
+  const notInferred = await bootstrap(app, 'boot-language-tag-node-none', {
+    display_name: '不推断节点',
+    email: null,
+    referral_code: null,
+  }, {
+    headers: {
+      'accept-language': 'zh-CN',
+      'user-agent': `phase1-langtag-node-none-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(notInferred.statusCode, 200);
+  assert.equal(notInferred.json().node.language_tag, null);
+  await app.close();
+});
+
+test('Chinese units and requests round-trip language_tag and are searchable by Chinese keywords', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-zh-owner', { display_name: '中文卖家', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-zh-owner-${TEST_RUN_SUFFIX}` },
+  });
+  const searcherBoot = await bootstrap(app, 'boot-zh-searcher', { display_name: '中文买家', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-zh-searcher-${TEST_RUN_SUFFIX}` },
+  });
+  const ownerKey = ownerBoot.json().api_key.api_key;
+  const searcherKey = searcherBoot.json().api_key.api_key;
+  const keyword = `布料${TEST_RUN_SUFFIX}`;
+
+  const unitRes = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `zh-unit-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`中文${keyword}`, `中文${keyword}交易`),
+      description: `高质量${keyword}`,
+      public_summary: `柔软${keyword}`,
+      tags: [keyword, '棉布'],
+      language_tag: 'zh-CN',
+    },
+  });
+  assert.equal(unitRes.statusCode, 200);
+  const unitId = unitRes.json().unit.id;
+
+  const unitGet = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(unitGet.statusCode, 200);
+  assert.equal(unitGet.json().language_tag, 'zh-CN');
+
+  const unitList = await app.inject({
+    method: 'GET',
+    url: '/v1/units?limit=20',
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(unitList.statusCode, 200);
+  assert.equal(unitList.json().some((item) => item.id === unitId && item.language_tag === 'zh-CN'), true);
+
+  const publishUnit = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `zh-unit-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publishUnit.statusCode, 200);
+
+  const requestRes = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `zh-request-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`求购${keyword}`, `需要${keyword}`),
+      description: `希望找到${keyword}`,
+      public_summary: `正在求购${keyword}`,
+      tags: [keyword, '需求'],
+      language_tag: 'zh-CN',
+    },
+  });
+  assert.equal(requestRes.statusCode, 200);
+  const requestId = requestRes.json().request.id;
+
+  const requestGet = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(requestGet.statusCode, 200);
+  assert.equal(requestGet.json().language_tag, 'zh-CN');
+
+  const requestList = await app.inject({
+    method: 'GET',
+    url: '/v1/requests?limit=20',
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(requestList.statusCode, 200);
+  assert.equal(requestList.json().some((item) => item.id === requestId && item.language_tag === 'zh-CN'), true);
+
+  const publishRequest = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `zh-request-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publishRequest.statusCode, 200);
+
+  const listingSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: {
+      authorization: `ApiKey ${searcherKey}`,
+      'idempotency-key': `zh-search-listings-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      q: keyword,
+      scope: 'OTHER',
+      filters: { scope_notes: `中文${keyword}交易` },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(listingSearch.statusCode, 200);
+  const listingBody = listingSearch.json();
+  const listingHit = listingBody.items.find((entry) => entry.item.id === unitId);
+  assert.ok(listingHit, 'expected Chinese listing to be returned');
+  assert.equal(listingHit.item.language_tag, 'zh-CN');
+  assert.equal(listingHit.rank.sort_keys.fts_rank > 0, true);
+
+  const requestSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: {
+      authorization: `ApiKey ${searcherKey}`,
+      'idempotency-key': `zh-search-requests-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      q: keyword,
+      scope: 'OTHER',
+      filters: { scope_notes: `需要${keyword}` },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(requestSearch.statusCode, 200);
+  const requestBody = requestSearch.json();
+  const requestHit = requestBody.items.find((entry) => entry.item.id === requestId);
+  assert.ok(requestHit, 'expected Chinese request to be returned');
+  assert.equal(requestHit.item.language_tag, 'zh-CN');
+  assert.equal(requestHit.rank.sort_keys.fts_rank > 0, true);
+  await app.close();
+});
+
+test('offer create, get, list, and counter round-trip language_tag on Chinese notes', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'boot-zh-offer-requester', { display_name: '中文需求方', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-zh-offer-requester-${TEST_RUN_SUFFIX}` },
+  });
+  const fulfillerBoot = await bootstrap(app, 'boot-zh-offer-fulfiller', { display_name: '中文供给方', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-zh-offer-fulfiller-${TEST_RUN_SUFFIX}` },
+  });
+  const requesterKey = requesterBoot.json().api_key.api_key;
+  const fulfillerKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestRes = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `zh-offer-request-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`求购备注${TEST_RUN_SUFFIX}`, `需要备注${TEST_RUN_SUFFIX}`),
+      public_summary: `中文备注需求${TEST_RUN_SUFFIX}`,
+      language_tag: 'zh-CN',
+    },
+  });
+  assert.equal(requestRes.statusCode, 200);
+  const requestId = requestRes.json().request.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `zh-offer-request-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const offerCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: {
+      authorization: `ApiKey ${fulfillerKey}`,
+      'idempotency-key': `zh-offer-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      request_id: requestId,
+      note: `中文报价备注${TEST_RUN_SUFFIX}`,
+      language_tag: 'zh-CN',
+    },
+  });
+  assert.equal(offerCreate.statusCode, 200);
+  const createdOffer = offerCreate.json().offer;
+  assert.equal(createdOffer.language_tag, 'zh-CN');
+
+  const offerGet = await app.inject({
+    method: 'GET',
+    url: `/v1/offers/${createdOffer.id}`,
+    headers: { authorization: `ApiKey ${fulfillerKey}` },
+  });
+  assert.equal(offerGet.statusCode, 200);
+  assert.equal(offerGet.json().offer.language_tag, 'zh-CN');
+
+  const offerList = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=made',
+    headers: { authorization: `ApiKey ${fulfillerKey}` },
+  });
+  assert.equal(offerList.statusCode, 200);
+  assert.equal(offerList.json().offers.some((offer) => offer.id === createdOffer.id && offer.language_tag === 'zh-CN'), true);
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${createdOffer.id}/counter`,
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `zh-offer-counter-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      note: `中文还价备注${TEST_RUN_SUFFIX}`,
+      language_tag: 'zh-Hans',
+    },
+  });
+  assert.equal(counter.statusCode, 200);
+  assert.equal(counter.json().offer.language_tag, 'zh-Hans');
+  await app.close();
+});
+
 test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const app = buildApp();
   const meta = await app.inject({
@@ -375,6 +719,8 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(Boolean(body.paths?.['/v1/offers/{offer_id}/reveal-contact']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/me']?.patch), true);
   assert.equal(Boolean(body.paths?.['/v1/events']?.get), true);
+  const categoriesParams = body.paths?.['/v1/categories']?.get?.parameters ?? [];
+  assert.equal(categoriesParams.some((p) => p && p.$ref === '#/components/parameters/AcceptLanguageHeader'), true);
   const offerCreateParams = body.paths?.['/v1/offers']?.post?.parameters ?? [];
   const idemParamRef = offerCreateParams.find((p) => p && p.$ref === '#/components/parameters/IdempotencyKeyHeader');
   assert.equal(Boolean(idemParamRef), true);
@@ -409,20 +755,28 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const bootstrapRequestRequired = Array.isArray(bootstrapRequestSchema.required) ? bootstrapRequestSchema.required : [];
   assert.equal(bootstrapRequestRequired.includes('display_name'), true);
   assert.equal(bootstrapRequestRequired.includes('legal'), true);
+  assert.equal(bootstrapRequestSchema.properties?.language_tag?.nullable, true);
   assert.equal(bootstrapRequestSchema.properties?.legal?.$ref, '#/components/schemas/BootstrapLegalAssent');
+  const nodeProfileSchema = body.components?.schemas?.NodeProfile ?? {};
+  assert.equal(nodeProfileSchema.properties?.language_tag?.nullable, true);
+  assert.equal(Array.isArray(nodeProfileSchema.required) && nodeProfileSchema.required.includes('language_tag'), true);
   const offerEventSchema = body.components?.schemas?.OfferEvent ?? {};
   assert.equal(offerEventSchema.properties?.offer_id?.nullable, true);
   assert.equal(offerEventSchema.properties?.type?.enum?.includes('subscription_changed'), true);
   const offerCreateSchema = body.components?.schemas?.OfferCreateRequest ?? {};
+  assert.equal(offerCreateSchema.properties?.language_tag?.nullable, true);
   assert.equal(offerCreateSchema.properties?.ttl_minutes?.minimum, 15);
   assert.equal(offerCreateSchema.properties?.ttl_minutes?.maximum, 10080);
   const offerCounterSchema = body.components?.schemas?.OfferCounterRequest ?? {};
+  assert.equal(offerCounterSchema.properties?.language_tag?.nullable, true);
   assert.equal(offerCounterSchema.properties?.ttl_minutes?.minimum, 15);
   assert.equal(offerCounterSchema.properties?.ttl_minutes?.maximum, 10080);
   const requestCreateSchema = body.components?.schemas?.RequestCreateRequest ?? {};
+  assert.equal(requestCreateSchema.properties?.language_tag?.nullable, true);
   assert.equal(requestCreateSchema.properties?.ttl_minutes?.minimum, 60);
   assert.equal(requestCreateSchema.properties?.ttl_minutes?.maximum, 525600);
   const requestPatchSchema = body.components?.schemas?.RequestPatchRequest ?? {};
+  assert.equal(requestPatchSchema.properties?.language_tag?.nullable, true);
   assert.equal(requestPatchSchema.properties?.ttl_minutes?.minimum, 60);
   assert.equal(requestPatchSchema.properties?.ttl_minutes?.maximum, 525600);
   const offerSchema = body.components?.schemas?.Offer ?? {};
@@ -430,12 +784,14 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(offerSchema.required.includes('expires_at'), true);
   assert.equal(offerSchema.required.includes('request_id'), true);
   assert.equal(offerSchema.properties?.request_id?.nullable, true);
+  assert.equal(offerSchema.properties?.language_tag?.nullable, true);
   const eventsParams = body.paths?.['/v1/events']?.get?.parameters ?? [];
   const sinceParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsSinceQuery');
   const limitParam = eventsParams.find((p) => p && p.$ref === '#/components/parameters/EventsLimitQuery');
   assert.equal(Boolean(sinceParam), true);
   assert.equal(Boolean(limitParam), true);
   const mePatchSchema = body.components?.schemas?.MePatchRequest ?? {};
+  assert.equal(mePatchSchema.properties?.language_tag?.nullable, true);
   assert.equal(mePatchSchema.properties?.event_webhook_secret?.writeOnly, true);
   assert.equal(mePatchSchema.properties?.event_webhook_secret?.nullable, true);
   assert.equal(mePatchSchema.properties?.event_webhook_secret?.maxLength, 256);
@@ -462,6 +818,8 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const searchBudgetSchema = body.components?.schemas?.SearchRequest?.properties?.budget ?? {};
   assert.equal(searchBudgetSchema.properties?.credits_requested?.type, 'integer');
   assert.equal(searchBudgetSchema.properties?.credits_max?.deprecated, true);
+  const acceptLanguageHeader = body.components?.parameters?.AcceptLanguageHeader ?? {};
+  assert.equal(acceptLanguageHeader.name, 'Accept-Language');
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
@@ -683,11 +1041,16 @@ test('bootstrap IP rate limit counts successful bootstraps only (legal failure d
   await withConfigOverrides({ rateLimitBootstrapPerHour: 1 }, async () => {
     const app = buildApp();
     const testIp = '198.51.100.201';
+    const userAgent = `bootstrap-success-only-${TEST_RUN_SUFFIX}`;
 
     const invalid = await app.inject({
       method: 'POST',
       url: '/v1/bootstrap',
-      headers: { 'idempotency-key': `boot-success-only-invalid-${TEST_RUN_SUFFIX}`, 'x-forwarded-for': testIp },
+      headers: {
+        'idempotency-key': `boot-success-only-invalid-${TEST_RUN_SUFFIX}`,
+        'x-forwarded-for': testIp,
+        'user-agent': userAgent,
+      },
       payload: { display_name: `Invalid ${TEST_RUN_SUFFIX}`, email: null, referral_code: null },
     });
     assert.equal(invalid.statusCode, 422);
@@ -697,14 +1060,14 @@ test('bootstrap IP rate limit counts successful bootstraps only (legal failure d
       display_name: `Success Only A ${TEST_RUN_SUFFIX}`,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(ok.statusCode, 200);
 
     const limited = await bootstrap(app, `boot-success-only-limited-${TEST_RUN_SUFFIX}`, {
       display_name: `Success Only B ${TEST_RUN_SUFFIX}`,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(limited.statusCode, 429);
     assert.equal(limited.json().error.code, 'rate_limit_exceeded');
     assert.equal(limited.json().error.details.rule, 'bootstrap');
@@ -716,20 +1079,21 @@ test('bootstrap IP rate limit counts successful bootstraps only (display_name_ta
   await withConfigOverrides({ rateLimitBootstrapPerHour: 2 }, async () => {
     const app = buildApp();
     const testIp = '198.51.100.202';
+    const userAgent = `bootstrap-success-limit-${TEST_RUN_SUFFIX}`;
     const duplicateName = `Success Limit Duplicate ${TEST_RUN_SUFFIX}`;
 
     const first = await bootstrap(app, `boot-success-limit-first-${TEST_RUN_SUFFIX}`, {
       display_name: duplicateName,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(first.statusCode, 200);
 
     const duplicate = await bootstrap(app, `boot-success-limit-dup-${TEST_RUN_SUFFIX}`, {
       display_name: duplicateName,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(duplicate.statusCode, 422);
     assert.equal(duplicate.json().error.code, 'validation_error');
     assert.equal(duplicate.json().error.details.reason, 'display_name_taken');
@@ -738,14 +1102,14 @@ test('bootstrap IP rate limit counts successful bootstraps only (display_name_ta
       display_name: `Success Limit Second ${TEST_RUN_SUFFIX}`,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(second.statusCode, 200);
 
     const limited = await bootstrap(app, `boot-success-limit-third-${TEST_RUN_SUFFIX}`, {
       display_name: `Success Limit Third ${TEST_RUN_SUFFIX}`,
       email: null,
       referral_code: null,
-    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp } });
+    }, { exactDisplayName: true, headers: { 'x-forwarded-for': testIp, 'user-agent': userAgent } });
     assert.equal(limited.statusCode, 429);
     assert.equal(limited.json().error.code, 'rate_limit_exceeded');
     assert.equal(limited.json().error.details.rule, 'bootstrap');
@@ -763,7 +1127,7 @@ test('bootstrap identity reuse guard blocks repeated node creation from same sub
     bootstrapIdentityReuseGuardPublishedProjectionThreshold: 0,
   }, async () => {
     const app = buildApp();
-    const userAgent = 'lightMyRequest';
+    const userAgent = `lightMyRequest-${TEST_RUN_SUFFIX}`;
     const ips = ['69.12.56.10', '69.12.57.15', '69.12.58.8'];
 
     for (let i = 0; i < ips.length; i += 1) {
@@ -10806,8 +11170,8 @@ test('subscription monthly grant is capped at 2x plan credits', async () => {
   const sig1 = sign(inv1);
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig1.header }, payload: sig1.raw });
   const bal1 = await repo.creditBalance(nodeId);
-  // 100 signup + 1000 monthly = 1100
-  assert.equal(bal1, 1100);
+  // signup grant + 1000 monthly
+  assert.equal(bal1, config.signupGrantCredits + 1000);
 
   // Month 2 invoice - sub balance is 1000, cap is 2000, so can grant up to 1000 more = full grant
   const inv2 = {
@@ -10818,8 +11182,8 @@ test('subscription monthly grant is capped at 2x plan credits', async () => {
   const sig2 = sign(inv2);
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig2.header }, payload: sig2.raw });
   const bal2 = await repo.creditBalance(nodeId);
-  // 100 signup + 1000 + 1000 = 2100
-  assert.equal(bal2, 2100);
+  // signup grant + two monthly grants
+  assert.equal(bal2, config.signupGrantCredits + 2000);
 
   // Month 3 invoice - sub balance is 2000, cap is 2000, so grant 0
   const inv3 = {
@@ -10831,7 +11195,7 @@ test('subscription monthly grant is capped at 2x plan credits', async () => {
   await app.inject({ method: 'POST', url: '/v1/webhooks/stripe', headers: { 'stripe-signature': sig3.header }, payload: sig3.raw });
   const bal3 = await repo.creditBalance(nodeId);
   // Cap reached, no additional credits
-  assert.equal(bal3, 2100);
+  assert.equal(bal3, config.signupGrantCredits + 2000);
 
   await app.close();
 });

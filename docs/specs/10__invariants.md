@@ -167,7 +167,7 @@ Credit Packs (one-time purchases, worse value than subscriptions):
 - 4,500 credits = $49.99
 
 Acquisition:
-- Signup grant: 100 credits one-time
+- Signup grant: 500 credits one-time
 - Unit milestone grants: +100 credits at 10 Units, +100 credits at 20 Units (max +200 total, idempotent per node/threshold)
 - Request milestone grants: +100 credits at 10 Requests, +100 credits at 20 Requests (max +200 total, idempotent per node/threshold)
 - Referral grant: 100 credits, paid on referred node first paid invoice, capped at 50 grants per referrer

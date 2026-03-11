@@ -8,6 +8,7 @@
 -- Extensions
 -- =========================
 create extension if not exists pgcrypto;
+create extension if not exists pg_trgm;
 
 -- =========================
 -- Trigger helpers
@@ -33,6 +34,7 @@ create table if not exists nodes (
   id uuid primary key default gen_random_uuid(),
 
   display_name text null,
+  language_tag text null,
   email text null,
   email_verified_at timestamptz null,
   recovery_public_key text null,
@@ -64,6 +66,7 @@ alter table nodes add column if not exists recovery_public_key text null;
 alter table nodes add column if not exists messaging_handles jsonb not null default '[]'::jsonb;
 alter table nodes add column if not exists event_webhook_url text null;
 alter table nodes add column if not exists event_webhook_secret text null;
+alter table nodes add column if not exists language_tag text null;
 
 create index if not exists nodes_status_idx on nodes(status) where deleted_at is null;
 create unique index if not exists nodes_email_unique_idx on nodes(lower(email)) where email is not null and deleted_at is null;
@@ -352,6 +355,7 @@ create table if not exists units (
   title text not null,
   description text null,
   public_summary text null,
+  language_tag text null,
 
   type text null,
   condition text null check (condition in ('new','like_new','good','fair','poor','unknown')),
@@ -390,6 +394,7 @@ create index if not exists units_published_idx on units(published_at desc) where
 create index if not exists units_scope_idx on units(scope_primary) where deleted_at is null;
 alter table units add column if not exists estimated_value numeric null;
 alter table units add column if not exists max_ship_days int null;
+alter table units add column if not exists language_tag text null;
 
 drop trigger if exists units_set_updated_at on units;
 create trigger units_set_updated_at
@@ -408,6 +413,7 @@ create table if not exists requests (
   title text not null,
   description text null,
   public_summary text null,
+  language_tag text null,
 
   type text null,
   condition text null check (condition in ('new','like_new','good','fair','poor','unknown')),
@@ -446,6 +452,7 @@ create table if not exists requests (
 -- 365 days default for early marketplace density; reduce to '7 days' once volume is healthy
 alter table requests add column if not exists expires_at timestamptz not null default (now() + interval '365 days');
 alter table requests add column if not exists max_ship_days int null;
+alter table requests add column if not exists language_tag text null;
 
 create index if not exists requests_node_idx on requests(node_id) where deleted_at is null;
 create index if not exists requests_published_idx on requests(published_at desc) where deleted_at is null;
@@ -471,36 +478,90 @@ create table if not exists public_listings (
 
   doc jsonb not null, -- allowlisted PublicListing payload
   search_tsv tsvector not null default ''::tsvector,
+  search_text text not null default '',
   published_at timestamptz not null,
   updated_at timestamptz not null default now()
 );
 
 alter table public_listings add column if not exists search_tsv tsvector not null default ''::tsvector;
+alter table public_listings add column if not exists search_text text not null default '';
 
 create index if not exists public_listings_published_idx on public_listings(published_at desc);
 create index if not exists public_listings_search_tsv_idx on public_listings using gin(search_tsv);
+create index if not exists public_listings_search_text_gin on public_listings using gin(search_text gin_trgm_ops);
 
-create or replace function public_listings_tsv_trigger() returns trigger language plpgsql as $$
-begin
-  new.search_tsv := to_tsvector('english',
-    coalesce(new.doc->>'title','') || ' ' ||
-    coalesce(new.doc->>'public_summary','') || ' ' ||
-    coalesce(new.doc->>'description','') || ' ' ||
-    coalesce(
-      (select string_agg(elem, ' ') from jsonb_array_elements_text(
-        case when jsonb_typeof(coalesce(new.doc->'tags','[]'::jsonb)) = 'array'
-             then new.doc->'tags' else '[]'::jsonb end
-      ) as elem),
-      ''
+create or replace function fn_public_doc_tags_text(doc jsonb)
+returns text
+language sql
+immutable
+as $$
+  select coalesce(
+    (
+      select string_agg(elem, ' ')
+      from jsonb_array_elements_text(
+        case
+          when jsonb_typeof(coalesce(doc->'tags', '[]'::jsonb)) = 'array' then doc->'tags'
+          else '[]'::jsonb
+        end
+      ) as elem
+    ),
+    ''
+  );
+$$;
+
+create or replace function fn_public_doc_to_search_text(doc jsonb)
+returns text
+language sql
+immutable
+as $$
+  select trim(
+    concat_ws(
+      ' ',
+      coalesce(doc->>'title', ''),
+      coalesce(doc->>'public_summary', ''),
+      coalesce(doc->>'description', ''),
+      fn_public_doc_tags_text(doc)
     )
   );
+$$;
+
+create or replace function fn_public_doc_to_tsv(doc jsonb)
+returns tsvector
+language sql
+immutable
+as $$
+  with normalized as (
+    select
+      coalesce(doc->>'title', '') as title,
+      coalesce(doc->>'public_summary', '') as public_summary,
+      coalesce(doc->>'description', '') as description,
+      fn_public_doc_tags_text(doc) as tags_text
+  )
+  select
+    setweight(to_tsvector('english', title), 'A')
+    || setweight(to_tsvector('english', public_summary), 'B')
+    || setweight(to_tsvector('english', description), 'C')
+    || setweight(to_tsvector('english', tags_text), 'D')
+  from normalized;
+$$;
+
+create or replace function fn_set_public_projection_search_fields()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.search_tsv := fn_public_doc_to_tsv(new.doc);
+  new.search_text := fn_public_doc_to_search_text(new.doc);
   return new;
-end; $$;
+end;
+$$;
 
 drop trigger if exists public_listings_search_tsv_update on public_listings;
-create trigger public_listings_search_tsv_update
-before insert or update on public_listings
-for each row execute function public_listings_tsv_trigger();
+drop trigger if exists public_listings_set_search_tsv on public_listings;
+drop trigger if exists public_listings_set_search_fields on public_listings;
+create trigger public_listings_set_search_fields
+before insert or update of doc on public_listings
+for each row execute function fn_set_public_projection_search_fields();
 
 create table if not exists public_requests (
   request_id uuid primary key references requests(id) on delete cascade,
@@ -508,36 +569,24 @@ create table if not exists public_requests (
 
   doc jsonb not null, -- allowlisted PublicRequest payload
   search_tsv tsvector not null default ''::tsvector,
+  search_text text not null default '',
   published_at timestamptz not null,
   updated_at timestamptz not null default now()
 );
 
 alter table public_requests add column if not exists search_tsv tsvector not null default ''::tsvector;
+alter table public_requests add column if not exists search_text text not null default '';
 
 create index if not exists public_requests_published_idx on public_requests(published_at desc);
 create index if not exists public_requests_search_tsv_idx on public_requests using gin(search_tsv);
-
-create or replace function public_requests_tsv_trigger() returns trigger language plpgsql as $$
-begin
-  new.search_tsv := to_tsvector('english',
-    coalesce(new.doc->>'title','') || ' ' ||
-    coalesce(new.doc->>'public_summary','') || ' ' ||
-    coalesce(new.doc->>'description','') || ' ' ||
-    coalesce(
-      (select string_agg(elem, ' ') from jsonb_array_elements_text(
-        case when jsonb_typeof(coalesce(new.doc->'tags','[]'::jsonb)) = 'array'
-             then new.doc->'tags' else '[]'::jsonb end
-      ) as elem),
-      ''
-    )
-  );
-  return new;
-end; $$;
+create index if not exists public_requests_search_text_gin on public_requests using gin(search_text gin_trgm_ops);
 
 drop trigger if exists public_requests_search_tsv_update on public_requests;
-create trigger public_requests_search_tsv_update
-before insert or update on public_requests
-for each row execute function public_requests_tsv_trigger();
+drop trigger if exists public_requests_set_search_tsv on public_requests;
+drop trigger if exists public_requests_set_search_fields on public_requests;
+create trigger public_requests_set_search_fields
+before insert or update of doc on public_requests
+for each row execute function fn_set_public_projection_search_fields();
 
 -- =========================
 -- Offers + holds
@@ -569,6 +618,7 @@ create table if not exists offers (
   expired_at timestamptz null,
 
   note text null,
+  language_tag text null,
 
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -581,6 +631,7 @@ create table if not exists offers (
 create index if not exists offers_thread_idx on offers(thread_id, created_at);
 create index if not exists offers_to_status_idx on offers(to_node_id, status) where deleted_at is null;
 create index if not exists offers_from_status_idx on offers(from_node_id, status) where deleted_at is null;
+alter table offers add column if not exists language_tag text null;
 
 drop trigger if exists offers_set_updated_at on offers;
 create trigger offers_set_updated_at

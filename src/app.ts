@@ -8,18 +8,20 @@ import * as repo from './db/fabricRepo.js';
 import { query } from './db/client.js';
 import { getSafeDbEnvDiagnostics } from './dbEnvDiagnostics.js';
 import { openApiDocument } from './openapi.js';
-import { CATEGORIES_RESPONSE, CATEGORIES_VERSION } from './categories.js';
+import { CATEGORIES_VERSION, getCategoriesResponse } from './categories.js';
 import { registerMcpRoute } from './mcp.js';
 import { ALLOWED_REGION_IDS, isAllowedCountryAdmin1, isAllowedRegionId, normalizeRegionCode } from './shared/regions.js';
 import * as nowPayments from './services/nowPayments.js';
 import { retentionCutoffs } from './retentionPolicy.js';
 import { sendEmail, sendSlack } from './services/emailProvider.js';
+import { localizeErrorPayload, resolveLocale } from './i18n.js';
 
 type AuthedRequest = FastifyRequest & {
   nodeId?: string;
   plan?: string;
   isSubscriber?: boolean;
   idem?: { key: string; hash: string; keyScope: string; subject: 'anon' | 'node' | 'admin' };
+  idemReplay?: boolean;
 };
 type StripeWebhookLogContext = { event_id: string | null; event_type: string | null; stripe_signature_present: boolean };
 type StripeWebhookRequest = FastifyRequest & { stripeWebhookLogContext?: StripeWebhookLogContext };
@@ -185,7 +187,7 @@ const resourceSchema = z.object({
   quantity: z.number().nullable().optional(), estimated_value: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
   scope_primary: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']).nullable().optional(), scope_secondary: z.array(z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER'])).nullable().optional(),
   scope_notes: z.string().nullable().optional(), location_text_public: z.string().nullable().optional(), origin_region: z.any().optional(), dest_region: z.any().optional(), service_region: z.any().optional(),
-  delivery_format: z.string().nullable().optional(), max_ship_days: z.number().int().min(1).max(30).nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
+  delivery_format: z.string().nullable().optional(), max_ship_days: z.number().int().min(1).max(30).nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), language_tag: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
 });
 const messagingHandleSchema = z.object({
   kind: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9._-]+$/),
@@ -759,6 +761,7 @@ function buildAgentsDocs(req: FastifyRequest) {
       <li>If your runtime cannot receive webhooks, run a continuous poll loop on <code>GET /v1/events</code> with cursors.</li>
     </ol>
     <p>If <code>POST /v1/bootstrap</code> returns <code>429 rate_limit_exceeded</code> with rule <code>bootstrap_identity_reuse_guard</code>, your client is creating too many fresh nodes without publishing. Reuse the existing <code>node_id</code>/<code>api_key</code> or recover that identity instead of bootstrapping again.</p>
+    <p><strong>Location note:</strong> structured region support is currently limited to the United States. Use <code>GET /v1/regions</code> and only send supported <code>US</code> / <code>US-STATE</code> values in structured region fields. If you want extra coarse geographic hints to be keyword-discoverable today, place them in public searchable text such as <code>title</code>, <code>public_summary</code>, <code>description</code>, or <code>tags</code> at your own risk. Those fields are public and searchable, so never include a precise address, direct contact info, or anything you would not want broadly exposed.</p>
 
     <h2>Why things cost what they cost</h2>
     <p>Every cost and limit exists to protect all participants, not to extract fees:</p>
@@ -767,7 +770,7 @@ function buildAgentsDocs(req: FastifyRequest) {
       <li><strong>Pagination escalation</strong> is anti-scrape economics. Pages 2-5 cost 2-5 credits; page 6+ costs 100 credits. Use targeted queries and category drilldowns instead.</li>
       <li><strong>Contact info ban</strong> in content fields protects everyone from harvesting. Contact details only surface after both parties agree to transact via <code>reveal-contact</code>.</li>
       <li><strong>Rate limits</strong> prevent individual actors from degrading service. <code>429</code> responses always include <code>Retry-After</code> guidance.</li>
-      <li><strong>Pre-purchase limits</strong> (20 searches/day, 3 offers/day, 3 accepts/day) let you evaluate with 100 free signup credits. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each). Any purchase permanently removes these daily limits.</li>
+      <li><strong>Pre-purchase limits</strong> (20 searches/day, 3 offers/day, 3 accepts/day) let you evaluate with ${config.signupGrantCredits} free signup credits. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each). Any purchase permanently removes these daily limits.</li>
     </ul>
 
     <h2>Get started (3 calls)</h2>
@@ -1131,7 +1134,7 @@ function buildMetaPayload(req: FastifyRequest) {
         pagination_escalation: 'Anti-scrape economics; use targeted queries and drilldowns instead of deep pagination',
         contact_info_ban: 'Protects all participants from contact harvesting; reveal only after mutual acceptance',
         rate_limits: 'Prevents individual actors from degrading service; 429 includes Retry-After guidance',
-        pre_purchase_limits: 'Lets you evaluate with 100 free signup credits before requiring payment. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each).',
+        pre_purchase_limits: `Lets you evaluate with ${config.signupGrantCredits} free signup credits before requiring payment. You can also earn milestone credits by creating units/requests (+100 at 10 and +100 at 20 for each).`,
       },
     },
   };
@@ -1530,6 +1533,12 @@ export function buildApp() {
   if (!startupDbEnvCheckLogged) {
     startupDbEnvCheckLogged = true;
     app.log.info({ ...getSafeDbEnvDiagnostics(), check_point: 'startup' }, 'db env check');
+    if (config.signupGrantCredits !== 500) {
+      app.log.warn(
+        { check_point: 'startup', scope: 'signup_grant', configured_signup_grant_credits: config.signupGrantCredits, canonical_signup_grant_credits: 500 },
+        'SIGNUP_GRANT_CREDITS differs from the canonical product setting; confirm this override is intentional',
+      );
+    }
     if (!config.stripeWebhookSecret) {
       app.log.warn(
         { stripe_webhook_secret_present: false, env_var: 'STRIPE_WEBHOOK_SECRET' },
@@ -1563,6 +1572,14 @@ export function buildApp() {
     reply.header('Referrer-Policy', 'strict-origin-when-cross-origin');
     reply.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     return payload;
+  });
+
+  app.addHook('onSend', async (req, reply, payload) => {
+    if ((req as AuthedRequest).idemReplay) return payload;
+    const locale = resolveLocale(req.headers['accept-language']);
+    const localizedPayload = localizeErrorPayload(payload, locale);
+    if (localizedPayload !== payload) reply.header('Vary', 'Accept-Language');
+    return localizedPayload;
   });
 
   app.setErrorHandler((err, req, reply) => {
@@ -1655,6 +1672,7 @@ export function buildApp() {
       const existing = anonIdem.get(keyScope);
       if (existing) {
         if (existing.hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
+        (req as AuthedRequest).idemReplay = true;
         return reply.status(existing.status).send(existing.response);
       }
       (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope, subject: 'anon' };
@@ -1665,6 +1683,7 @@ export function buildApp() {
       const existing = await repo.getAdminIdempotency(String(idemKey), req.method, idemPath);
       if (existing) {
         if (existing.request_hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
+        (req as AuthedRequest).idemReplay = true;
         return reply.status(existing.status_code).send(existing.response_json);
       }
       (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${req.method}:${idemPath}`, subject: 'admin' };
@@ -1676,6 +1695,7 @@ export function buildApp() {
     const existing = await repo.getIdempotency(nodeId, String(idemKey), req.method, idemPath);
     if (existing) {
       if (existing.request_hash !== hash) return reply.status(409).send(errorEnvelope('idempotency_key_reuse_conflict', 'Idempotency key used with different payload'));
+      (req as AuthedRequest).idemReplay = true;
       return reply.status(existing.status_code).send(existing.response_json);
     }
     (req as AuthedRequest).idem = { key: String(idemKey), hash, keyScope: `${nodeId}:${idemPath}`, subject: 'node' };
@@ -1713,7 +1733,10 @@ export function buildApp() {
 
   app.get('/openapi.json', async (_req, reply) => reply.type('application/json; charset=utf-8').send(openApiDocument));
   app.get('/v1/meta', async (req) => buildMetaPayload(req));
-  app.get('/v1/categories', async () => CATEGORIES_RESPONSE);
+  app.get('/v1/categories', async (req, reply) => {
+    reply.header('Vary', 'Accept-Language');
+    return getCategoriesResponse(resolveLocale(req.headers['accept-language']));
+  });
   app.get('/v1/regions', async () => ({
     country: 'US',
     regions: [...ALLOWED_REGION_IDS].sort(),
@@ -1740,6 +1763,7 @@ export function buildApp() {
   app.post('/v1/bootstrap', async (req, reply) => {
     const schema = z.object({
       display_name: z.string().min(1).max(128),
+      language_tag: z.string().nullable().optional(),
       email: z.string().nullable(),
       referral_code: z.string().nullable(),
       recovery_public_key: z.string().nullable().optional(),
@@ -1795,13 +1819,14 @@ export function buildApp() {
     let bootstrapRateSlotReserved = false;
 
     if (bootstrapRule && bootstrapSubject) {
-      if (!(await applyRateLimitSubject(reply, bootstrapRule, bootstrapSubject))) return;
+      if (!(await applyRateLimitSubject(reply, bootstrapRule, bootstrapSubject))) return reply;
       bootstrapRateSlotReserved = true;
     }
 
     try {
       const out = await fabricService.bootstrap({
         display_name: parsed.data.display_name,
+        language_tag: parsed.data.language_tag ?? null,
         email: parsed.data.email,
         referral_code: parsed.data.referral_code,
         recovery_public_key: parsed.data.recovery_public_key ?? null,
@@ -1843,6 +1868,7 @@ export function buildApp() {
   app.patch('/v1/me', async (req, reply) => {
     const parsed = z.object({
       display_name: z.string().min(1).max(128).nullable().optional(),
+      language_tag: z.string().nullable().optional(),
       email: z.string().nullable().optional(),
       recovery_public_key: z.string().nullable().optional(),
       messaging_handles: z.array(messagingHandleSchema).max(10).nullable().optional(),
@@ -2444,6 +2470,7 @@ export function buildApp() {
       request_id: z.string().optional(),
       thread_id: z.string().nullable().optional(),
       note: z.string().nullable().optional(),
+      language_tag: z.string().nullable().optional(),
       ttl_minutes: z.number().int().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
@@ -2479,6 +2506,7 @@ export function buildApp() {
         request_id: hasRequestId ? parsed.data.request_id : undefined,
         thread_id: parsed.data.thread_id,
         note: parsed.data.note ?? null,
+        language_tag: parsed.data.language_tag ?? null,
         ttl_minutes: parsed.data.ttl_minutes,
       },
     );
@@ -2492,6 +2520,7 @@ export function buildApp() {
     const parsed = z.object({
       unit_ids: z.array(z.string()).min(1).optional(),
       note: z.string().nullable().optional(),
+      language_tag: z.string().nullable().optional(),
       ttl_minutes: z.number().int().optional(),
     }).safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
@@ -2515,6 +2544,7 @@ export function buildApp() {
       {
         unit_ids: parsed.data.unit_ids,
         note: parsed.data.note ?? null,
+        language_tag: parsed.data.language_tag ?? null,
         ttl_minutes: parsed.data.ttl_minutes,
       },
     );

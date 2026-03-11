@@ -93,7 +93,7 @@ limit 1;
 |---|---|---|---|
 | `DEFAULT_RATE_LIMIT_LIMIT` | Optional (default `1000`) | `1000` | `src/config.ts:24`, `src/app.ts:418` |
 | `SEARCH_CREDIT_COST` | Optional (default `5`) | `5` | `src/config.ts:40` |
-| `SIGNUP_GRANT_CREDITS` | Optional (default `100`) | `100` | `src/config.ts:51` |
+| `SIGNUP_GRANT_CREDITS` | Optional (default `500`) | `500` | `src/config.ts:51` |
 | `PREPURCHASE_DAILY_LIMITS_ENABLED` | Optional (default `true`) | `false` | `src/config.ts`, `src/services/fabricService.ts` |
 | `CREDIT_PACK_MAX_GRANTS_PER_DAY` | Optional (default `3`) | `3` | `src/config.ts:81`, `src/services/fabricService.ts` |
 | `RATE_LIMIT_BOOTSTRAP_PER_HOUR` | Optional (default `3`) | `3` | `src/config.ts:43`, `src/app.ts:252` |

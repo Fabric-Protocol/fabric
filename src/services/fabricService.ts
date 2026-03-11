@@ -131,6 +131,7 @@ export const fabricService = {
   },
   async bootstrap(payload: {
     display_name: string;
+    language_tag: string | null;
     email: string | null;
     referral_code: string | null;
     recovery_public_key: string | null;
@@ -141,7 +142,7 @@ export const fabricService = {
   }) {
     try {
       const messagingHandles = normalizeMessagingHandles(payload.messaging_handles);
-      const node = await repo.createNode(payload.display_name, normalizeEmail(payload.email), payload.recovery_public_key, messagingHandles, {
+      const node = await repo.createNode(payload.display_name, payload.language_tag, normalizeEmail(payload.email), payload.recovery_public_key, messagingHandles, {
         acceptedAt: new Date().toISOString(),
         version: payload.legal_version,
         ip: payload.legal_ip,
@@ -167,6 +168,7 @@ export const fabricService = {
         node: {
           id: node.id,
           display_name: payload.display_name,
+          language_tag: payload.language_tag,
           email: normalizeEmail(payload.email),
           email_verified_at: null,
           recovery_public_key_configured: Boolean(payload.recovery_public_key),
@@ -300,6 +302,7 @@ export const fabricService = {
       node: {
         id: me.id,
         display_name: me.display_name,
+        language_tag: me.language_tag ?? null,
         email: me.email,
         email_verified_at: me.email_verified_at,
         recovery_public_key_configured: Boolean(me.recovery_public_key),
@@ -320,6 +323,7 @@ export const fabricService = {
   },
   async patchMe(nodeId: string, payload: {
     display_name?: string | null;
+    language_tag?: string | null;
     email?: string | null;
     recovery_public_key?: string | null;
     messaging_handles?: Array<{ kind: string; handle: string; url: string | null }> | null;
@@ -335,6 +339,7 @@ export const fabricService = {
       await repo.updateMe(
         nodeId,
         payload.display_name,
+        payload.language_tag,
         payload.email === undefined ? undefined : normalizeEmail(payload.email),
         payload.recovery_public_key,
         payload.messaging_handles === undefined ? undefined : normalizeMessagingHandles(payload.messaging_handles),
@@ -834,6 +839,7 @@ export async function offerSummary(offer: any) {
     requires_counter: isRoot && Boolean(offer.request_id),
     status: offer.status,
     note: offer.note ?? null,
+    language_tag: offer.language_tag ?? null,
     accepted_by_from_at: offer.accepted_by_from_at,
     accepted_by_to_at: offer.accepted_by_to_at,
     held_unit_ids: hold.held_unit_ids,
@@ -880,6 +886,7 @@ type CreateOfferPayload = {
   request_id?: string;
   thread_id?: string | null;
   note?: string | null;
+  language_tag?: string | null;
   ttl_minutes?: number;
 };
 
@@ -950,6 +957,7 @@ type CreateOfferOptions = {
     requestId: offerRequestId,
     threadId: th,
     note: payload.note ?? null,
+    languageTag: payload.language_tag ?? null,
     expiresAt: offerExpiresAt,
     implicitAcceptedByFrom,
   });
@@ -996,7 +1004,7 @@ type CreateOfferOptions = {
 (fabricService as any).counterOffer = async (
   nodeId: string,
   offerId: string,
-  payload: { unit_ids?: string[]; note?: string | null; ttl_minutes?: number },
+  payload: { unit_ids?: string[]; note?: string | null; language_tag?: string | null; ttl_minutes?: number },
 ) => {
   if (!(await hasCurrentLegalAssent(nodeId))) return { legalRequired: true };
   await repo.expireStaleOffers();
@@ -1029,6 +1037,7 @@ type CreateOfferOptions = {
         unit_ids: unitIds,
         thread_id: prior.thread_id,
         note: payload.note ?? null,
+        language_tag: payload.language_tag ?? null,
         ttl_minutes: payload.ttl_minutes,
       },
       {
@@ -1043,6 +1052,7 @@ type CreateOfferOptions = {
         unit_ids: unitIds,
         thread_id: prior.thread_id,
         note: payload.note ?? null,
+        language_tag: payload.language_tag ?? null,
         ttl_minutes: payload.ttl_minutes,
       },
       {

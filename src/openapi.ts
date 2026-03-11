@@ -78,6 +78,7 @@ export const openApiDocument = {
     '/v1/categories': {
       get: {
         summary: 'Category registry for units/requests and search filters',
+        parameters: [{ $ref: '#/components/parameters/AcceptLanguageHeader' }],
         responses: {
           '200': {
             description: 'Categories payload',
@@ -804,6 +805,13 @@ export const openApiDocument = {
         required: false,
         schema: { type: 'integer', minimum: 1, maximum: 100, default: 50 },
       },
+      AcceptLanguageHeader: {
+        name: 'Accept-Language',
+        in: 'header',
+        required: false,
+        schema: { type: 'string' },
+        description: 'Optional response-locale hint. In MVP Phase 1, zh-CN, zh-Hans, and zh request Simplified Chinese for human-readable category fields and error messages; canonical machine fields remain unchanged.',
+      },
       EventWebhookTimestampHeader: {
         name: 'X-Fabric-Timestamp',
         in: 'header',
@@ -934,6 +942,7 @@ export const openApiDocument = {
           },
           thread_id: { type: 'string', nullable: true },
           note: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
         oneOf: [
@@ -950,6 +959,7 @@ export const openApiDocument = {
             minItems: 1,
           },
           note: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
       },
@@ -977,6 +987,7 @@ export const openApiDocument = {
           tags: { type: 'array', items: { type: 'string' } },
           category_ids: { type: 'array', items: { type: 'integer' } },
           public_summary: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 60, maximum: 525600 },
         },
         required: ['title'],
@@ -1005,6 +1016,7 @@ export const openApiDocument = {
           tags: { type: 'array', items: { type: 'string' } },
           category_ids: { type: 'array', items: { type: 'integer' } },
           public_summary: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           ttl_minutes: { type: 'integer', minimum: 60, maximum: 525600 },
         },
       },
@@ -1049,6 +1061,7 @@ export const openApiDocument = {
           requires_counter: { type: 'boolean', description: 'True if this is a request-targeted root offer that cannot be accepted directly and must be countered.' },
           status: { type: 'string' },
           note: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           expires_at: { type: 'string' },
           accepted_by_from_at: { type: 'string', nullable: true },
           accepted_by_to_at: { type: 'string', nullable: true },
@@ -1096,6 +1109,7 @@ export const openApiDocument = {
         type: 'object',
         properties: {
           display_name: { type: 'string' },
+          language_tag: { type: 'string', nullable: true },
           email: { type: 'string', nullable: true },
           referral_code: { type: 'string', nullable: true },
           recovery_public_key: {
@@ -1184,6 +1198,7 @@ export const openApiDocument = {
         properties: {
           id: { type: 'string', format: 'uuid' },
           display_name: { type: 'string' },
+          language_tag: { type: 'string', nullable: true },
           email: { type: 'string', nullable: true },
           email_verified_at: { type: 'string', nullable: true },
           recovery_public_key_configured: { type: 'boolean' },
@@ -1206,6 +1221,7 @@ export const openApiDocument = {
         required: [
           'id',
           'display_name',
+          'language_tag',
           'email',
           'email_verified_at',
           'recovery_public_key_configured',
@@ -1221,6 +1237,7 @@ export const openApiDocument = {
         type: 'object',
         properties: {
           display_name: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
           email: { type: 'string', nullable: true },
           recovery_public_key: { type: 'string', nullable: true },
           messaging_handles: {

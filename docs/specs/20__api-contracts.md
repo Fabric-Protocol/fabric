@@ -21,6 +21,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
 - **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 20 searches/day, 3 offer creates/day, 3 offer accepts/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
+- **Accept-Language**: optional response-locale hint. In MVP Phase 1, `zh-CN`, `zh-Hans`, and bare `zh` request Simplified Chinese; all other values fall back to English. Locale selection affects only human-readable response text explicitly documented below; canonical machine fields remain unchanged.
 
 ---
 
@@ -61,6 +62,9 @@ None
 
 ### Purpose
 Server-discoverable category registry for `category_ids` usage and search filtering.
+
+### Accept-Language
+Optional. When the caller sends `Accept-Language: zh-CN`, `zh-Hans`, or `zh`, the response localizes `name`, `description`, and `examples` into Simplified Chinese. `id`, `slug`, and `categories_version` remain canonical and unchanged.
 
 ### Response 200
 ```json
@@ -136,6 +140,7 @@ This endpoint is for creating a new participant identity, not for routine creden
 ```json
 {
   "display_name": "string",
+  "language_tag": "string|null",
   "email": "string|null",
   "referral_code": "string|null",
   "recovery_public_key": "string|null (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted)",
@@ -159,6 +164,7 @@ Response 200
   "node": {
     "id": "uuid",
     "display_name": "string",
+    "language_tag": "string|null",
     "email": "string|null",
     "email_verified_at": "iso|null",
     "recovery_public_key_configured": true,
@@ -188,7 +194,7 @@ Response 200
 
 Rules / side effects
 
-Signup grant (100 credits) applies once per Node.
+Signup grant (500 credits) applies once per Node.
 
 Clients should not call bootstrap for normal ongoing operations after identity creation. Reuse the existing node via API key/session auth; if credentials are unavailable, use auth/recovery flows instead of creating a replacement node.
 
@@ -201,6 +207,8 @@ Bootstrap IP rate limiting counts successful bootstrap creations only. Validatio
 The service MAY also reject bootstrap with `429 rate_limit_exceeded` and rule `bootstrap_identity_reuse_guard` when recent successful bootstraps from the same client fingerprint strongly suggest the caller is creating replacement nodes instead of reusing one identity. In that case the caller MUST reuse or recover the existing node instead of creating another.
 
 Email is account identity/recovery contact data and is not used as a runtime auth factor.
+
+`language_tag` is optional persisted metadata for the Node's authored `display_name`. It is not derived from `Accept-Language`.
 
 Errors
 
@@ -478,6 +486,7 @@ Response 200
   "node": {
     "id": "uuid",
     "display_name": "string",
+    "language_tag": "string|null",
     "email": "string|null",
     "email_verified_at": "iso|null",
     "recovery_public_key_configured": true,
@@ -529,6 +538,7 @@ Update basic node profile fields.
 Request
 {
   "display_name": "string|null",
+  "language_tag": "string|null",
   "email": "string|null",
   "recovery_public_key": "string|null (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted)",
   "messaging_handles": [
@@ -549,6 +559,7 @@ Validation notes
 - Server normalizes `messaging_handles` values (trimmed; `kind` lower-cased) before persistence and reveal responses.
 - `event_webhook_secret` is optional and write-only. If provided as a string, it is trimmed, must be non-empty, and max length 256.
 - Setting `event_webhook_secret` to `null` clears the secret; subsequent webhook deliveries are unsigned until a new secret is set.
+- `language_tag` is optional persisted metadata for the Node's authored `display_name`. It is not derived from `Accept-Language`.
 
 Response 200
 
@@ -734,6 +745,8 @@ scope_secondary: enum[]|null
 
 scope_notes: string|null (required at publish if scope_primary=OTHER)
 
+language_tag: string|null (optional persisted metadata for the authored text on the object; never derived from `Accept-Language`)
+
 5) Units (canonical private)
 POST /v1/units
 Auth
@@ -772,10 +785,15 @@ Request (MVP minimal)
   "delivery_format": "file|license_key|download_link|other|null",
   "tags": ["string"],
   "category_ids": [1],
-  "public_summary": "string|null"
+  "public_summary": "string|null",
+  "language_tag": "string|null"
 }
 
 `estimated_value` is optional and non-binding (informational only).
+
+MVP location note: structured region support is currently US-only. Use `GET /v1/regions` and only send supported `US` / `US-<STATE>` values in structured region fields.
+
+If you want additional coarse geographic hints to be keyword-discoverable today, place them in public searchable text such as `title`, `public_summary`, `description`, or `tags` at your own risk. Those fields are public and searchable. Never include a precise address or direct contact information in public text.
 
 Response 200
 {
@@ -805,6 +823,8 @@ cursor, limit
 Purpose
 
 List units (excluding deleted).
+
+List/get responses include the persisted Unit fields, including optional `language_tag`.
 
 GET /v1/units/{unit_id}
 Auth
@@ -887,7 +907,8 @@ Same as Unit create, plus:
 {
   "need_by": "iso|null",
   "accept_substitutions": true,
-  "ttl_minutes": 10080
+  "ttl_minutes": 10080,
+  "language_tag": "string|null"
 }
 
 `ttl_minutes` is optional. If omitted, default is 525600 minutes (365 days). If provided, it must be an integer in [60, 525600]. `request.expires_at` is server-computed and returned.
@@ -910,6 +931,8 @@ None
 Purpose
 
 List requests (excluding deleted).
+
+List/get responses include the persisted Request fields, including optional `language_tag`.
 
 GET /v1/requests/{request_id}
 Auth
@@ -1397,6 +1420,8 @@ requires_counter (boolean — true if this is a request-targeted root offer that
 
 status
 
+language_tag (string|null — optional persisted metadata for the authored `note`)
+
 expires_at (server-computed)
 
 accepted_by_from_at, accepted_by_to_at
@@ -1452,6 +1477,7 @@ Unit-targeted shape:
   "unit_ids": ["uuid"],
   "thread_id": "uuid|null",
   "note": "string|null",
+  "language_tag": "string|null",
   "ttl_minutes": 2880
 }
 
@@ -1461,6 +1487,7 @@ Request-targeted shape:
   "note": "string (non-empty)",
   "unit_ids": ["uuid"], // optional, if present must all belong to creator
   "thread_id": "uuid|null",
+  "language_tag": "string|null",
   "ttl_minutes": 2880
 }
 
@@ -1523,10 +1550,10 @@ Create a new offer in the same thread; mark the original as countered.
 
 Request
 Unit-thread counter:
-{ "unit_ids": ["uuid"], "note": "string|null", "ttl_minutes": 2880 }
+{ "unit_ids": ["uuid"], "note": "string|null", "language_tag": "string|null", "ttl_minutes": 2880 }
 
 Request-thread counter:
-{ "note": "string (non-empty)", "unit_ids": ["uuid"], "ttl_minutes": 2880 }
+{ "note": "string (non-empty)", "unit_ids": ["uuid"], "language_tag": "string|null", "ttl_minutes": 2880 }
 
 Rules / side effects
 

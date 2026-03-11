@@ -14,7 +14,7 @@ This file gives runnable `curl` examples for contract-backed MVP flows.
 | Reveal contact (after mutual acceptance) | 0 |
 
 Credit grants:
-- Signup grant: 100 credits (one-time)
+- Signup grant: 500 credits (one-time)
 - Unit milestones: +100 at 10 Units, +100 at 20 Units (max +200)
 - Request milestones: +100 at 10 Requests, +100 at 20 Requests (max +200)
 
@@ -58,7 +58,7 @@ API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
 NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')
 ```
 
-Bootstrap grants 100 signup credits. Additional milestone credits are granted at 10 and 20 Unit creates, and at 10 and 20 Request creates.
+Bootstrap grants 500 signup credits. Additional milestone credits are granted at 10 and 20 Unit creates, and at 10 and 20 Request creates.
 Fastest path to value: bootstrap, publish one unit or request immediately, then enable notifications.
 
 If your MCP runtime cannot reliably set headers, create a 24h session token and pass it on authenticated MCP tool calls:

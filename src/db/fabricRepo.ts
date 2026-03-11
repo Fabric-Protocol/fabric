@@ -181,16 +181,17 @@ export async function releaseRateLimitCounter(key: string) {
 
 export async function createNode(
   displayName: string,
+  languageTag: string | null,
   email: string | null,
   recoveryPublicKey: string | null,
   messagingHandles: Array<{ kind: string; handle: string; url: string | null }>,
   legal: { acceptedAt: string; version: string; ip: string | null; userAgent: string | null },
 ) {
   const rows = await query<{ id: string; created_at: string; legal_accepted_at: string; legal_version: string; email_verified_at: string | null }>(
-    `insert into nodes(display_name,email,recovery_public_key,messaging_handles,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
-     values($1,$2,$3,$4::jsonb,'ACTIVE',$5,$6,$7,$8)
+    `insert into nodes(display_name,language_tag,email,recovery_public_key,messaging_handles,status,legal_accepted_at,legal_version,legal_ip,legal_user_agent)
+     values($1,$2,$3,$4,$5::jsonb,'ACTIVE',$6,$7,$8,$9)
      returning id,created_at,legal_accepted_at,legal_version`,
-    [displayName, email, recoveryPublicKey, JSON.stringify(messagingHandles ?? []), legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
+    [displayName, languageTag, email, recoveryPublicKey, JSON.stringify(messagingHandles ?? []), legal.acceptedAt, legal.version, legal.ip, legal.userAgent],
   );
   return rows[0];
 }
@@ -341,7 +342,7 @@ export async function debitCreditsAtomic(
 
 export async function getMe(nodeId: string) {
   const rows = await query<any>(
-    `select n.id,n.display_name,n.email,n.phone,n.status,n.created_at,
+    `select n.id,n.display_name,n.language_tag,n.email,n.phone,n.status,n.created_at,
       n.suspended_at,n.legal_accepted_at,n.legal_version,n.legal_ip,n.legal_user_agent,n.email_verified_at,n.recovery_public_key,n.messaging_handles,n.event_webhook_url,
       coalesce(s.plan_code,'free') as plan_code, coalesce(s.status,'none') as sub_status,
       s.current_period_start,s.current_period_end
@@ -409,6 +410,7 @@ export async function getNodeRecoveryProfile(nodeId: string) {
 export async function updateMe(
   nodeId: string,
   displayName: string | null | undefined,
+  languageTag: string | null | undefined,
   email: string | null | undefined,
   recoveryPublicKey: string | null | undefined = undefined,
   messagingHandles: Array<{ kind: string; handle: string; url: string | null }> | null | undefined = undefined,
@@ -418,14 +420,15 @@ export async function updateMe(
   const rows = await query<{ id: string }>(
     `update nodes
      set display_name = coalesce($2, display_name),
-         email = coalesce($3, email),
+         language_tag = coalesce($3, language_tag),
+         email = coalesce($4, email),
          email_verified_at = case
-           when $3 is not null and lower($3) <> lower(coalesce(email, '')) then null
+           when $4 is not null and lower($4) <> lower(coalesce(email, '')) then null
            else email_verified_at
          end,
-         recovery_public_key = coalesce($4, recovery_public_key)
+         recovery_public_key = coalesce($5, recovery_public_key)
      where id=$1 returning id`,
-    [nodeId, displayName, email, recoveryPublicKey],
+    [nodeId, displayName, languageTag, email, recoveryPublicKey],
   );
   const updated = rows[0] ?? null;
   if (!updated) return null;
@@ -685,16 +688,16 @@ function tableFor(kind: 'units' | 'requests') { return kind; }
 
 export async function createResource(kind: 'units'|'requests', nodeId: string, payload: any) {
   if (kind === 'units') {
-    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null]);
     return rows[0];
   }
-  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '365 days'),$21,$22,$23)
+  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary,language_tag)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '365 days'),$21,$22,$23,$24)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version,expires_at`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null]);
   return rows[0];
 }
 
@@ -707,9 +710,9 @@ export async function createUnitWithMilestoneCredits(
       insert into units(
         node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,
         scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,
-        dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary
+        dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag
       )
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
       returning
         id,
         node_id,
@@ -771,6 +774,7 @@ export async function createUnitWithMilestoneCredits(
     payload.tags,
     payload.category_ids,
     payload.public_summary,
+    payload.language_tag ?? null,
   ]);
   return rows[0];
 }
@@ -823,10 +827,10 @@ export async function patchResource(kind:'units'|'requests', nodeId:string, id:s
         quantity=coalesce($8,quantity),estimated_value=coalesce($9,estimated_value),measure=coalesce($10,measure),custom_measure=coalesce($11,custom_measure),
         scope_primary=coalesce($12,scope_primary),scope_secondary=coalesce($13,scope_secondary),scope_notes=coalesce($14,scope_notes),
         location_text_public=coalesce($15,location_text_public),origin_region=coalesce($16,origin_region),dest_region=coalesce($17,dest_region),
-        service_region=coalesce($18,service_region),delivery_format=coalesce($19,delivery_format),max_ship_days=coalesce($20,max_ship_days),tags=coalesce($21,tags),category_ids=coalesce($22,category_ids),public_summary=coalesce($23,public_summary)
+        service_region=coalesce($18,service_region),delivery_format=coalesce($19,delivery_format),max_ship_days=coalesce($20,max_ship_days),tags=coalesce($21,tags),category_ids=coalesce($22,category_ids),public_summary=coalesce($23,public_summary),language_tag=coalesce($24,language_tag)
         where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
         returning id,row_version as version`,
-      [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary]);
+      [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag]);
     return rows[0] ?? null;
   }
   const rows = await query<any>(`update requests set
@@ -834,10 +838,10 @@ export async function patchResource(kind:'units'|'requests', nodeId:string, id:s
       desired_quantity=coalesce($8,desired_quantity),measure=coalesce($9,measure),custom_measure=coalesce($10,custom_measure),
       scope_primary=coalesce($11,scope_primary),scope_secondary=coalesce($12,scope_secondary),scope_notes=coalesce($13,scope_notes),
       location_text_public=coalesce($14,location_text_public),origin_region=coalesce($15,origin_region),dest_region=coalesce($16,dest_region),
-      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),max_ship_days=coalesce($19,max_ship_days),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary),expires_at=coalesce($23,expires_at)
+      service_region=coalesce($17,service_region),delivery_format=coalesce($18,delivery_format),max_ship_days=coalesce($19,max_ship_days),tags=coalesce($20,tags),category_ids=coalesce($21,category_ids),public_summary=coalesce($22,public_summary),expires_at=coalesce($23,expires_at),language_tag=coalesce($24,language_tag)
       where id=$1 and node_id=$2 and row_version=$3 and deleted_at is null
       returning id,row_version as version,expires_at`,
-    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.expires_at]);
+    [id,nodeId,version,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.expires_at,payload.language_tag]);
   return rows[0] ?? null;
 }
 
@@ -858,7 +862,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
       ? null
       : Number(estimatedValueRaw);
     const doc = {
-      id: row.id,node_id: row.node_id,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
+      id: row.id,node_id: row.node_id,language_tag: row.language_tag ?? null,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
       title: row.title,description: row.description,public_summary: row.public_summary,quantity: row.quantity,estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : null,measure: row.measure,
       custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
       location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
@@ -869,7 +873,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
     return;
   }
   const doc = {
-    id: row.id,node_id: row.node_id,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
+    id: row.id,node_id: row.node_id,language_tag: row.language_tag ?? null,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
     title: row.title,description: row.description,public_summary: row.public_summary,desired_quantity: row.desired_quantity,measure: row.measure,
     custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
     location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
@@ -905,6 +909,10 @@ function parseRegionFilters(raw: unknown): RegionFilter[] {
     const [countryCode, admin1] = normalized.split('-', 2);
     return [{ countryCode, admin1: admin1 ?? null }];
   });
+}
+
+function containsHanCharacters(value: string) {
+  return /\p{Script=Han}/u.test(value);
 }
 
 function buildRegionMatchExpressions(regionCountryExpr: string, regionAdminExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
@@ -965,8 +973,33 @@ export async function searchPublic(
     const qIdx = nextIdx.value;
     params.push(trimmedQ);
     nextIdx.value += 1;
-    ftsRankExpr = `ts_rank_cd(coalesce(p.search_tsv, ''::tsvector), websearch_to_tsquery('english', $${qIdx}))`;
-    where.push(`coalesce(p.search_tsv, ''::tsvector) @@ websearch_to_tsquery('english', $${qIdx})`);
+    if (containsHanCharacters(trimmedQ)) {
+      const qRef = `$${qIdx}`;
+      const safeTagsJson = `case when jsonb_typeof(coalesce(p.doc->'tags','[]'::jsonb)) = 'array' then p.doc->'tags' else '[]'::jsonb end`;
+      const titleMatch = `position(lower(${qRef}) in lower(coalesce(p.doc->>'title',''))) > 0`;
+      const publicSummaryMatch = `position(lower(${qRef}) in lower(coalesce(p.doc->>'public_summary',''))) > 0`;
+      const descriptionMatch = `position(lower(${qRef}) in lower(coalesce(p.doc->>'description',''))) > 0`;
+      const tagMatch = `exists (
+        select 1
+        from jsonb_array_elements_text(${safeTagsJson}) as elem
+        where position(lower(${qRef}) in lower(elem)) > 0
+      )`;
+      const similarityExpr = `similarity(lower(p.search_text), lower(${qRef}))`;
+      ftsRankExpr = `(
+        (case when ${titleMatch} then 6 else 0 end)
+        + (case when ${publicSummaryMatch} then 4 else 0 end)
+        + (case when ${descriptionMatch} then 2 else 0 end)
+        + (case when ${tagMatch} then 1 else 0 end)
+        + ${similarityExpr}
+      )`;
+      where.push(`(
+        p.search_text ILIKE ('%' || ${qRef} || '%')
+        or ${similarityExpr} >= 0.1
+      )`);
+    } else {
+      ftsRankExpr = `ts_rank_cd(coalesce(p.search_tsv, ''::tsvector), websearch_to_tsquery('english', $${qIdx}))`;
+      where.push(`coalesce(p.search_tsv, ''::tsvector) @@ websearch_to_tsquery('english', $${qIdx})`);
+    }
   }
 
   const filterPayload = filters && typeof filters === 'object' && !Array.isArray(filters) ? filters : {};
@@ -1313,6 +1346,7 @@ export type CreateOfferArgs = {
   requestId: string | null;
   threadId: string;
   note: string | null;
+  languageTag: string | null;
   expiresAt: string;
   implicitAcceptedByFrom: boolean;
 };
@@ -1320,11 +1354,11 @@ export type CreateOfferArgs = {
 export async function createOffer(args: CreateOfferArgs) {
   const rows = await query<any>(
     `insert into offers(
-       thread_id,from_node_id,to_node_id,unit_id,request_id,status,expires_at,note,accepted_by_from_at
+       thread_id,from_node_id,to_node_id,unit_id,request_id,status,expires_at,note,language_tag,accepted_by_from_at
      )
      values(
-       $1,$2,$3,$4,$5,$6,$7::timestamptz,$8,
-       case when $9 then now() else null end
+       $1,$2,$3,$4,$5,$6,$7::timestamptz,$8,$9,
+       case when $10 then now() else null end
      )
      returning *`,
     [
@@ -1336,6 +1370,7 @@ export async function createOffer(args: CreateOfferArgs) {
       args.implicitAcceptedByFrom ? 'accepted_by_a' : 'pending',
       args.expiresAt,
       args.note,
+      args.languageTag,
       args.implicitAcceptedByFrom,
     ],
   );
