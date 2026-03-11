@@ -1,7 +1,8 @@
 import { config as loadEnv } from 'dotenv';
 import { FabricClient, FabricError, type SearchRequestBody } from '../sdk/src/index.ts';
 
-loadEnv({ path: 'examples/.env' });
+const envPath = process.env.FABRIC_EXAMPLE_ENV_PATH?.trim() || 'examples/.env';
+loadEnv({ path: envPath });
 loadEnv();
 
 function parsePositiveInt(value: string | undefined, fallback: number) {

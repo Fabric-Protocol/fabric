@@ -11,7 +11,8 @@ import {
   type MetaResponse,
 } from '../sdk/src/index.ts';
 
-loadEnv({ path: 'examples/.env' });
+const envPath = process.env.FABRIC_EXAMPLE_ENV_PATH?.trim() || 'examples/.env';
+loadEnv({ path: envPath });
 loadEnv();
 
 async function main() {

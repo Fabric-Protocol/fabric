@@ -16,7 +16,8 @@
     "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1",
     "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js",
     "mcp:stdio": "npm run build && node dist/scripts/mcp-stdio-server.js",
-    "smoke:mcp": "powershell -ExecutionPolicy Bypass -File scripts/smoke-mcp.ps1"
+    "smoke:mcp": "powershell -ExecutionPolicy Bypass -File scripts/smoke-mcp.ps1",
+    "smoke:prod": "npm run build && node dist/scripts/smoke-prod.js"
   },
   "dependencies": {
     "@noble/ed25519": "^2.3.0",

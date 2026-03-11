@@ -94,6 +94,18 @@ The service binds to `HOST`/`PORT` (default `0.0.0.0:8080`).
 npm test
 ```
 
+## Production smoke
+
+Run the repeatable live smoke check against the deployed API:
+
+```bash
+npm run smoke:prod
+```
+
+Optional:
+- set `BASE_URL` to target a non-default deployment
+- set `SMOKE_RESET_RATE_LIMITS=true` to clear `rate_limit_counters` before bootstrapping if `DATABASE_URL` is available in your env
+
 ## Deploy (Cloud Run)
 
 ```bash
