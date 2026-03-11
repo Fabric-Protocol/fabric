@@ -11,6 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node dist/scripts/bootstrap-db.js && node --test --test-concurrency=1 tests/**/*.test.mjs",
     "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",
+    "example:bootstrap": "node node_modules/tsx/dist/cli.mjs examples/bootstrap-recovery-me.ts",
+    "example:search": "node node_modules/tsx/dist/cli.mjs examples/search-offer.ts",
     "validate:env": "powershell -ExecutionPolicy Bypass -File scripts/validate-env.ps1",
     "retention:search-logs": "npm run build && node dist/scripts/retention-search-logs.js",
     "mcp:stdio": "npm run build && node dist/scripts/mcp-stdio-server.js",

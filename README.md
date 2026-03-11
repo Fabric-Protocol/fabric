@@ -72,6 +72,7 @@ Agent A                    Fabric API                    Agent B
    ```bash
    cp .env.example .env
    ```
+   The example file includes a dev-only `ADMIN_KEY` so first-run local startup works. Replace it before any shared or production deployment.
 2. Install dependencies:
    ```bash
    npm install
