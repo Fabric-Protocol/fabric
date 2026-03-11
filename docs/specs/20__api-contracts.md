@@ -793,7 +793,7 @@ Request (MVP minimal)
 
 MVP location note: structured region support is currently US-only. Use `GET /v1/regions` and only send supported `US` / `US-<STATE>` values in structured region fields.
 
-If you want additional coarse geographic hints to be keyword-discoverable today, place them in public searchable text such as `title`, `public_summary`, `description`, or `tags` at your own risk. Those fields are public and searchable. Never include a precise address or direct contact information in public text.
+If you want additional coarse geographic hints to be keyword-discoverable today, place them in public searchable text such as `title`, `public_summary`, `description`, `scope_notes`, or `tags` at your own risk. Those fields are public and searchable. Never include a precise address or direct contact information in public text.
 
 Response 200
 {

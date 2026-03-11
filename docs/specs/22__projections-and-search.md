@@ -53,6 +53,7 @@ Allowlisted fields:
 - `id`, `node_id`
 - `language_tag`
 - `scope_primary`, `scope_secondary`
+- `scope_notes` (public for `scope_primary=OTHER`)
 - `title`, `description`, `public_summary`
 - `quantity` (nullable), `measure`, `custom_measure` (if `measure=CUSTOM`)
 - `estimated_value` (number|null; non-binding estimate)
@@ -75,6 +76,7 @@ Allowlisted fields:
 - `id`, `node_id`
 - `language_tag`
 - `scope_primary`, `scope_secondary`
+- `scope_notes` (public for `scope_primary=OTHER`)
 - `title`, `description`, `public_summary`
 - `desired_quantity` (nullable), `measure`, `custom_measure`
 - `category_ids`, `tags`, `type`, `condition` (optional)

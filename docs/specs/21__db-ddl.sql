@@ -520,6 +520,7 @@ as $$
       coalesce(doc->>'title', ''),
       coalesce(doc->>'public_summary', ''),
       coalesce(doc->>'description', ''),
+      coalesce(doc->>'scope_notes', ''),
       fn_public_doc_tags_text(doc)
     )
   );
@@ -535,12 +536,14 @@ as $$
       coalesce(doc->>'title', '') as title,
       coalesce(doc->>'public_summary', '') as public_summary,
       coalesce(doc->>'description', '') as description,
+      coalesce(doc->>'scope_notes', '') as scope_notes,
       fn_public_doc_tags_text(doc) as tags_text
   )
   select
     setweight(to_tsvector('english', title), 'A')
     || setweight(to_tsvector('english', public_summary), 'B')
     || setweight(to_tsvector('english', description), 'C')
+    || setweight(to_tsvector('english', scope_notes), 'C')
     || setweight(to_tsvector('english', tags_text), 'D')
   from normalized;
 $$;

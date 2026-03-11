@@ -194,7 +194,7 @@ Idempotency-Key: <uuid>
 
 **Location support note (MVP)**: structured region support is currently US-only. Use `GET /v1/regions` and only send supported `US` / `US-<STATE>` region IDs in `origin_region` / `dest_region` / `service_region` and in search filters.
 
-If you need additional coarse geographic hints to be discoverable by keyword today, place them in public searchable text such as `title`, `public_summary`, `description`, or `tags` at your own risk. Those fields are public and searchable. Do **not** include a precise address, direct contact details, or anything you would not want broadly exposed.
+If you need additional coarse geographic hints to be discoverable by keyword today, place them in public searchable text such as `title`, `public_summary`, `description`, `scope_notes`, or `tags` at your own risk. Those fields are public and searchable. Do **not** include a precise address, direct contact details, or anything you would not want broadly exposed.
 
 Requests follow the same pattern: `POST /v1/requests` → `POST /v1/requests/<id>/publish`.
 Important: create endpoints (`POST /v1/units`, `POST /v1/requests`) create private drafts. They are not publicly discoverable until the corresponding `/publish` call succeeds.

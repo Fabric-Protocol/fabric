@@ -863,7 +863,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
       : Number(estimatedValueRaw);
     const doc = {
       id: row.id,node_id: row.node_id,language_tag: row.language_tag ?? null,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
-      title: row.title,description: row.description,public_summary: row.public_summary,quantity: row.quantity,estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : null,measure: row.measure,
+      title: row.title,description: row.description,public_summary: row.public_summary,scope_notes: row.scope_notes,quantity: row.quantity,estimated_value: Number.isFinite(estimatedValue) ? estimatedValue : null,measure: row.measure,
       custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
       location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
       delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,photos: row.photos,published_at: row.published_at,updated_at: row.updated_at,
@@ -874,7 +874,7 @@ export async function upsertProjection(kind:'units'|'requests', row:any) {
   }
   const doc = {
     id: row.id,node_id: row.node_id,language_tag: row.language_tag ?? null,scope_primary: row.scope_primary,scope_secondary: row.scope_secondary,
-    title: row.title,description: row.description,public_summary: row.public_summary,desired_quantity: row.desired_quantity,measure: row.measure,
+    title: row.title,description: row.description,public_summary: row.public_summary,scope_notes: row.scope_notes,desired_quantity: row.desired_quantity,measure: row.measure,
     custom_measure: row.custom_measure,category_ids: row.category_ids,tags: row.tags,type: row.type,condition: row.condition,
     location_text_public: row.location_text_public,origin_region: row.origin_region,dest_region: row.dest_region,service_region: row.service_region,
     delivery_format: row.delivery_format,max_ship_days: row.max_ship_days,need_by: row.need_by,accept_substitutions: row.accept_substitutions,expires_at: row.expires_at,published_at: row.published_at,updated_at: row.updated_at,
@@ -912,7 +912,7 @@ function parseRegionFilters(raw: unknown): RegionFilter[] {
 }
 
 function containsHanCharacters(value: string) {
-  return /\p{Script=Han}/u.test(value);
+  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(value);
 }
 
 function buildRegionMatchExpressions(regionCountryExpr: string, regionAdminExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
@@ -1008,6 +1008,9 @@ export async function searchPublic(
   const shipsFromRegions = parseRegionFilters((filterPayload as any).ships_from_regions);
   const maxShipDaysRaw = (filterPayload as any).max_ship_days;
   const maxShipDays = Number.isInteger(maxShipDaysRaw) ? Number(maxShipDaysRaw) : null;
+  const scopeNotes = typeof (filterPayload as any).scope_notes === 'string'
+    ? (filterPayload as any).scope_notes.trim()
+    : '';
   let routeSpecificityExpr = '0::int';
 
   if (scope === 'local_in_person' && regions.length > 0) {
@@ -1081,6 +1084,11 @@ export async function searchPublic(
       where c.category_id = any($${nextIdx.value}::text[])
     )`);
     params.push(categoryKeys);
+    nextIdx.value += 1;
+  }
+  if (scope === 'OTHER' && scopeNotes.length > 0) {
+    where.push(`position(lower($${nextIdx.value}) in lower(coalesce(p.doc->>'scope_notes', ''))) > 0`);
+    params.push(scopeNotes);
     nextIdx.value += 1;
   }
 

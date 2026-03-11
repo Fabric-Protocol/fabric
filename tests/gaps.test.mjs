@@ -10,7 +10,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
-delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
@@ -45,7 +44,7 @@ process.env.STRIPE_PRICE_BUSINESS = 'price_business_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_500 = 'price_credit_pack_500_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_1500 = 'price_credit_pack_1500_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_4500 = 'price_credit_pack_4500_test';
-process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
+process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '10000';
 process.env.EMAIL_PROVIDER = 'stub';
 process.env.RECOVERY_CHALLENGE_TTL_MINUTES = '10';
 process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS = '5';
@@ -127,7 +126,10 @@ await query('DELETE FROM rate_limit_counters');
 
 // ─── Helpers ──────────────────────────────────────────────
 
+let bootstrapSequence = 0;
+
 async function bootstrap(app, idk = 'boot-1', payload = {}, options = {}) {
+  const seq = ++bootstrapSequence;
   const basePayload = payload && typeof payload === 'object' ? payload : {};
   const rawDisplayName = basePayload.display_name ?? 'GapNode';
   const useExactDisplayName = options.exactDisplayName === true;
@@ -141,7 +143,18 @@ async function bootstrap(app, idk = 'boot-1', payload = {}, options = {}) {
     referral_code: basePayload.referral_code ?? null,
     legal: basePayload.legal ?? { accepted: true, version: REQUIRED_LEGAL_VERSION },
   };
-  return app.inject({ method: 'POST', url: '/v1/bootstrap', headers: { 'idempotency-key': `gap-${idk}` }, payload: requestPayload });
+  const defaultForwardedFor = `198.51.${100 + (Math.floor((seq - 1) / 200) % 100)}.${((seq - 1) % 200) + 1}`;
+  return app.inject({
+    method: 'POST',
+    url: '/v1/bootstrap',
+    headers: {
+      'idempotency-key': `gap-${idk}-${TEST_RUN_SUFFIX}-${seq}`,
+      'x-forwarded-for': defaultForwardedFor,
+      'user-agent': `fabric-gap-bootstrap-${TEST_RUN_SUFFIX}-${seq}`,
+      ...(options.headers ?? {}),
+    },
+    payload: requestPayload,
+  });
 }
 
 function unitPayload(title, scopeNotes = 'gap-unit-scope') {

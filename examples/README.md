@@ -16,13 +16,18 @@ cp examples/.env.example examples/.env
 
 2. Set required variables in `examples/.env`:
 - `BASE_URL`
-- `API_KEY` (required for `search-offer.ts`)
+- `API_KEY` (required for `search-offer.ts`; `example:bootstrap` prints one you can paste back into `examples/.env`)
 
 ## Run
 From repo root:
 
 ```bash
 npm run example:bootstrap
+```
+
+Copy the printed `api_key` into `examples/.env` as `API_KEY=...`, then run:
+
+```bash
 npm run example:search
 ```
 

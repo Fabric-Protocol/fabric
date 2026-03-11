@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 
-delete process.env.DATABASE_URL;
 delete process.env.ADMIN_KEY;
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
@@ -38,7 +37,7 @@ process.env.STRIPE_PRICE_BUSINESS = 'price_business_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_500 = 'price_credit_pack_500_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_1500 = 'price_credit_pack_1500_test';
 process.env.STRIPE_CREDIT_PACK_PRICE_4500 = 'price_credit_pack_4500_test';
-process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '1000';
+process.env.RATE_LIMIT_BOOTSTRAP_PER_HOUR = '10000';
 process.env.EMAIL_PROVIDER = 'stub';
 process.env.RECOVERY_CHALLENGE_TTL_MINUTES = '10';
 process.env.RECOVERY_CHALLENGE_MAX_ATTEMPTS = '5';
@@ -134,12 +133,15 @@ await query('DELETE FROM admin_idempotency_keys');
 await query('DELETE FROM rate_limit_counters');
 await query('DELETE FROM mcp_sessions');
 
+let bootstrapSequence = 0;
+
 async function bootstrap(
   app,
   idk = 'boot-1',
   payload = { display_name: 'Node', email: null, referral_code: null },
   options = {},
 ) {
+  const seq = ++bootstrapSequence;
   const basePayload = payload && typeof payload === 'object' ? payload : {};
   const rawDisplayName = basePayload.display_name ?? 'Node';
   const useExactDisplayName = options.exactDisplayName === true;
@@ -153,7 +155,15 @@ async function bootstrap(
     referral_code: basePayload.referral_code ?? null,
     legal: basePayload.legal ?? { accepted: true, version: REQUIRED_LEGAL_VERSION },
   };
-  const requestHeaders = { 'idempotency-key': idk, ...(options.headers ?? {}) };
+  const defaultForwardedFor = `198.51.${100 + (Math.floor((seq - 1) / 200) % 100)}.${((seq - 1) % 200) + 1}`;
+  const requestHeaders = {
+    'idempotency-key': options.preserveIdempotencyKey === true
+      ? idk
+      : `${idk}-${TEST_RUN_SUFFIX}-${seq}`,
+    'x-forwarded-for': defaultForwardedFor,
+    'user-agent': `fabric-test-bootstrap-${TEST_RUN_SUFFIX}-${seq}`,
+    ...(options.headers ?? {}),
+  };
   const res = await app.inject({ method: 'POST', url: '/v1/bootstrap', headers: requestHeaders, payload: requestPayload });
   return res;
 }
@@ -995,13 +1005,13 @@ test('POST /v1/bootstrap grants configured signup credits', async () => {
 
 test('idempotency replay and conflict on /v1/bootstrap', async () => {
   const app = buildApp();
-  const a = await bootstrap(app, 'same-key', { display_name: 'A', email: null, referral_code: null });
-  const b = await bootstrap(app, 'same-key', { display_name: 'A', email: null, referral_code: null });
+  const a = await bootstrap(app, 'same-key', { display_name: 'A', email: null, referral_code: null }, { preserveIdempotencyKey: true });
+  const b = await bootstrap(app, 'same-key', { display_name: 'A', email: null, referral_code: null }, { preserveIdempotencyKey: true });
   assert.equal(a.statusCode, 200);
   assert.equal(b.statusCode, 200);
   assert.equal(a.json().node.id, b.json().node.id);
 
-  const c = await bootstrap(app, 'same-key', { display_name: 'B', email: null, referral_code: null });
+  const c = await bootstrap(app, 'same-key', { display_name: 'B', email: null, referral_code: null }, { preserveIdempotencyKey: true });
   assert.equal(c.statusCode, 409);
   assert.equal(c.json().error.code, 'idempotency_key_reuse_conflict');
   await app.close();
@@ -5996,6 +6006,76 @@ test('search category_ids_any filters results and unknown ids do not hard-fail v
   assert.equal(unknownCategory.statusCode, 200);
   assert.equal(Array.isArray(unknownCategory.json().items), true);
   assert.equal(unknownCategory.json().items.length, 0);
+
+  await app.close();
+});
+
+test('scope_notes filter on OTHER returns only matching public listings and requests', async () => {
+  const app = buildApp();
+
+  const searcherBoot = await bootstrap(app, 'boot-scope-notes-filter-searcher');
+  const searcherNodeId = searcherBoot.json().node.id;
+  const searcherApiKey = searcherBoot.json().api_key.api_key;
+  assert.equal((await activateBasicSubscriber(app, searcherNodeId, 'evt_subscriber_scope_notes_filter')).statusCode, 200);
+
+  const targetBoot = await bootstrap(app, 'boot-scope-notes-filter-target');
+  const targetNodeId = targetBoot.json().node.id;
+  const wanted = `scope-wanted-${TEST_RUN_SUFFIX}-${targetNodeId.slice(0, 6)}`;
+  const other = `scope-other-${TEST_RUN_SUFFIX}-${targetNodeId.slice(0, 6)}`;
+
+  const matchingUnit = await repo.createResource('units', targetNodeId, unitPayload('Scope match listing', wanted));
+  const otherUnit = await repo.createResource('units', targetNodeId, unitPayload('Scope other listing', other));
+  const matchingRequest = await repo.createResource('requests', targetNodeId, unitPayload('Scope match request', wanted));
+  const otherRequest = await repo.createResource('requests', targetNodeId, unitPayload('Scope other request', other));
+
+  for (const unit of [matchingUnit, otherUnit]) {
+    await repo.setPublished('units', unit.id, true);
+    await repo.upsertProjection('units', await repo.getResource('units', targetNodeId, unit.id));
+  }
+  for (const request of [matchingRequest, otherRequest]) {
+    await repo.setPublished('requests', request.id, true);
+    await repo.upsertProjection('requests', await repo.getResource('requests', targetNodeId, request.id));
+  }
+
+  const listings = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-scope-notes-listings' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: wanted },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(listings.statusCode, 200);
+  assert.equal(listings.json().items.length, 1);
+  assert.equal(listings.json().items[0].item.id, matchingUnit.id);
+  assert.equal(listings.json().items[0].item.scope_notes, wanted);
+
+  const requests = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: { authorization: `ApiKey ${searcherApiKey}`, 'idempotency-key': 'search-scope-notes-requests' },
+    payload: {
+      q: null,
+      scope: 'OTHER',
+      filters: { scope_notes: wanted },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      target: { node_id: targetNodeId },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(requests.statusCode, 200);
+  assert.equal(requests.json().items.length, 1);
+  assert.equal(requests.json().items[0].item.id, matchingRequest.id);
+  assert.equal(requests.json().items[0].item.scope_notes, wanted);
 
   await app.close();
 });

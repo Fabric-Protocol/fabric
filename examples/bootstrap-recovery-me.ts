@@ -77,6 +77,7 @@ async function main() {
     required_legal_version: meta.required_legal_version,
     bootstrap_node_id: boot.node.id,
     recovery_challenge_id: challenge.challenge_id,
+    api_key: recovered.api_key,
     recovered_key_id: recovered.key_id,
     me_node_id: me.node.id,
     me_plan: me.node.plan,

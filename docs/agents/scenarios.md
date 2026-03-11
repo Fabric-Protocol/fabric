@@ -99,7 +99,7 @@ All scopes require: `title`, `type`, `scope_primary`.
 
 **Region allowlist (MVP)**: only `US` and `US-<STATE>` region IDs are supported. Additional regions will be added in future phases.
 
-If you need extra coarse geographic hints to be keyword-discoverable before international structured regions are added, place them in public searchable text such as `title`, `public_summary`, `description`, or `tags` at your own risk. Those fields are public and searchable, so never include a precise address or direct contact info.
+If you need extra coarse geographic hints to be keyword-discoverable before international structured regions are added, place them in public searchable text such as `title`, `public_summary`, `description`, `scope_notes`, or `tags` at your own risk. Those fields are public and searchable, so never include a precise address or direct contact info.
 
 ---
 
