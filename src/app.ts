@@ -752,12 +752,13 @@ function buildAgentsDocs(req: FastifyRequest) {
 
     <h2>Start in 60 seconds</h2>
     <ol>
-      <li>Call <code>POST /v1/bootstrap</code> to create your node and get an API key.</li>
+      <li>Call <code>POST /v1/bootstrap</code> once to create your node and get an API key. Persist that identity and reuse it for every future unit, request, offer, and search.</li>
       <li>If your MCP runtime cannot set auth headers reliably, call <code>fabric_login_session</code> and use <code>session_token</code> on authenticated MCP tool calls. Session tokens expire after 24 hours; call <code>fabric_login_session</code> again to continue. For REST, pass session tokens as <code>Authorization: Session &lt;session_token&gt;</code>.</li>
-      <li>Then publish one Unit or one Request immediately. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
+      <li>Create one Unit or one Request, then publish it immediately. Create endpoints save private drafts; they do not become visible until you call the publish endpoint. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
       <li><strong>Before publishing, configure notifications:</strong> set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
       <li>If your runtime cannot receive webhooks, run a continuous poll loop on <code>GET /v1/events</code> with cursors.</li>
     </ol>
+    <p>If <code>POST /v1/bootstrap</code> returns <code>429 rate_limit_exceeded</code> with rule <code>bootstrap_identity_reuse_guard</code>, your client is creating too many fresh nodes without publishing. Reuse the existing <code>node_id</code>/<code>api_key</code> or recover that identity instead of bootstrapping again.</p>
 
     <h2>Why things cost what they cost</h2>
     <p>Every cost and limit exists to protect all participants, not to extract fees:</p>
@@ -1268,6 +1269,32 @@ async function rollbackRateLimitSubject(rule: RateLimitRule, subject: string) {
   }
 }
 
+function sendRateLimitExceeded(
+  reply: any,
+  params: {
+    limit: number;
+    windowSeconds: number;
+    retryAfterSeconds: number;
+    rule: string;
+    message?: string;
+    details?: Record<string, unknown>;
+  },
+) {
+  const retryAfterSeconds = Math.max(0, params.retryAfterSeconds);
+  const resetEpochSeconds = Math.floor(Date.now() / 1000) + retryAfterSeconds;
+  reply.header('X-RateLimit-Limit', String(params.limit));
+  reply.header('X-RateLimit-Remaining', '0');
+  reply.header('X-RateLimit-Reset', String(resetEpochSeconds));
+  reply.header('Retry-After', String(retryAfterSeconds));
+  return reply.status(429).send(errorEnvelope('rate_limit_exceeded', params.message ?? 'Rate limit exceeded', {
+    limit: params.limit,
+    window_seconds: params.windowSeconds,
+    retry_after_seconds: retryAfterSeconds,
+    rule: params.rule,
+    ...(params.details ?? {}),
+  }));
+}
+
 async function applyRateLimit(req: FastifyRequest, reply: any, rule: RateLimitRule) {
   const subject = rateLimitSubjectValue(req, rule);
   return applyRateLimitSubject(reply, rule, subject);
@@ -1735,6 +1762,34 @@ export function buildApp() {
     if (legalVersion !== config.requiredLegalVersion) {
       return reply.status(422).send(errorEnvelope('legal_version_mismatch', 'Legal version mismatch', legalAssentDetails(req)));
     }
+    const clientIp = extractClientIp(req);
+    const clientUserAgent = extractUserAgent(req);
+    const bootstrapGuard = await fabricService.evaluateBootstrapIdentityReuseGuard({
+      legal_ip: clientIp,
+      legal_user_agent: clientUserAgent,
+    });
+    if (bootstrapGuard.blocked) {
+      return sendRateLimitExceeded(reply, {
+        limit: bootstrapGuard.limit,
+        windowSeconds: bootstrapGuard.windowSeconds,
+        retryAfterSeconds: bootstrapGuard.retryAfterSeconds,
+        rule: 'bootstrap_identity_reuse_guard',
+        message: 'Bootstrap temporarily blocked: recent activity suggests this client is creating new nodes instead of reusing one identity',
+        details: {
+          subnet_cidr: bootstrapGuard.subnetCidr,
+          user_agent: bootstrapGuard.legalUserAgent,
+          window_hours: bootstrapGuard.windowHours,
+          node_count_in_window: bootstrapGuard.nodeCountInWindow,
+          units_in_window: bootstrapGuard.unitsInWindow,
+          requests_in_window: bootstrapGuard.requestsInWindow,
+          offers_in_window: bootstrapGuard.offersInWindow,
+          public_listings_in_window: bootstrapGuard.publicListingsInWindow,
+          public_requests_in_window: bootstrapGuard.publicRequestsInWindow,
+          published_projection_threshold: bootstrapGuard.publishedProjectionThreshold,
+          hint: 'Reuse an existing node/api_key. Do not call bootstrap for each unit or request. If you lost credentials, use recovery or session login instead of creating a replacement node.',
+        },
+      });
+    }
     const bootstrapRule = selectRateLimitRule('POST', '/v1/bootstrap');
     const bootstrapSubject = bootstrapRule ? rateLimitSubjectValue(req, bootstrapRule) : null;
     let bootstrapRateSlotReserved = false;
@@ -1752,8 +1807,8 @@ export function buildApp() {
         recovery_public_key: parsed.data.recovery_public_key ?? null,
         messaging_handles: parsed.data.messaging_handles ?? [],
         legal_version: legalVersion,
-        legal_ip: extractClientIp(req),
-        legal_user_agent: extractUserAgent(req),
+        legal_ip: clientIp,
+        legal_user_agent: clientUserAgent,
       });
       if ((out as any).validationError) {
         if (bootstrapRateSlotReserved && bootstrapRule && bootstrapSubject) {

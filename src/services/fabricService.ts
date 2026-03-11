@@ -48,7 +48,87 @@ function requirePublishFields(row: any) {
   return null;
 }
 
+function parseIpv4ToInt(ip: string | null | undefined) {
+  if (!ip || !net.isIPv4(ip)) return null;
+  const octets = ip.split('.').map((part) => Number(part));
+  if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return (((octets[0] * 256 + octets[1]) * 256 + octets[2]) * 256 + octets[3]) >>> 0;
+}
+
+function ipv4FromInt(value: number) {
+  return [
+    (value >>> 24) & 255,
+    (value >>> 16) & 255,
+    (value >>> 8) & 255,
+    value & 255,
+  ].join('.');
+}
+
+function ipv4Subnet(ip: string | null | undefined, prefix: number) {
+  const ipv4 = parseIpv4ToInt(ip);
+  if (ipv4 === null) return null;
+  if (!Number.isInteger(prefix) || prefix < 0 || prefix > 32) return null;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  const network = (ipv4 & mask) >>> 0;
+  return {
+    key: `${network}/${prefix}`,
+    cidr: `${ipv4FromInt(network)}/${prefix}`,
+  };
+}
+
 export const fabricService = {
+  async evaluateBootstrapIdentityReuseGuard(payload: { legal_ip: string | null; legal_user_agent: string | null }) {
+    if (!config.bootstrapIdentityReuseGuardEnabled) return { blocked: false as const };
+    const legalUserAgent = nonEmptyString(payload.legal_user_agent);
+    const subnet = ipv4Subnet(payload.legal_ip, config.bootstrapIdentityReuseGuardSubnetPrefixV4);
+    if (!legalUserAgent || !subnet) return { blocked: false as const };
+
+    const windowHours = Math.max(1, Math.trunc(config.bootstrapIdentityReuseGuardLookbackHours));
+    const windowStartMs = Date.now() - (windowHours * 3600 * 1000);
+    const windowStart = new Date(windowStartMs).toISOString();
+    const candidates = await repo.listRecentBootstrapNodesByUserAgent(legalUserAgent, windowStart);
+    const matchingCandidates = candidates.filter((candidate) => ipv4Subnet(candidate.legal_ip, config.bootstrapIdentityReuseGuardSubnetPrefixV4)?.key === subnet.key);
+    const nodeCountInWindow = matchingCandidates.length;
+    const nodeThreshold = Math.max(1, Math.trunc(config.bootstrapIdentityReuseGuardNodeThreshold));
+
+    if (nodeCountInWindow < nodeThreshold) return { blocked: false as const };
+
+    const publicListingsInWindow = matchingCandidates.reduce((sum, candidate) => sum + candidate.public_listings_count, 0);
+    const publicRequestsInWindow = matchingCandidates.reduce((sum, candidate) => sum + candidate.public_requests_count, 0);
+    const publishedProjectionCount = publicListingsInWindow + publicRequestsInWindow;
+    const publishedProjectionThreshold = Math.max(0, Math.trunc(config.bootstrapIdentityReuseGuardPublishedProjectionThreshold));
+
+    if (publishedProjectionCount > publishedProjectionThreshold) return { blocked: false as const };
+
+    const unitsInWindow = matchingCandidates.reduce((sum, candidate) => sum + candidate.units_count, 0);
+    const requestsInWindow = matchingCandidates.reduce((sum, candidate) => sum + candidate.requests_count, 0);
+    const offersInWindow = matchingCandidates.reduce((sum, candidate) => sum + candidate.offers_count, 0);
+    const oldestCreatedAtMs = matchingCandidates.reduce((min, candidate) => {
+      const createdAtMs = Date.parse(candidate.created_at);
+      if (!Number.isFinite(createdAtMs)) return min;
+      return Math.min(min, createdAtMs);
+    }, Number.POSITIVE_INFINITY);
+    const retryAfterSeconds = Number.isFinite(oldestCreatedAtMs)
+      ? Math.max(0, Math.ceil(((oldestCreatedAtMs + (windowHours * 3600 * 1000)) - Date.now()) / 1000))
+      : windowHours * 3600;
+
+    return {
+      blocked: true as const,
+      limit: nodeThreshold,
+      windowHours,
+      windowSeconds: windowHours * 3600,
+      retryAfterSeconds,
+      subnetCidr: subnet.cidr,
+      legalUserAgent,
+      nodeCountInWindow,
+      unitsInWindow,
+      requestsInWindow,
+      offersInWindow,
+      publicListingsInWindow,
+      publicRequestsInWindow,
+      publishedProjectionThreshold,
+    };
+  },
   async bootstrap(payload: {
     display_name: string;
     email: string | null;

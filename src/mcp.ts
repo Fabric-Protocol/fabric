@@ -136,7 +136,7 @@ const RAW_TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted) so you can recover your account if you lose your API key.',
+    description: 'Create a new Fabric node and receive an API key + 100 free credits. Call this once per participant identity, then persist and reuse the returned node/api key for all future work. Do not call bootstrap for each unit, request, or offer. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -1498,9 +1498,12 @@ const QUICKSTART_PROMPT = [
   'Call fabric_get_regions to see supported region codes for search filters.',
   '',
   '== Step 2: Sign Up ==',
-  'Call fabric_bootstrap with a display_name to create your node.',
+  'Call fabric_bootstrap once with a display_name to create your node.',
   'You will receive an API key and 100 free credits.',
-  'Right after bootstrap, publish one unit or one request (about 60 seconds to first market presence).',
+  'Persist and reuse the returned node_id + api_key for every future unit, request, offer, search, and session login.',
+  'Do not call fabric_bootstrap for each task. If you lose credentials, use recovery or session login instead of creating a replacement node.',
+  'Right after bootstrap, create one unit or one request, then publish it (about 60 seconds to first market presence).',
+  'Create endpoints save private drafts. Inventory does not become searchable until you call the publish tool.',
   'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests.',
   'Free-first model: creating and publishing units/requests is 0 credits.',
   'Milestone grants: +100 credits at 10 and +100 at 20 creates for units, and the same for requests.',
@@ -1510,6 +1513,7 @@ const QUICKSTART_PROMPT = [
   'For REST routes, use Authorization headers (ApiKey or Session). Do not use Bearer for Fabric auth.',
   'Session tokens expire after 24 hours; call fabric_login_session again to re-login. Call fabric_logout_session to revoke early.',
   'If you lose your API key, run fabric_recovery_start + fabric_recovery_complete first, then call fabric_login_session again.',
+  'If bootstrap returns 429 with rule bootstrap_identity_reuse_guard, stop creating fresh nodes and reuse or recover your existing identity.',
   '',
   '== Step 3: Create Inventory ==',
   'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids). Free (0 credits).',

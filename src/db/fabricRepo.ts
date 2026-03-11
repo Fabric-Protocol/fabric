@@ -205,6 +205,88 @@ export async function createApiKey(nodeId: string, label: string | null) {
   return { ...rows[0], api_key: apiKey };
 }
 
+export async function listRecentBootstrapNodesByUserAgent(userAgent: string, windowStart: string) {
+  const rows = await query<{
+    id: string;
+    legal_ip: string | null;
+    created_at: string;
+    units_count: string;
+    requests_count: string;
+    offers_count: string;
+    public_listings_count: string;
+    public_requests_count: string;
+  }>(
+    `with recent_nodes as (
+       select id, legal_ip, created_at
+       from nodes
+       where deleted_at is null
+         and legal_user_agent = $1
+         and created_at >= $2::timestamptz
+     ),
+     unit_counts as (
+       select node_id, count(*)::text as units_count
+       from units
+       where deleted_at is null
+         and created_at >= $2::timestamptz
+       group by node_id
+     ),
+     request_counts as (
+       select node_id, count(*)::text as requests_count
+       from requests
+       where deleted_at is null
+         and created_at >= $2::timestamptz
+       group by node_id
+     ),
+     offer_counts as (
+       select from_node_id as node_id, count(*)::text as offers_count
+       from offers
+       where deleted_at is null
+         and created_at >= $2::timestamptz
+       group by from_node_id
+     ),
+     public_listing_counts as (
+       select node_id, count(*)::text as public_listings_count
+       from public_listings
+       where published_at >= $2::timestamptz
+       group by node_id
+     ),
+     public_request_counts as (
+       select node_id, count(*)::text as public_requests_count
+       from public_requests
+       where published_at >= $2::timestamptz
+       group by node_id
+     )
+     select
+       n.id,
+       n.legal_ip,
+       n.created_at,
+       coalesce(u.units_count, '0') as units_count,
+       coalesce(r.requests_count, '0') as requests_count,
+       coalesce(o.offers_count, '0') as offers_count,
+       coalesce(pl.public_listings_count, '0') as public_listings_count,
+       coalesce(pr.public_requests_count, '0') as public_requests_count
+     from recent_nodes n
+     left join unit_counts u on u.node_id = n.id
+     left join request_counts r on r.node_id = n.id
+     left join offer_counts o on o.node_id = n.id
+     left join public_listing_counts pl on pl.node_id = n.id
+     left join public_request_counts pr on pr.node_id = n.id
+     order by n.created_at asc`,
+    [userAgent, windowStart],
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    legal_ip: row.legal_ip,
+    created_at: row.created_at,
+    units_count: Number(row.units_count ?? 0),
+    requests_count: Number(row.requests_count ?? 0),
+    offers_count: Number(row.offers_count ?? 0),
+    public_listings_count: Number(row.public_listings_count ?? 0),
+    public_requests_count: Number(row.public_requests_count ?? 0),
+  }));
+}
+
 export async function ensureSubscription(nodeId: string) {
   await query("insert into subscriptions(node_id,plan_code,status) values($1,'free','none') on conflict (node_id) do nothing", [nodeId]);
 }

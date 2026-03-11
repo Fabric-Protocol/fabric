@@ -198,6 +198,8 @@ If referral_code is provided, it is recorded as a referral claim (subject to the
 
 Bootstrap IP rate limiting counts successful bootstrap creations only. Validation/legal/conflict failures do not consume the bootstrap quota.
 
+The service MAY also reject bootstrap with `429 rate_limit_exceeded` and rule `bootstrap_identity_reuse_guard` when recent successful bootstraps from the same client fingerprint strongly suggest the caller is creating replacement nodes instead of reusing one identity. In that case the caller MUST reuse or recover the existing node instead of creating another.
+
 Email is account identity/recovery contact data and is not used as a runtime auth factor.
 
 Errors
@@ -207,6 +209,8 @@ Errors
 422 legal_required
 
 422 legal_version_mismatch
+
+429 rate_limit_exceeded
 
 422 validation error
 

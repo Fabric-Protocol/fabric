@@ -753,6 +753,59 @@ test('bootstrap IP rate limit counts successful bootstraps only (display_name_ta
   });
 });
 
+test('bootstrap identity reuse guard blocks repeated node creation from same subnet and user-agent', async () => {
+  await withConfigOverrides({
+    rateLimitBootstrapPerHour: 100,
+    bootstrapIdentityReuseGuardEnabled: true,
+    bootstrapIdentityReuseGuardLookbackHours: 24,
+    bootstrapIdentityReuseGuardSubnetPrefixV4: 22,
+    bootstrapIdentityReuseGuardNodeThreshold: 3,
+    bootstrapIdentityReuseGuardPublishedProjectionThreshold: 0,
+  }, async () => {
+    const app = buildApp();
+    const userAgent = 'lightMyRequest';
+    const ips = ['69.12.56.10', '69.12.57.15', '69.12.58.8'];
+
+    for (let i = 0; i < ips.length; i += 1) {
+      const res = await bootstrap(app, `boot-guard-seed-${i}-${TEST_RUN_SUFFIX}`, {
+        display_name: `Guard Seed ${i} ${TEST_RUN_SUFFIX}`,
+        email: null,
+        referral_code: null,
+      }, {
+        exactDisplayName: true,
+        headers: {
+          'x-forwarded-for': ips[i],
+          'user-agent': userAgent,
+        },
+      });
+      assert.equal(res.statusCode, 200);
+    }
+
+    const limited = await bootstrap(app, `boot-guard-limited-${TEST_RUN_SUFFIX}`, {
+      display_name: `Guard Limited ${TEST_RUN_SUFFIX}`,
+      email: null,
+      referral_code: null,
+    }, {
+      exactDisplayName: true,
+      headers: {
+        'x-forwarded-for': '69.12.59.31',
+        'user-agent': userAgent,
+      },
+    });
+
+    assert.equal(limited.statusCode, 429);
+    assert.equal(limited.json().error.code, 'rate_limit_exceeded');
+    assert.equal(limited.json().error.details.rule, 'bootstrap_identity_reuse_guard');
+    assert.equal(limited.json().error.details.node_count_in_window, 3);
+    assert.equal(limited.json().error.details.subnet_cidr, '69.12.56.0/22');
+    assert.equal(limited.json().error.details.public_listings_in_window, 0);
+    assert.equal(limited.json().error.details.public_requests_in_window, 0);
+    assert.match(limited.json().error.details.hint, /Do not call bootstrap for each unit or request/);
+    assert.ok(Number(limited.headers['retry-after']) > 0);
+    await app.close();
+  });
+});
+
 test('PATCH /v1/me rejects duplicate display_name', async () => {
   const app = buildApp();
   const a = await bootstrap(app, 'boot-display-patch-a', {

@@ -2,6 +2,22 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-03-10 - Bootstrap identity-reuse guard defaults
+Decision:
+- Add a bootstrap guard that returns `429 rate_limit_exceeded` with rule `bootstrap_identity_reuse_guard` when the same `legal_user_agent` creates too many recent nodes from the same IPv4 `/22` without publishing.
+- Default thresholds are env-configurable and ship as:
+  - `BOOTSTRAP_IDENTITY_REUSE_GUARD_ENABLED=true`
+  - `BOOTSTRAP_IDENTITY_REUSE_GUARD_LOOKBACK_HOURS=24`
+  - `BOOTSTRAP_IDENTITY_REUSE_GUARD_SUBNET_PREFIX_V4=22`
+  - `BOOTSTRAP_IDENTITY_REUSE_GUARD_NODE_THRESHOLD=6`
+  - `BOOTSTRAP_IDENTITY_REUSE_GUARD_PUBLISHED_PROJECTION_THRESHOLD=1`
+Rationale:
+- Production activity showed a repeated agent failure mode: bootstrapping a fresh node for each unit/request attempt while rarely publishing anything.
+- The guard should stop broken loops without blocking normal onboarding, so it keys on repeated successful bootstraps plus low publication rather than a single IP alone.
+Scope/impact:
+- Code: bootstrap route preflight calls a service-layer heuristic before consuming the standard bootstrap hourly rate-limit slot.
+- UX/docs: agents are instructed to bootstrap once, persist `node_id` + `api_key`, and recover/reuse identities instead of creating replacements.
+
 ## 2026-02-25 - Remove Bcon (crypto pay-in rail)
 Decision:
 - Bcon integration fully removed from MVP. No crypto pay-in endpoints, no Bcon webhook handler, no bcon_invoices/bcon_txns tables.
