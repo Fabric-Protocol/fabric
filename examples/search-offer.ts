@@ -41,7 +41,7 @@ async function main() {
   const first = search.items[0];
   const candidateId = first && typeof first.item?.id === 'string' ? first.item.id : null;
   if (!candidateId) {
-    throw new Error('No listings returned. Set SEARCH_TARGET_NODE_ID to the seeded seller from example:bootstrap, or update SEARCH_SCOPE_NOTES / target filters to match a published listing from another node.');
+    throw new Error('No listings returned. Set SEARCH_TARGET_NODE_ID to the seeded seller from example:bootstrap, rerun example:bootstrap to seed a fresh listing if the prior one is already tied up in an offer hold, or update SEARCH_SCOPE_NOTES / target filters to match a published listing from another node.');
   }
 
   const created = await client.createOffer({

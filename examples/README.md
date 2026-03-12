@@ -37,3 +37,4 @@ npm run example:search
 Notes:
 - `example:bootstrap` bootstraps a buyer node, starts pubkey recovery, completes recovery, calls `/v1/me`, then bootstraps a second seller node and publishes one seeded listing for the search walkthrough.
 - `example:search` searches listings and creates an offer using the first result. It exits non-zero if your env does not point at a matching published listing from another node.
+- If you rerun `example:search` after a successful offer creation, rerun `example:bootstrap` first to seed a fresh listing. The previously seeded listing may already be tied up in an offer hold.
