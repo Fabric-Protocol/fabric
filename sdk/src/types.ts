@@ -35,6 +35,9 @@ export type MeResponse = {
   node: MeNode;
   subscription: MeSubscription;
   credits_balance: number;
+  setup_incomplete?: {
+    event_webhook_url: string;
+  } | null;
 };
 
 export type SearchScope = 'local_in_person' | 'remote_online_service' | 'ship_to' | 'digital_delivery' | 'OTHER';
@@ -196,6 +199,8 @@ export type MetaResponse = {
   openapi_url: string;
   categories_url: string;
   categories_version: number;
+  regions_url: string;
+  mcp_url: string;
   legal_urls: {
     terms: string;
     privacy: string;
@@ -204,6 +209,22 @@ export type MetaResponse = {
   support_url: string;
   docs_urls: {
     agents_url: string;
+  };
+  agent_toc: {
+    welcome: string;
+    deal_structures: string[];
+    start_here: string[];
+    happy_path: string[];
+    capabilities: string[];
+    invariants: string[];
+    trust_safety_rules: string[];
+    why_costs_exist: {
+      search_credits: string;
+      pagination_escalation: string;
+      contact_info_ban: string;
+      rate_limits: string;
+      pre_purchase_limits: string;
+    };
   };
 };
 
@@ -231,4 +252,7 @@ export type BootstrapResponse = {
     granted: number;
     reason: string;
   };
+  setup_incomplete?: {
+    event_webhook_url: string;
+  } | null;
 };

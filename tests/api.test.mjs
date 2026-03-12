@@ -289,6 +289,8 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   assert.equal(body.openapi_url, 'https://fabric.example/openapi.json');
   assert.equal(body.categories_url, 'https://fabric.example/v1/categories');
   assert.equal(body.categories_version, 1);
+  assert.equal(body.regions_url, 'https://fabric.example/v1/regions');
+  assert.equal(body.mcp_url, 'https://fabric.example/mcp');
   assert.equal(body.legal_urls.terms, 'https://fabric.example/legal/terms');
   assert.equal(body.legal_urls.privacy, 'https://fabric.example/legal/privacy');
   assert.equal(body.legal_urls.aup, 'https://fabric.example/legal/acceptable-use');
@@ -296,6 +298,8 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   assert.equal(body.docs_urls.agents_url, 'https://fabric.example/docs/agents');
   assert.match(body.openapi_url, /^https:\/\//);
   assert.match(body.categories_url, /^https:\/\//);
+  assert.match(body.regions_url, /^https:\/\//);
+  assert.match(body.mcp_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /^https:\/\//);
   assert.match(body.docs_urls.agents_url, /\/docs\/agents$/);
 
@@ -323,6 +327,8 @@ test('GET /v1/meta returns required legal version and legal URLs', async () => {
   assert.ok(toc.trust_safety_rules.includes('contact_reveal_only_after_mutual_acceptance'));
   assert.ok(toc.trust_safety_rules.includes('public_projections_allowlist_only'));
   assert.ok(toc.start_here.some(s => s.includes('Webhook contract')), 'start_here must mention webhook contract guidance');
+  assert.equal(typeof toc.why_costs_exist?.search_credits, 'string');
+  assert.equal(typeof toc.why_costs_exist?.pre_purchase_limits, 'string');
   await app.close();
 });
 
@@ -833,12 +839,19 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const metaRequired = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.required ?? [];
   assert.equal(metaRequired.includes('categories_url'), true);
   assert.equal(metaRequired.includes('categories_version'), true);
+  assert.equal(metaRequired.includes('regions_url'), true);
+  assert.equal(metaRequired.includes('mcp_url'), true);
   assert.equal(metaRequired.includes('agent_toc'), true);
   const agentTocSchema = body.paths?.['/v1/meta']?.get?.responses?.['200']?.content?.['application/json']?.schema?.properties?.agent_toc ?? {};
   assert.equal(agentTocSchema.type, 'object');
   assert.ok(Array.isArray(agentTocSchema.required));
   assert.ok(agentTocSchema.required.includes('start_here'));
   assert.ok(agentTocSchema.required.includes('trust_safety_rules'));
+  assert.ok(agentTocSchema.required.includes('why_costs_exist'));
+  const bootstrapResponseSchema = body.components?.schemas?.BootstrapResponse ?? {};
+  assert.equal(bootstrapResponseSchema.properties?.setup_incomplete?.properties?.event_webhook_url?.type, 'string');
+  const meResponseSchema = body.components?.schemas?.MeResponse ?? {};
+  assert.equal(meResponseSchema.properties?.setup_incomplete?.properties?.event_webhook_url?.type, 'string');
   await app.close();
 });
 
@@ -997,6 +1010,7 @@ test('POST /v1/bootstrap grants configured signup credits', async () => {
   const res = await bootstrap(app, 'boot-signup-grant');
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().credits.granted, config.signupGrantCredits);
+  assert.equal(typeof res.json().setup_incomplete?.event_webhook_url, 'string');
   const nodeId = res.json().node.id;
   const balance = await repo.creditBalance(nodeId);
   assert.equal(balance, config.signupGrantCredits);

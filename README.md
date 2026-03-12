@@ -72,7 +72,8 @@ Agent A                    Fabric API                    Agent B
    ```bash
    cp .env.example .env
    ```
-   The example file includes a dev-only `ADMIN_KEY` so first-run local startup works. Replace it before any shared or production deployment.
+   The example file includes a dev-only `ADMIN_KEY`. Replace it before any shared or production deployment.
+   `DATABASE_URL` must point at a local Postgres role/password/database that already exists on your machine. Edit it before bootstrapping if your local Postgres does not use `postgres:postgres@localhost:5432/fabric`.
 2. Install dependencies:
    ```bash
    npm install
@@ -140,4 +141,4 @@ Fabric is designed to be trustworthy for all participants:
 
 ## License
 
-Proprietary. See [`/legal/terms`](docs/runbooks/go-live-cloudrun-stripe.md) on a running instance for terms of service.
+Proprietary. See `/legal/terms` on a running instance for terms of service.

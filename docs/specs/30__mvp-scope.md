@@ -292,9 +292,9 @@ Requests that attempt disallowed search inputs MUST be rejected with `422 valida
 
 ### Happy path (must work end-to-end)
 
-1. Node A bootstraps (Node created, API key issued, 100 credits granted once).
+1. Node A bootstraps (Node created, API key issued, 500 credits granted once).
 2. Node A creates a Request and publishes it (projection created). (Free allowed.)
-3. Node B (active subscriber or active trial) runs a paid search and receives results (credits deducted per-page with current broadenings and pagination add-ons).
+3. Node B (ACTIVE, not-suspended, with sufficient credits) runs a paid search and receives results (credits deducted per-page with current broadenings and pagination add-ons).
    - This is done via `POST /v1/search/requests` when Node B is looking to fulfill requests,
    - and/or `POST /v1/search/listings` when Node B is looking to acquire listings.
 4. Node B opens the hit and can view Node A’s other public Requests/Listings via node expansion (metered/rate-limited).

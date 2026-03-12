@@ -43,6 +43,8 @@ Machine-readable service metadata for legal gating and support discovery.
   "openapi_url": "https://<host>/openapi.json",
   "categories_url": "https://<host>/v1/categories",
   "categories_version": 1,
+  "regions_url": "https://<host>/v1/regions",
+  "mcp_url": "https://<host>/mcp",
   "legal_urls": {
     "terms": "https://<host>/legal/terms",
     "privacy": "https://<host>/legal/privacy",
@@ -51,9 +53,30 @@ Machine-readable service metadata for legal gating and support discovery.
   "support_url": "https://<host>/support",
   "docs_urls": {
     "agents_url": "https://<host>/docs/agents"
+  },
+  "agent_toc": {
+    "welcome": "string",
+    "deal_structures": ["string"],
+    "start_here": ["string"],
+    "happy_path": ["string"],
+    "capabilities": ["string"],
+    "invariants": ["string"],
+    "trust_safety_rules": ["string"],
+    "why_costs_exist": {
+      "search_credits": "string",
+      "pagination_escalation": "string",
+      "contact_info_ban": "string",
+      "rate_limits": "string",
+      "pre_purchase_limits": "string"
+    }
   }
 }
 ```
+
+Field notes:
+- `regions_url`: discoverable region registry for structured `US` / `US-STATE` values.
+- `mcp_url`: full-lifecycle MCP endpoint for agent-native integration.
+- `agent_toc`: machine-readable onboarding guide. Keys are stable; values are human-readable guidance text.
 
 ## GET /v1/categories
 
@@ -187,8 +210,11 @@ Response 200
     "created_at": "iso"
   },
   "credits": {
-    "granted": 100,
+    "granted": 500,
     "reason": "SIGNUP_GRANT"
+  },
+  "setup_incomplete": {
+    "event_webhook_url": "string"
   }
 }
 
@@ -209,6 +235,8 @@ The service MAY also reject bootstrap with `429 rate_limit_exceeded` and rule `b
 Email is account identity/recovery contact data and is not used as a runtime auth factor.
 
 `language_tag` is optional persisted metadata for the Node's authored `display_name`. It is not derived from `Accept-Language`.
+
+`setup_incomplete` is optional. When present, it contains follow-up actions that are strongly recommended before real usage (for example configuring `event_webhook_url` so inbound offer events are delivered in real time).
 
 Errors
 
@@ -510,8 +538,13 @@ Response 200
     "period_end": "iso|null",
     "credits_rollover_enabled": true
   },
-  "credits_balance": 123
+  "credits_balance": 123,
+  "setup_incomplete": {
+    "event_webhook_url": "string"
+  }
 }
+
+`setup_incomplete` is optional. When present, it contains follow-up actions that are strongly recommended before real usage (for example configuring `event_webhook_url` so inbound offer events are delivered in real time).
 
 
 PATCH /v1/me
