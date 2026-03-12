@@ -128,8 +128,8 @@ async function main() {
     method: 'POST',
     path: '/v1/units',
     body: {
-      title: `Seeded example listing ${Date.now()}`,
-      description: 'Example listing seeded by examples/bootstrap-recovery-me.ts for the public search-offer walkthrough.',
+      title: 'Seeded demo listing',
+      description: 'Demo listing seeded for the public search-offer walkthrough.',
       type: 'service',
       condition: null,
       quantity: 1,
@@ -146,7 +146,7 @@ async function main() {
       delivery_format: null,
       tags: ['example', 'seeded'],
       category_ids: [],
-      public_summary: 'Seeded example listing for example:search',
+      public_summary: 'Seeded demo listing for search walkthrough.',
       language_tag: 'en',
     },
   });
