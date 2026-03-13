@@ -6,7 +6,7 @@ This document is **normative** for publication projections, allowlists, search f
 
 ## 1) Projection philosophy (public data is derived)
 
-- Canonical objects (`units`, `requests`) are **private**.
+- Canonical objects (`units`, `requests`) are source records.
 - Public marketplace visibility is implemented via projections:
   - `public_listings` derived from Units
   - `public_requests` derived from Requests
@@ -30,10 +30,16 @@ Per-scope required:
 - `digital_delivery`: require `delivery_format`
 
 ## 2.2 Side effects
+- Create with auto-publication writes/updates:
+  - `units.published_at` / `requests.published_at`
+  - upsert into `public_listings` / `public_requests`
 - Publish writes/updates:
   - `units.published_at` / `requests.published_at`
   - upsert into `public_listings` / `public_requests`
+- Patch on a published object updates the existing projection row.
 - Unpublish removes the projection row and clears `published_at` on the source row.
+- Delete on a published object removes the projection row.
+- Create without publish readiness leaves `published_at` null and writes no projection row.
 
 ## 2.3 Projections drift correction (locked)
 MVP includes scheduled projection rebuild:

@@ -151,13 +151,6 @@ async function main() {
     },
   });
 
-  await requestJson({
-    baseUrl,
-    apiKey: sellerBoot.api_key.api_key,
-    method: 'POST',
-    path: `/v1/units/${sellerUnit.unit.id}/publish`,
-  });
-
   console.log(JSON.stringify({
     required_legal_version: meta.required_legal_version,
     bootstrap_node_id: boot.node.id,

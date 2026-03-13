@@ -796,7 +796,7 @@ None
 
 Purpose
 
-Create a Unit (minimal create; publish-time validation applies).
+Create a Unit. If the payload is publish-ready and the node is eligible to publish, create auto-publishes by default; otherwise the unit is saved as a draft.
 
 Request (MVP minimal)
 {
@@ -819,7 +819,8 @@ Request (MVP minimal)
   "tags": ["string"],
   "category_ids": [1],
   "public_summary": "string|null",
-  "language_tag": "string|null"
+  "language_tag": "string|null",
+  "publish_status": "draft|published|null"
 }
 
 `estimated_value` is optional and non-binding (informational only).
@@ -837,7 +838,8 @@ Response 200
     "created_at": "iso",
     "updated_at": "iso",
     "version": 1
-  }
+  },
+  "disclaimer": "string|null"
 }
 
 GET /v1/units
@@ -891,7 +893,7 @@ None
 
 Purpose
 
-Patch a unit; increments version on success.
+Patch a unit; increments version on success. If the unit is currently published, the public projection is updated on success.
 
 DELETE /v1/units/{unit_id}
 Auth
@@ -908,7 +910,7 @@ None
 
 Purpose
 
-Soft delete a unit.
+Soft delete a unit. If the unit is currently published, its public projection is removed.
 
 Response 200
 { "ok": true }
@@ -932,7 +934,7 @@ None
 
 Purpose
 
-Create a Request.
+Create a Request. If the payload is publish-ready and the node is eligible to publish, create auto-publishes by default; otherwise the request is saved as a draft.
 
 Request
 
@@ -941,7 +943,8 @@ Same as Unit create, plus:
   "need_by": "iso|null",
   "accept_substitutions": true,
   "ttl_minutes": 10080,
-  "language_tag": "string|null"
+  "language_tag": "string|null",
+  "publish_status": "draft|published|null"
 }
 
 `ttl_minutes` is optional. If omitted, default is 525600 minutes (365 days). If provided, it must be an integer in [60, 525600]. `request.expires_at` is server-computed and returned.
@@ -999,7 +1002,7 @@ None
 
 Purpose
 
-Patch a request; increments version on success.
+Patch a request; increments version on success. If the request is currently published, the public projection is updated on success.
 
 `ttl_minutes` may be provided on patch. Same bounds [60, 43200] apply; server recomputes and returns `expires_at`.
 
@@ -1018,7 +1021,7 @@ None
 
 Purpose
 
-Soft delete a request.
+Soft delete a request. If the request is currently published, its public projection is removed.
 
 Errors (request create/patch TTL validation)
 
@@ -1026,6 +1029,13 @@ Errors (request create/patch TTL validation)
 
 7) Publish / unpublish (projections)
 Publish eligibility (locked)
+
+Create-time publish behavior:
+- `POST /v1/units` and `POST /v1/requests` default to `publish_status=published` when omitted.
+- If omitted and publish requirements are met, the object is created as published and the public projection is written immediately.
+- If omitted and publish requirements are not met, the object is created as a draft.
+- If `publish_status="draft"`, the object is created as a draft even when publish-ready.
+- If `publish_status="published"`, the same publish requirements below are enforced during create; if they fail, create returns `422 validation_error` and nothing is created.
 
 Common required at publish:
 

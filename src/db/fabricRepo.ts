@@ -686,33 +686,34 @@ export async function listLedger(nodeId: string, limit: number, cursor: string |
 
 function tableFor(kind: 'units' | 'requests') { return kind; }
 
-export async function createResource(kind: 'units'|'requests', nodeId: string, payload: any) {
+export async function createResource(kind: 'units'|'requests', nodeId: string, payload: any, publishNow = false) {
   if (kind === 'units') {
-    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+    const rows = await query<any>(`insert into units(node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag,published_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,case when $23 then now() else null end)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.estimated_value,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null,publishNow]);
     return rows[0];
   }
-  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary,language_tag)
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '365 days'),$21,$22,$23,$24)
+  const rows = await query<any>(`insert into requests(node_id,title,description,type,condition,desired_quantity,measure,custom_measure,scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,dest_region,service_region,delivery_format,max_ship_days,need_by,accept_substitutions,expires_at,tags,category_ids,public_summary,language_tag,published_at)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,coalesce($20::timestamptz, now() + interval '365 days'),$21,$22,$23,$24,case when $25 then now() else null end)
       returning id,node_id,case when published_at is null then 'draft' else 'published' end as publish_status,created_at,updated_at,row_version as version,expires_at`,
-      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null]);
+      [nodeId,payload.title,payload.description,payload.type,payload.condition,payload.quantity,payload.measure,payload.custom_measure,payload.scope_primary,payload.scope_secondary,payload.scope_notes,payload.location_text_public,payload.origin_region,payload.dest_region,payload.service_region,payload.delivery_format,payload.max_ship_days,payload.need_by,payload.accept_substitutions ?? true,payload.expires_at,payload.tags,payload.category_ids,payload.public_summary,payload.language_tag ?? null,publishNow]);
   return rows[0];
 }
 
 export async function createUnitWithMilestoneCredits(
   nodeId: string,
   payload: any,
+  publishNow = false,
 ) {
   const rows = await query<any>(`
     with inserted_unit as (
       insert into units(
         node_id,title,description,type,condition,quantity,estimated_value,measure,custom_measure,
         scope_primary,scope_secondary,scope_notes,location_text_public,origin_region,
-        dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag
+        dest_region,service_region,delivery_format,max_ship_days,tags,category_ids,public_summary,language_tag,published_at
       )
-      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+      values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,case when $23 then now() else null end)
       returning
         id,
         node_id,
@@ -775,6 +776,7 @@ export async function createUnitWithMilestoneCredits(
     payload.category_ids,
     payload.public_summary,
     payload.language_tag ?? null,
+    publishNow,
   ]);
   return rows[0];
 }

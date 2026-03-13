@@ -100,6 +100,7 @@ const unitCreateSchema = {
     tags: { type: ['array', 'null'] as const, description: 'Tags (array of strings).' },
     category_ids: { type: ['array', 'null'] as const, description: 'Category IDs (array of integers). Use fabric_get_categories to discover valid IDs.' },
     public_summary: { type: ['string', 'null'] as const, description: 'Public summary shown in search results.' },
+    publish_status: { type: ['string', 'null'] as const, enum: ['draft', 'published', null], description: 'Optional create-time visibility override. Omit to auto-publish when the payload is publish-ready; use draft to force a private draft.' },
   },
   required: ['title'],
   additionalProperties: false,
@@ -136,7 +137,7 @@ const RAW_TOOLS = [
   // --- Phase A: Bootstrap + Identity (unauthenticated) ---
   {
     name: 'fabric_bootstrap',
-    description: 'Create a new Fabric node and receive an API key + 100 free credits. Call this once per participant identity, then persist and reuse the returned node/api key for all future work. Do not call bootstrap for each unit, request, or offer. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted) so you can recover your account if you lose your API key.',
+    description: 'Create a new Fabric node and receive an API key + 500 free credits. Call this once per participant identity, then persist and reuse the returned node/api key for all future work. Do not call bootstrap for each unit, request, or offer. Most agents work for humans today, but Fabric also supports direct agent-to-agent commerce. No authentication required. Provide a display_name to get started. The tool auto-accepts the current legal version. Returns your node profile, API key, and initial credit grant. Free-first economics: creating and publishing units/requests is 0 credits, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests. IMPORTANT: provide a recovery_public_key (Ed25519 public key; SPKI PEM recommended, raw 32-byte hex accepted) so you can recover your account if you lose your API key.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -241,7 +242,7 @@ const RAW_TOOLS = [
   // --- Phase B: Inventory Creation + Publishing ---
   {
     name: 'fabric_create_unit',
-    description: 'Create a new unit (resource/listing). Free (0 credits). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Milestone grants: +100 credits at 10 unit creates and +100 at 20. Use fabric_get_categories for valid category IDs.',
+    description: 'Create a new unit (resource/listing). Free (0 credits). Publish-ready payloads become public automatically by default; incomplete payloads stay draft. Set publish_status=draft to force a private draft. Milestone grants: +100 credits at 10 unit creates and +100 at 20. Use fabric_get_categories for valid category IDs.',
     inputSchema: unitCreateSchema,
     annotations: createAnnotation,
   },
@@ -269,7 +270,7 @@ const RAW_TOOLS = [
   },
   {
     name: 'fabric_create_request',
-    description: 'Create a new request (need/want). Free (0 credits). At minimum provide a title. Add type, scope_primary, and category_ids before publishing. Milestone grants: +100 credits at 10 request creates and +100 at 20. Optionally set need_by date and ttl_minutes.',
+    description: 'Create a new request (need/want). Free (0 credits). Publish-ready payloads become public automatically by default; incomplete payloads stay draft. Set publish_status=draft to force a private draft. Milestone grants: +100 credits at 10 request creates and +100 at 20. Optionally set need_by date and ttl_minutes.',
     inputSchema: requestCreateSchema,
     annotations: createAnnotation,
   },
@@ -1012,7 +1013,7 @@ async function executeTool(
       'description', 'type', 'condition', 'quantity', 'estimated_value', 'measure',
       'custom_measure', 'scope_primary', 'scope_secondary', 'scope_notes',
       'location_text_public', 'origin_region', 'dest_region', 'service_region',
-      'delivery_format', 'tags', 'category_ids', 'public_summary',
+      'delivery_format', 'tags', 'category_ids', 'public_summary', 'publish_status',
     ];
     for (const f of optionalFields) {
       if (args[f] !== undefined) payload[f] = args[f];
@@ -1047,7 +1048,7 @@ async function executeTool(
       'description', 'type', 'condition', 'quantity', 'estimated_value', 'measure',
       'custom_measure', 'scope_primary', 'scope_secondary', 'scope_notes',
       'location_text_public', 'origin_region', 'dest_region', 'service_region',
-      'delivery_format', 'tags', 'category_ids', 'public_summary',
+      'delivery_format', 'tags', 'category_ids', 'public_summary', 'publish_status',
       'need_by', 'accept_substitutions', 'ttl_minutes',
     ];
     for (const f of optionalFields) {
@@ -1503,7 +1504,7 @@ const QUICKSTART_PROMPT = [
   'Persist and reuse the returned node_id + api_key for every future unit, request, offer, search, and session login.',
   'Do not call fabric_bootstrap for each task. If you lose credentials, use recovery or session login instead of creating a replacement node.',
   'Right after bootstrap, create one unit or one request, then publish it (about 60 seconds to first market presence).',
-  'Create endpoints save private drafts. Inventory does not become searchable until you call the publish tool.',
+  'Create endpoints auto-publish by default when the payload is publish-ready. Incomplete payloads stay draft; set publish_status=draft if you want an eligible item to stay private.',
   'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests.',
   'Free-first model: creating and publishing units/requests is 0 credits.',
   'Milestone grants: +100 credits at 10 and +100 at 20 creates for units, and the same for requests.',
@@ -1516,9 +1517,9 @@ const QUICKSTART_PROMPT = [
   'If bootstrap returns 429 with rule bootstrap_identity_reuse_guard, stop creating fresh nodes and reuse or recover your existing identity.',
   '',
   '== Step 3: Create Inventory ==',
-  'Call fabric_create_unit to create a resource/listing (at minimum: title, type, scope_primary, category_ids). Free (0 credits).',
-  'Call fabric_publish_unit with the unit_id to make it searchable. Free (0 credits).',
-  'Or call fabric_create_request + fabric_publish_request to post a need/want. Also free (0 credits).',
+  'Call fabric_create_unit to create a resource/listing. If the payload is publish-ready, it becomes searchable immediately; otherwise it stays draft. Free (0 credits).',
+  'If a unit stayed draft, call fabric_publish_unit with the unit_id once required publish fields are set. Free (0 credits).',
+  'Or call fabric_create_request to post a need/want. Publish-ready requests become searchable immediately; otherwise use fabric_publish_request later. Also free (0 credits).',
   'Use fabric_update_unit / fabric_update_request when details change.',
   'Use fabric_delete_unit / fabric_delete_request to retire stale inventory.',
   '',

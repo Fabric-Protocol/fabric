@@ -126,6 +126,89 @@ export type SearchListingsResponse = {
   has_more: boolean;
 };
 
+export type ResourcePublishStatus = 'draft' | 'published';
+
+export type UnitCreateRequest = {
+  title: string;
+  description?: string | null;
+  type?: string | null;
+  condition?: 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'unknown' | null;
+  quantity?: number | null;
+  estimated_value?: number | null;
+  measure?: 'EA' | 'KG' | 'LB' | 'L' | 'GAL' | 'M' | 'FT' | 'HR' | 'DAY' | 'LOT' | 'CUSTOM' | null;
+  custom_measure?: string | null;
+  scope_primary?: SearchScope | null;
+  scope_secondary?: SearchScope[] | null;
+  scope_notes?: string | null;
+  location_text_public?: string | null;
+  origin_region?: Record<string, unknown> | null;
+  dest_region?: Record<string, unknown> | null;
+  service_region?: Record<string, unknown> | null;
+  delivery_format?: string | null;
+  max_ship_days?: number | null;
+  tags?: string[];
+  category_ids?: number[];
+  public_summary?: string | null;
+  language_tag?: string | null;
+  publish_status?: ResourcePublishStatus | null;
+};
+
+export type UnitSummary = {
+  id: string;
+  node_id: string;
+  publish_status: ResourcePublishStatus;
+  created_at: string;
+  updated_at: string;
+  version: number;
+};
+
+export type UnitCreateResponse = {
+  unit: UnitSummary;
+  disclaimer?: string | null;
+};
+
+export type RequestCreateRequest = {
+  title: string;
+  description?: string | null;
+  type?: string | null;
+  condition?: 'new' | 'like_new' | 'good' | 'fair' | 'poor' | 'unknown' | null;
+  quantity?: number | null;
+  measure?: 'EA' | 'KG' | 'LB' | 'L' | 'GAL' | 'M' | 'FT' | 'HR' | 'DAY' | 'LOT' | 'CUSTOM' | null;
+  custom_measure?: string | null;
+  scope_primary?: SearchScope | null;
+  scope_secondary?: SearchScope[] | null;
+  scope_notes?: string | null;
+  location_text_public?: string | null;
+  origin_region?: Record<string, unknown> | null;
+  dest_region?: Record<string, unknown> | null;
+  service_region?: Record<string, unknown> | null;
+  delivery_format?: string | null;
+  max_ship_days?: number | null;
+  need_by?: string | null;
+  accept_substitutions?: boolean;
+  tags?: string[];
+  category_ids?: number[];
+  public_summary?: string | null;
+  language_tag?: string | null;
+  publish_status?: ResourcePublishStatus | null;
+  ttl_minutes?: number;
+};
+
+export type RequestSummary = {
+  id: string;
+  node_id: string;
+  publish_status: ResourcePublishStatus;
+  created_at: string;
+  updated_at: string;
+  version: number;
+  expires_at: string;
+};
+
+export type RequestCreateResponse = {
+  request: RequestSummary;
+  disclaimer?: string | null;
+};
+
 export type OfferStatus = 'pending' | 'accepted_by_a' | 'accepted_by_b' | 'mutually_accepted' | 'rejected' | 'cancelled' | 'countered' | 'expired';
 
 export type OfferObject = {

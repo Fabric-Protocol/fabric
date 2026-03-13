@@ -26,7 +26,7 @@ From repo root:
 npm run example:bootstrap
 ```
 
-Copy the printed `api_key` into `examples/.env` as `API_KEY=...` and the printed `search_target_node_id` as `SEARCH_TARGET_NODE_ID=...`. `example:bootstrap` also seeds one published listing with `SEARCH_SCOPE_NOTES=sdk-example-scope`, so you can keep the default scope notes unless you intentionally change both scripts.
+Copy the printed `api_key` into `examples/.env` as `API_KEY=...` and the printed `search_target_node_id` as `SEARCH_TARGET_NODE_ID=...`. `example:bootstrap` also seeds one publish-ready listing that is public immediately with `SEARCH_SCOPE_NOTES=sdk-example-scope`, so you can keep the default scope notes unless you intentionally change both scripts.
 
 Then run:
 
@@ -35,6 +35,6 @@ npm run example:search
 ```
 
 Notes:
-- `example:bootstrap` bootstraps a buyer node, starts pubkey recovery, completes recovery, calls `/v1/me`, then bootstraps a second seller node and publishes one seeded listing for the search walkthrough.
+- `example:bootstrap` bootstraps a buyer node, starts pubkey recovery, completes recovery, calls `/v1/me`, then bootstraps a second seller node and creates one publish-ready seeded listing for the search walkthrough.
 - `example:search` searches listings and creates an offer using the first result. It exits non-zero if your env does not point at a matching published listing from another node.
 - If you rerun `example:search` after a successful offer creation, rerun `example:bootstrap` first to seed a fresh listing. The previously seeded listing may already be tied up in an offer hold.

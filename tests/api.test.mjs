@@ -727,6 +727,8 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   assert.equal(Boolean(body.paths?.['/v1/categories']?.get), true);
   assert.equal(Boolean(body.paths?.['/v1/search/listings']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/search/requests']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/units']?.post), true);
+  assert.equal(Boolean(body.paths?.['/v1/units/{unit_id}']?.patch), true);
   assert.equal(Boolean(body.paths?.['/v1/requests']?.post), true);
   assert.equal(Boolean(body.paths?.['/v1/requests/{request_id}']?.patch), true);
   assert.equal(Boolean(body.paths?.['/v1/offers']?.post), true);
@@ -776,6 +778,14 @@ test('GET /openapi.json returns valid OpenAPI JSON', async () => {
   const nodeProfileSchema = body.components?.schemas?.NodeProfile ?? {};
   assert.equal(nodeProfileSchema.properties?.language_tag?.nullable, true);
   assert.equal(Array.isArray(nodeProfileSchema.required) && nodeProfileSchema.required.includes('language_tag'), true);
+  const unitCreateRequestSchema = body.components?.schemas?.UnitCreateRequest ?? {};
+  assert.deepEqual(unitCreateRequestSchema.properties?.publish_status?.enum, ['draft', 'published']);
+  const unitCreateResponseSchema = body.components?.schemas?.UnitCreateResponse ?? {};
+  assert.equal(unitCreateResponseSchema.properties?.disclaimer?.nullable, true);
+  const requestCreateRequestSchema = body.components?.schemas?.RequestCreateRequest ?? {};
+  assert.deepEqual(requestCreateRequestSchema.properties?.publish_status?.enum, ['draft', 'published']);
+  const requestCreateResponseSchema = body.components?.schemas?.RequestCreateResponse ?? {};
+  assert.equal(requestCreateResponseSchema.properties?.disclaimer?.nullable, true);
   const offerEventSchema = body.components?.schemas?.OfferEvent ?? {};
   assert.equal(offerEventSchema.properties?.offer_id?.nullable, true);
   assert.equal(offerEventSchema.properties?.type?.enum?.includes('subscription_changed'), true);
@@ -2719,6 +2729,118 @@ test('request ttl_minutes defaults/overrides are enforced and expired requests a
   await app.close();
 });
 
+test('publish-ready unit and request creates auto-publish by default, and publish_status=draft opts out', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-create-auto-public');
+  const apiKey = b.json().api_key.api_key;
+
+  const unitCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-auto-public-unit' },
+    payload: unitPayload('Auto public unit', 'auto-public-unit-scope'),
+  });
+  assert.equal(unitCreate.statusCode, 200);
+  const unitBody = unitCreate.json();
+  assert.equal(unitBody.unit.publish_status, 'published');
+  assert.equal(typeof unitBody.disclaimer, 'string');
+  const unitRows = await query('select published_at from units where id=$1', [unitBody.unit.id]);
+  assert.equal(unitRows.length, 1);
+  assert.notEqual(unitRows[0].published_at, null);
+  const unitProjectionRows = await query('select count(*)::text as c from public_listings where unit_id=$1', [unitBody.unit.id]);
+  assert.equal(Number(unitProjectionRows[0].c), 1);
+
+  const requestCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-auto-public-request' },
+    payload: unitPayload('Auto public request', 'auto-public-request-scope'),
+  });
+  assert.equal(requestCreate.statusCode, 200);
+  const requestBody = requestCreate.json();
+  assert.equal(requestBody.request.publish_status, 'published');
+  assert.equal(typeof requestBody.disclaimer, 'string');
+  const requestRows = await query('select published_at from requests where id=$1', [requestBody.request.id]);
+  assert.equal(requestRows.length, 1);
+  assert.notEqual(requestRows[0].published_at, null);
+  const requestProjectionRows = await query('select count(*)::text as c from public_requests where request_id=$1', [requestBody.request.id]);
+  assert.equal(Number(requestProjectionRows[0].c), 1);
+
+  const draftUnitCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-auto-public-unit-draft' },
+    payload: { ...unitPayload('Forced draft unit', 'forced-draft-unit-scope'), publish_status: 'draft' },
+  });
+  assert.equal(draftUnitCreate.statusCode, 200);
+  const draftUnitBody = draftUnitCreate.json();
+  assert.equal(draftUnitBody.unit.publish_status, 'draft');
+  assert.equal(Object.prototype.hasOwnProperty.call(draftUnitBody, 'disclaimer'), false);
+  const draftUnitRows = await query('select published_at from units where id=$1', [draftUnitBody.unit.id]);
+  assert.equal(draftUnitRows.length, 1);
+  assert.equal(draftUnitRows[0].published_at, null);
+  const draftUnitProjectionRows = await query('select count(*)::text as c from public_listings where unit_id=$1', [draftUnitBody.unit.id]);
+  assert.equal(Number(draftUnitProjectionRows[0].c), 0);
+
+  const draftRequestCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-auto-public-request-draft' },
+    payload: { ...unitPayload('Forced draft request', 'forced-draft-request-scope'), publish_status: 'draft' },
+  });
+  assert.equal(draftRequestCreate.statusCode, 200);
+  const draftRequestBody = draftRequestCreate.json();
+  assert.equal(draftRequestBody.request.publish_status, 'draft');
+  assert.equal(Object.prototype.hasOwnProperty.call(draftRequestBody, 'disclaimer'), false);
+  const draftRequestRows = await query('select published_at from requests where id=$1', [draftRequestBody.request.id]);
+  assert.equal(draftRequestRows.length, 1);
+  assert.equal(draftRequestRows[0].published_at, null);
+  const draftRequestProjectionRows = await query('select count(*)::text as c from public_requests where request_id=$1', [draftRequestBody.request.id]);
+  assert.equal(Number(draftRequestProjectionRows[0].c), 0);
+
+  await app.close();
+});
+
+test('publish_status=published rejects incomplete create without persisting a unit or request', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-create-force-publish-invalid');
+  const apiKey = b.json().api_key.api_key;
+  const unitTitle = `Invalid forced publish unit ${TEST_RUN_SUFFIX}`;
+  const requestTitle = `Invalid forced publish request ${TEST_RUN_SUFFIX}`;
+
+  const unitCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-force-publish-unit-invalid' },
+    payload: {
+      title: unitTitle,
+      publish_status: 'published',
+    },
+  });
+  assert.equal(unitCreate.statusCode, 422);
+  assert.equal(unitCreate.json().error.code, 'validation_error');
+  assert.equal(unitCreate.json().error.details.reason, 'type_required');
+  const unitRows = await query('select count(*)::text as c from units where title=$1', [unitTitle]);
+  assert.equal(Number(unitRows[0].c), 0);
+
+  const requestCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'create-force-publish-request-invalid' },
+    payload: {
+      title: requestTitle,
+      publish_status: 'published',
+    },
+  });
+  assert.equal(requestCreate.statusCode, 422);
+  assert.equal(requestCreate.json().error.code, 'validation_error');
+  assert.equal(requestCreate.json().error.details.reason, 'type_required');
+  const requestRows = await query('select count(*)::text as c from requests where title=$1', [requestTitle]);
+  assert.equal(Number(requestRows[0].c), 0);
+
+  await app.close();
+});
+
 test('unit publish and unpublish toggle projection visibility', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-unit-publish-unpublish');
@@ -2729,10 +2851,11 @@ test('unit publish and unpublish toggle projection visibility', async () => {
     method: 'POST',
     url: '/v1/units',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'unit-publish-unpublish-create' },
-    payload: unitPayload('Unit publish/unpublish', 'unit-publish-unpublish-scope'),
+    payload: { ...unitPayload('Unit publish/unpublish', 'unit-publish-unpublish-scope'), publish_status: 'draft' },
   });
   assert.equal(created.statusCode, 200);
   const unitId = created.json().unit.id;
+  assert.equal(created.json().unit.publish_status, 'draft');
 
   const publish = await app.inject({
     method: 'POST',
@@ -2785,10 +2908,11 @@ test('request publish and unpublish toggle projection visibility', async () => {
     method: 'POST',
     url: '/v1/requests',
     headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'request-publish-unpublish-create' },
-    payload: unitPayload('Request publish/unpublish', 'request-publish-unpublish-scope'),
+    payload: { ...unitPayload('Request publish/unpublish', 'request-publish-unpublish-scope'), publish_status: 'draft' },
   });
   assert.equal(created.statusCode, 200);
   const requestId = created.json().request.id;
+  assert.equal(created.json().request.publish_status, 'draft');
 
   const publish = await app.inject({
     method: 'POST',
@@ -2896,6 +3020,62 @@ test('unpublish returns 404 for non-owner and keeps projections published', asyn
   await app.close();
 });
 
+test('patching published units and requests refreshes their public projections', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-patch-public-projections');
+  const apiKey = b.json().api_key.api_key;
+
+  const createdUnit = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-public-unit-create' },
+    payload: unitPayload('Patch public unit', 'patch-public-unit-before'),
+  });
+  assert.equal(createdUnit.statusCode, 200);
+  const unitId = createdUnit.json().unit.id;
+  const patchedUnit = await app.inject({
+    method: 'PATCH',
+    url: `/v1/units/${unitId}`,
+    headers: {
+      authorization: `ApiKey ${apiKey}`,
+      'idempotency-key': 'patch-public-unit-update',
+      'if-match': String(createdUnit.json().unit.version),
+    },
+    payload: { public_summary: 'Patch public unit updated', scope_notes: 'patch-public-unit-after' },
+  });
+  assert.equal(patchedUnit.statusCode, 200);
+  const unitProjectionRows = await query('select doc from public_listings where unit_id=$1', [unitId]);
+  assert.equal(unitProjectionRows.length, 1);
+  assert.equal(unitProjectionRows[0].doc.public_summary, 'Patch public unit updated');
+  assert.equal(unitProjectionRows[0].doc.scope_notes, 'patch-public-unit-after');
+
+  const createdRequest = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'patch-public-request-create' },
+    payload: unitPayload('Patch public request', 'patch-public-request-before'),
+  });
+  assert.equal(createdRequest.statusCode, 200);
+  const requestId = createdRequest.json().request.id;
+  const patchedRequest = await app.inject({
+    method: 'PATCH',
+    url: `/v1/requests/${requestId}`,
+    headers: {
+      authorization: `ApiKey ${apiKey}`,
+      'idempotency-key': 'patch-public-request-update',
+      'if-match': String(createdRequest.json().request.version),
+    },
+    payload: { public_summary: 'Patch public request updated', scope_notes: 'patch-public-request-after' },
+  });
+  assert.equal(patchedRequest.statusCode, 200);
+  const requestProjectionRows = await query('select doc from public_requests where request_id=$1', [requestId]);
+  assert.equal(requestProjectionRows.length, 1);
+  assert.equal(requestProjectionRows[0].doc.public_summary, 'Patch public request updated');
+  assert.equal(requestProjectionRows[0].doc.scope_notes, 'patch-public-request-after');
+
+  await app.close();
+});
+
 test('DELETE unit/request endpoints soft-delete resources and hide them from detail reads', async () => {
   const app = buildApp();
   const b = await bootstrap(app, 'boot-delete-soft');
@@ -2957,6 +3137,10 @@ test('DELETE unit/request endpoints soft-delete resources and hide them from det
   assert.equal(requestRows.length, 1);
   assert.notEqual(unitRows[0].deleted_at, null);
   assert.notEqual(requestRows[0].deleted_at, null);
+  const unitProjectionRows = await query('select count(*)::text as c from public_listings where unit_id=$1', [unitId]);
+  const requestProjectionRows = await query('select count(*)::text as c from public_requests where request_id=$1', [requestId]);
+  assert.equal(Number(unitProjectionRows[0].c), 0);
+  assert.equal(Number(requestProjectionRows[0].c), 0);
   await app.close();
 });
 
@@ -9464,6 +9648,19 @@ test('GET /v1/credits/ledger pagination with cursor returns next page', async ()
   await repo.addCredit(nodeId, 'adjustment_manual', 10, { reason: 'test-ledger-page-1' });
   await repo.addCredit(nodeId, 'adjustment_manual', 20, { reason: 'test-ledger-page-2' });
   await repo.addCredit(nodeId, 'adjustment_manual', 30, { reason: 'test-ledger-page-3' });
+  await query(
+    `update credit_ledger
+        set created_at = case meta->>'reason'
+          when 'test-ledger-page-1' then now() - interval '3 second'
+          when 'test-ledger-page-2' then now() - interval '2 second'
+          when 'test-ledger-page-3' then now() - interval '1 second'
+          else created_at
+        end
+      where node_id = $1
+        and type = 'adjustment_manual'
+        and meta->>'reason' in ('test-ledger-page-1', 'test-ledger-page-2', 'test-ledger-page-3')`,
+    [nodeId],
+  );
 
   const page1 = await app.inject({
     method: 'GET',

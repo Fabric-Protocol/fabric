@@ -17,21 +17,23 @@ This document is **normative**: requirements here are **MUST / MUST NOT** unless
 
 ---
 
-## 3) Unit is the canonical private object
+## 3) Unit is the canonical source object
 - A Unit **MUST** represent an allocatable resource with explicit measure and quantity.
 - Quantity **MAY** be unknown/null to allow uncertainty.
-- Units **MUST** remain private unless explicitly published.
+- Units **MUST** remain canonical source records; public visibility is always through derived projections.
 
 ---
 
-## 4) Private-by-default is non-negotiable
-- All Units and Requests **MUST** be private by default.
-- Publication **MUST** be explicit; there is **NO** implicit “public unless hidden.”
+## 4) Create-time publication defaults to public when ready
+- All Units and Requests **MUST** start as canonical source records, never direct public rows.
+- Create endpoints **MUST** auto-publish by default when the payload satisfies publish requirements and the Node is eligible to publish.
+- If publish requirements are not met, create endpoints **MUST** save a draft instead of creating a public projection.
+- Callers **MAY** force draft creation even when publish-ready.
 
 ---
 
 ## 5) Public marketplace behavior is implemented as projections
-- Public listings and public requests **MUST** be derived projections created only when a Node publishes.
+- Public listings and public requests **MUST** be derived projections created only when a Node publishes, whether that publish happens explicitly or automatically during create.
 - Projections **MUST** be minimal (allowlist fields only):
   - **MUST NOT** expose precise geo publicly; geo is **internal-only** for matching/ranking.
   - **MUST NOT** expose contact info publicly.
@@ -79,9 +81,9 @@ MVP note:
 
 ---
 
-## 11) Type is required at publish (not at creation)
-- Draft private Units/Requests **MAY** omit type.
-- Type **MUST** be required at publish time to support matching/search.
+## 11) Type is required for public visibility, not for draft creation
+- Draft Units/Requests **MAY** omit type.
+- Type **MUST** be required whenever a create or publish action would make the object publicly visible.
 
 ---
 

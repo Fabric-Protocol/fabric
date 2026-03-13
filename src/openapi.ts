@@ -557,6 +557,50 @@ export const openApiDocument = {
         },
       },
     },
+    '/v1/units': {
+      post: {
+        summary: 'Create a new unit',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [{ $ref: '#/components/parameters/IdempotencyKeyHeader' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/UnitCreateRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Unit created', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnitCreateResponse' } } } },
+          '401': { description: 'Unauthorized' },
+          '422': { description: 'Validation error' },
+        },
+      },
+    },
+    '/v1/units/{unit_id}': {
+      patch: {
+        summary: 'Patch a unit',
+        security: [{ ApiKeyAuth: [] }],
+        parameters: [
+          { $ref: '#/components/parameters/UnitIdPath' },
+          { $ref: '#/components/parameters/IdempotencyKeyHeader' },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/UnitPatchRequest' },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Unit patched', content: { 'application/json': { schema: { $ref: '#/components/schemas/UnitPatchResponse' } } } },
+          '401': { description: 'Unauthorized' },
+          '409': { description: 'Stale write conflict' },
+          '422': { description: 'Validation error' },
+        },
+      },
+    },
     '/v1/requests': {
       post: {
         summary: 'Create a new request',
@@ -804,6 +848,12 @@ export const openApiDocument = {
         required: true,
         schema: { type: 'string', format: 'uuid' },
       },
+      UnitIdPath: {
+        name: 'unit_id',
+        in: 'path',
+        required: true,
+        schema: { type: 'string', format: 'uuid' },
+      },
       EventsSinceQuery: {
         name: 'since',
         in: 'query',
@@ -975,6 +1025,88 @@ export const openApiDocument = {
           ttl_minutes: { type: 'integer', minimum: 15, maximum: 10080 },
         },
       },
+      UnitCreateRequest: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string', nullable: true },
+          type: { type: 'string', nullable: true },
+          condition: { type: 'string', nullable: true },
+          quantity: { type: 'number', nullable: true },
+          estimated_value: { type: 'number', nullable: true },
+          measure: { type: 'string', nullable: true },
+          custom_measure: { type: 'string', nullable: true },
+          scope_primary: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'], nullable: true },
+          scope_secondary: { type: 'array', items: { type: 'string' }, nullable: true },
+          scope_notes: { type: 'string', nullable: true },
+          location_text_public: { type: 'string', nullable: true },
+          origin_region: { type: 'object', additionalProperties: true, nullable: true },
+          dest_region: { type: 'object', additionalProperties: true, nullable: true },
+          service_region: { type: 'object', additionalProperties: true, nullable: true },
+          delivery_format: { type: 'string', nullable: true },
+          max_ship_days: { type: 'integer', minimum: 1, maximum: 30, nullable: true },
+          tags: { type: 'array', items: { type: 'string' } },
+          category_ids: { type: 'array', items: { type: 'integer' } },
+          public_summary: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
+          publish_status: { type: 'string', enum: ['draft', 'published'] },
+        },
+        required: ['title'],
+      },
+      UnitPatchRequest: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string', nullable: true },
+          type: { type: 'string', nullable: true },
+          condition: { type: 'string', nullable: true },
+          quantity: { type: 'number', nullable: true },
+          estimated_value: { type: 'number', nullable: true },
+          measure: { type: 'string', nullable: true },
+          custom_measure: { type: 'string', nullable: true },
+          scope_primary: { type: 'string', enum: ['local_in_person', 'remote_online_service', 'ship_to', 'digital_delivery', 'OTHER'], nullable: true },
+          scope_secondary: { type: 'array', items: { type: 'string' }, nullable: true },
+          scope_notes: { type: 'string', nullable: true },
+          location_text_public: { type: 'string', nullable: true },
+          origin_region: { type: 'object', additionalProperties: true, nullable: true },
+          dest_region: { type: 'object', additionalProperties: true, nullable: true },
+          service_region: { type: 'object', additionalProperties: true, nullable: true },
+          delivery_format: { type: 'string', nullable: true },
+          max_ship_days: { type: 'integer', minimum: 1, maximum: 30, nullable: true },
+          tags: { type: 'array', items: { type: 'string' } },
+          category_ids: { type: 'array', items: { type: 'integer' } },
+          public_summary: { type: 'string', nullable: true },
+          language_tag: { type: 'string', nullable: true },
+        },
+      },
+      UnitSummary: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          node_id: { type: 'string', format: 'uuid' },
+          publish_status: { type: 'string' },
+          created_at: { type: 'string' },
+          updated_at: { type: 'string' },
+          version: { type: 'integer' },
+        },
+        required: ['id', 'node_id', 'publish_status', 'created_at', 'updated_at', 'version'],
+      },
+      UnitCreateResponse: {
+        type: 'object',
+        properties: {
+          unit: { $ref: '#/components/schemas/UnitSummary' },
+          disclaimer: { type: 'string', nullable: true },
+        },
+        required: ['unit'],
+      },
+      UnitPatchResponse: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          version: { type: 'integer' },
+        },
+        required: ['id', 'version'],
+      },
       RequestCreateRequest: {
         type: 'object',
         properties: {
@@ -1000,6 +1132,7 @@ export const openApiDocument = {
           category_ids: { type: 'array', items: { type: 'integer' } },
           public_summary: { type: 'string', nullable: true },
           language_tag: { type: 'string', nullable: true },
+          publish_status: { type: 'string', enum: ['draft', 'published'] },
           ttl_minutes: { type: 'integer', minimum: 60, maximum: 525600 },
         },
         required: ['title'],
@@ -1049,6 +1182,7 @@ export const openApiDocument = {
         type: 'object',
         properties: {
           request: { $ref: '#/components/schemas/RequestSummary' },
+          disclaimer: { type: 'string', nullable: true },
         },
         required: ['request'],
       },

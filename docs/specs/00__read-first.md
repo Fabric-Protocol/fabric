@@ -33,7 +33,7 @@ If any requirement conflicts, resolve in this order:
 - **Node**: the principal identity boundary. All actions are attributed to a Node; API keys are scoped to one Node.
 - **Unit**: canonical private object representing an allocatable resource with **quantity + measure** (quantity may be null/unknown).
 - **Request**: canonical private object representing demand/need; parallel to Units; publishable and searchable.
-- **Projection**: deterministic derived public record from canonical private objects when explicitly published (e.g., `public_listings`, `public_requests`).
+- **Projection**: deterministic derived public record from canonical private objects when published, whether via explicit publish endpoints or create-time auto-publication (e.g., `public_listings`, `public_requests`).
 - **Public Listing / Public Request**: allowlisted public projection payload derived from Unit/Request. Never includes precise geo or contact.
 - **Search**: authenticated, credit-metered query over projections (two endpoints: listings vs requests). Pre-purchase daily limits apply (20/day combined) until first purchase.
 - **Offer**: structured negotiation action targeting either a Unit or a Request (`POST /v1/offers` supports unit-target mode and request-target mode); includes state machine, holds summary, concurrency version.
@@ -179,7 +179,7 @@ active | released | committed | expired
 none | active | past_due | canceled
 
 5) Global “do not violate” product constraints (normative summary)
-Private-by-default is non-negotiable: Units/Requests are private unless explicitly published.
+Create-time publication defaults to public when a Unit/Request is publish-ready; otherwise it remains draft. Callers may explicitly request a draft on create or use unpublish after creation.
 
 Projections are allowlisted and must never expose precise geo or contact info.
 

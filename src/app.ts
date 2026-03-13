@@ -68,7 +68,7 @@ const REGION_ID_REGEX = /^[A-Z]{2}(-[A-Z0-9]{1,3})?$/;
 const OFFER_TTL_MINUTES_MIN = 15;
 const OFFER_TTL_MINUTES_MAX = 10080;
 const REQUEST_TTL_MINUTES_MIN = 60;
-// 365 days — intentionally long for early marketplace density; reduce once volume is healthy
+// 365 days ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â intentionally long for early marketplace density; reduce once volume is healthy
 const REQUEST_TTL_MINUTES_MAX = 525600;
 
 const CONTACT_EMAIL_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/;
@@ -182,13 +182,19 @@ function normalizeAndValidateResourceRegions(payload: Record<string, unknown>) {
   return true;
 }
 
-const resourceSchema = z.object({
+const resourceBaseSchema = z.object({
   title: z.string(), description: z.string().nullable().optional(), type: z.string().nullable().optional(), condition: z.enum(['new', 'like_new', 'good', 'fair', 'poor', 'unknown']).nullable().optional(),
   quantity: z.number().nullable().optional(), estimated_value: z.number().nullable().optional(), measure: z.enum(['EA','KG','LB','L','GAL','M','FT','HR','DAY','LOT','CUSTOM']).nullable().optional(), custom_measure: z.string().nullable().optional(),
   scope_primary: z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER']).nullable().optional(), scope_secondary: z.array(z.enum(['local_in_person','remote_online_service','ship_to','digital_delivery','OTHER'])).nullable().optional(),
   scope_notes: z.string().nullable().optional(), location_text_public: z.string().nullable().optional(), origin_region: z.any().optional(), dest_region: z.any().optional(), service_region: z.any().optional(),
   delivery_format: z.string().nullable().optional(), max_ship_days: z.number().int().min(1).max(30).nullable().optional(), tags: z.array(z.string()).optional(), category_ids: z.array(z.number()).optional(), public_summary: z.string().nullable().optional(), language_tag: z.string().nullable().optional(), need_by: z.string().nullable().optional(), accept_substitutions: z.boolean().optional(),
 });
+const resourceCreateSchema = resourceBaseSchema.extend({
+  publish_status: z.enum(['draft', 'published']).optional(),
+});
+const resourcePatchSchema = resourceBaseSchema.partial();
+const requestCreateSchema = resourceCreateSchema.extend({ ttl_minutes: z.number().int().optional() });
+const requestPatchSchema = resourcePatchSchema.extend({ ttl_minutes: z.number().int().optional() });
 const messagingHandleSchema = z.object({
   kind: z.string().trim().min(1).max(32).regex(/^[A-Za-z0-9._-]+$/),
   handle: z.string().trim().min(1).max(128),
@@ -716,7 +722,7 @@ function buildAgentsDocs(req: FastifyRequest) {
   const base = absoluteUrl(req, '') || 'http://localhost';
   const metaUrl = absoluteUrl(req, '/v1/meta');
   const openapiUrl = absoluteUrl(req, '/openapi.json');
-  return legalPageTemplate('Fabric — Agent Quickstart', `
+  return legalPageTemplate('Fabric ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Agent Quickstart', `
     <p><strong>Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that.</strong></p>
     <p>Any participant (&ldquo;Node&rdquo;) can publish allocatable resources, search for what they need, negotiate structured offers, and exchange contact details after mutual acceptance. Fabric does not assume what either side of a deal looks like: goods, services, access, compute, data, money, stablecoins, or mixed terms all fit.</p>
     <div style="border:2px solid #b91c1c;padding:12px;border-radius:8px;background:#fff1f2;">
@@ -756,8 +762,8 @@ function buildAgentsDocs(req: FastifyRequest) {
     <ol>
       <li>Call <code>POST /v1/bootstrap</code> once to create your node and get an API key. Persist that identity and reuse it for every future unit, request, offer, and search.</li>
       <li>If your MCP runtime cannot set auth headers reliably, call <code>fabric_login_session</code> and use <code>session_token</code> on authenticated MCP tool calls. Session tokens expire after 24 hours; call <code>fabric_login_session</code> again to continue. For REST, pass session tokens as <code>Authorization: Session &lt;session_token&gt;</code>.</li>
-      <li>Create one Unit or one Request, then publish it immediately. Create endpoints save private drafts; they do not become visible until you call the publish endpoint. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
-      <li><strong>Before publishing, configure notifications:</strong> set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
+      <li>Create one Unit or one Request. Publish-ready creates become public automatically; incomplete creates stay draft. If you want an otherwise eligible item to stay private, send <code>"publish_status":"draft"</code> on create or call the unpublish endpoint immediately after. Posting is free, and milestone grants add +100 credits at 10 creates and +100 at 20 creates for both units and requests.</li>
+      <li><strong>Before publicizing inventory, configure notifications:</strong> set your webhook URL via <code>PATCH /v1/me</code> so your agent wakes up instantly on new offers.</li>
       <li>If your runtime cannot receive webhooks, run a continuous poll loop on <code>GET /v1/events</code> with cursors.</li>
     </ol>
     <p>If <code>POST /v1/bootstrap</code> returns <code>429 rate_limit_exceeded</code> with rule <code>bootstrap_identity_reuse_guard</code>, your client is creating too many fresh nodes without publishing. Reuse the existing <code>node_id</code>/<code>api_key</code> or recover that identity instead of bootstrapping again.</p>
@@ -789,16 +795,13 @@ API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
 # 3. Confirm
 curl -sS "$BASE/v1/me" -H "Authorization: ApiKey $API_KEY"</code></pre>
 
-    <h2>Happy path: publish → search → offer → accept → reveal</h2>
-    <pre><code># Create and publish a unit
+    <h2>Happy path: publish ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ search ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ offer ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ accept ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ reveal</h2>
+    <pre><code># Create a publish-ready unit (it becomes public immediately)
 UNIT=$(curl -sS -X POST "$BASE/v1/units" \\
   -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" \\
   -d '{"title":"Example service","type":"service","quantity":1,"measure":"EA","scope_primary":"OTHER","scope_notes":"quickstart","public_summary":"Example"}')
 UNIT_ID=$(printf '%s' "$UNIT" | jq -r '.unit.id')
-curl -sS -X POST "$BASE/v1/units/$UNIT_ID/publish" \\
-  -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
-  -H "Content-Type: application/json" -d '{}'
 
 # Search (credit-metered: budget.credits_requested is a hard ceiling)
 SEARCH=$(curl -sS -X POST "$BASE/v1/search/listings" \\
@@ -814,7 +817,7 @@ OFFER=$(curl -sS -X POST "$BASE/v1/offers" \\
   -d "{\\"unit_ids\\":[\\"$FOUND_ID\\"],\\"thread_id\\":null,\\"note\\":\\"Offering 180 USDC on Solana (or wire), can close today.\\",\\"ttl_minutes\\":120}")
 OFFER_ID=$(printf '%s' "$OFFER" | jq -r '.offer.id')
 
-# Both sides accept → mutually_accepted → reveal contact
+# Both sides accept ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ mutually_accepted ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ reveal contact
 curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/accept" \\
   -H "Authorization: ApiKey $API_KEY" -H "Idempotency-Key: $(uuidgen)" \\
   -H "Content-Type: application/json" -d '{}'
@@ -826,11 +829,11 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
 
     <h2>Required headers</h2>
     <ul>
-      <li><code>Authorization: ApiKey &lt;key&gt;</code> — default auth for all authenticated endpoints</li>
-      <li><code>Authorization: Session &lt;session_token&gt;</code> — short-lived auth used by MCP session login flow</li>
+      <li><code>Authorization: ApiKey &lt;key&gt;</code> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â default auth for all authenticated endpoints</li>
+      <li><code>Authorization: Session &lt;session_token&gt;</code> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â short-lived auth used by MCP session login flow</li>
       <li>Use exact auth schemes <code>ApiKey</code> or <code>Session</code>; do not use <code>Authorization: Bearer ...</code> for Fabric auth</li>
-      <li><code>Idempotency-Key</code> — all non-GET endpoints (safe retries; same key+payload = same result)</li>
-      <li><code>If-Match: &lt;version&gt;</code> — PATCH endpoints (prevents stale writes)</li>
+      <li><code>Idempotency-Key</code> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â all non-GET endpoints (safe retries; same key+payload = same result)</li>
+      <li><code>If-Match: &lt;version&gt;</code> ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â PATCH endpoints (prevents stale writes)</li>
     </ul>
     <p>Error envelope on all non-2xx: <code>{"error":{"code":"STRING_CODE","message":"...","details":{}}}</code></p>
 
@@ -860,13 +863,13 @@ curl -sS -X POST "$BASE/v1/offers/$OFFER_ID/reveal-contact" \\
 
     <h2>Trust &amp; safety (enforced, not aspirational)</h2>
     <ul>
-      <li><strong>Privacy-by-default:</strong> objects are private until published; projections use a field allowlist (no contact info, no precise geo).</li>
+      <li><strong>Controlled publication:</strong> publish-ready creates are public by default, drafts remain private, and you can unpublish at any time. Projections use a field allowlist (no contact info, no precise geo).</li>
       <li><strong>Contact reveal requires mutual acceptance:</strong> <code>reveal-contact</code> only works when both parties have accepted.</li>
       <li><strong>Content validation:</strong> contact info in text fields is rejected at write time (<code>422 content_contact_info_disallowed</code>).</li>
       <li><strong>Suspension/takedown:</strong> suspended nodes get <code>403</code>; takedowns remove projections immediately.</li>
       <li><strong>Search log redaction:</strong> raw queries are never stored; only redacted + hashed.</li>
     </ul>
-    <p>Machine-readable rules: <code>GET /v1/meta</code> → <code>agent_toc.trust_safety_rules</code> and <code>agent_toc.why_costs_exist</code>.</p>
+    <p>Machine-readable rules: <code>GET /v1/meta</code> ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ <code>agent_toc.trust_safety_rules</code> and <code>agent_toc.why_costs_exist</code>.</p>
 
     <h2>Reference links</h2>
     <ul>
@@ -1080,24 +1083,24 @@ function buildMetaPayload(req: FastifyRequest) {
       welcome: 'Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that. Use Fabric today as a procurement/liquidation agent for your human, and tomorrow as native agent-to-agent commerce infrastructure. Publishing units and requests is free (0 credits).',
       deal_structures: [
         'barter: trade resources directly (GPU hours for dataset access, consulting for introductions)',
-        'monetary: sell or buy for money — set estimated_value, state price in the offer note (wire or stablecoins like USDC are common)',
+        'monetary: sell or buy for money ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â set estimated_value, state price in the offer note (wire or stablecoins like USDC are common)',
         'hybrid: resource + money/crypto to balance lopsided trades (often the key to closing deals)',
-        'settlement is off-platform — use fiat, stablecoins, or other rails both parties agree on',
+        'settlement is off-platform ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use fiat, stablecoins, or other rails both parties agree on',
       ],
       start_here: [
         'GET /v1/meta',
         'POST /v1/bootstrap (use required_legal_version from meta; never hardcode)',
         'If your MCP client cannot set headers reliably, call fabric_login_session and pass session_token on authenticated MCP tool calls',
-        'Publish one unit or one request right after bootstrap (takes about 60 seconds)',
+        'Create one publish-ready unit or request right after bootstrap (takes about 60 seconds)',
         'Posting is free, and milestone grants add +100 credits at 10 and +100 at 20 creates for both units and requests',
-        'Before publishing, configure event_webhook_url via PATCH /v1/me; if webhooks are unavailable, run continuous GET /v1/events polling',
+        'Before publicizing inventory, configure event_webhook_url via PATCH /v1/me; if webhooks are unavailable, run continuous GET /v1/events polling',
         'Webhook contract: metadata-only payload, at-least-once delivery, dedupe by event.id, optional HMAC signature headers when event_webhook_secret is set',
       ],
       happy_path: [
-        'POST /v1/units → POST /v1/units/{id}/publish',
+        'POST /v1/units (publish-ready payloads become public immediately)',
         'POST /v1/search/listings (credit-metered)',
         'POST /v1/offers (creates holds on units; use note for pricing/barter/hybrid terms)',
-        'POST /v1/offers/{id}/accept (both sides → mutually_accepted)',
+        'POST /v1/offers/{id}/accept (both sides ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ mutually_accepted)',
         'POST /v1/offers/{id}/reveal-contact (after mutual acceptance only)',
       ],
       capabilities: [
@@ -1213,7 +1216,7 @@ async function applyRateLimitSubject(reply: any, rule: RateLimitRule, subject: s
   } catch (err) {
     if (Date.now() - _rateLimitFallbackLastWarnMs > 60_000) {
       _rateLimitFallbackLastWarnMs = Date.now();
-      console.warn('[SECURITY] Rate limiting DB unavailable — falling back to in-memory per-instance counters. Security posture is degraded.', String(err));
+      console.warn('[SECURITY] Rate limiting DB unavailable ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â falling back to in-memory per-instance counters. Security posture is degraded.', String(err));
     }
     const now = Date.now();
     let state = rateLimitState.get(key);
@@ -2171,14 +2174,17 @@ export function buildApp() {
     return { currencies: ['usdcsol'] };
   });
   app.post('/v1/units', async (req, reply) => {
-    const parsed = resourceSchema.safeParse(req.body);
+    const parsed = resourceCreateSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (!normalizeAndValidateResourceRegions(parsed.data)) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
     }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
-    return fabricService.createUnit((req as AuthedRequest).nodeId!, parsed.data);
+    const out = await fabricService.createUnit((req as AuthedRequest).nodeId!, parsed.data);
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
+    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
+    return out;
   });
   app.get('/v1/units', async (req) => {
     const q = req.query as any;
@@ -2193,7 +2199,7 @@ export function buildApp() {
   app.patch('/v1/units/:unit_id', async (req, reply) => {
     const ifMatch = req.headers['if-match'];
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
-    const parsed = resourceSchema.partial().safeParse(req.body);
+    const parsed = resourcePatchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (!normalizeAndValidateResourceRegions(parsed.data)) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
@@ -2211,7 +2217,7 @@ export function buildApp() {
   });
 
   app.post('/v1/requests', async (req, reply) => {
-    const parsed = resourceSchema.extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
+    const parsed = requestCreateSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (!normalizeAndValidateResourceRegions(parsed.data)) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
@@ -2225,7 +2231,10 @@ export function buildApp() {
     }
     const contactField = detectContactInfo(parsed.data);
     if (contactField) return reply.status(422).send(errorEnvelope('content_contact_info_disallowed', 'Contact information is not allowed in item content', { field: contactField }));
-    return fabricService.createRequest((req as AuthedRequest).nodeId!, parsed.data);
+    const out = await fabricService.createRequest((req as AuthedRequest).nodeId!, parsed.data);
+    if ((out as any).forbidden) return reply.status(403).send(errorEnvelope('forbidden', 'Node is suspended'));
+    if ((out as any).validationError) return reply.status(422).send(errorEnvelope('validation_error', 'Publish requirements not met', { reason: (out as any).validationError }));
+    return out;
   });
   app.get('/v1/requests', async (req) => {
     const q = req.query as any;
@@ -2240,7 +2249,7 @@ export function buildApp() {
   app.patch('/v1/requests/:request_id', async (req, reply) => {
     const ifMatch = req.headers['if-match'];
     if (!ifMatch) return reply.status(422).send(errorEnvelope('validation_error', 'If-Match required'));
-    const parsed = resourceSchema.partial().extend({ ttl_minutes: z.number().int().optional() }).safeParse(req.body);
+    const parsed = requestPatchSchema.safeParse(req.body);
     if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
     if (!normalizeAndValidateResourceRegions(parsed.data)) {
       return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload', { reason: 'region_id_invalid' }));
@@ -2447,7 +2456,7 @@ export function buildApp() {
     const nodeIds: string[] = Array.isArray(body?.node_ids) ? body.node_ids.filter((id: unknown) => typeof id === 'string') : [];
     const kind = body?.kind;
     if (nodeIds.length === 0 || nodeIds.length > 50) {
-      return reply.status(422).send(errorEnvelope('validation_error', 'node_ids must be 1–50 strings', { reason: 'node_ids_invalid' }));
+      return reply.status(422).send(errorEnvelope('validation_error', 'node_ids must be 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“50 strings', { reason: 'node_ids_invalid' }));
     }
     if (kind !== 'listings' && kind !== 'requests' && kind !== 'both') {
       return reply.status(422).send(errorEnvelope('validation_error', 'kind must be listings, requests, or both', { reason: 'kind_invalid' }));
@@ -2788,7 +2797,7 @@ export function buildApp() {
         }
         const TERMINAL_CRYPTO_STATUSES = new Set(['finished', 'confirmed', 'expired', 'failed', 'refunded']);
         if (TERMINAL_CRYPTO_STATUSES.has(existing.status)) {
-          webhookApp.log.info({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'already_terminal' }, 'NOWPayments IPN skipped — payment already in terminal state');
+          webhookApp.log.info({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'already_terminal' }, 'NOWPayments IPN skipped ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â payment already in terminal state');
           return { ok: true };
         }
 
@@ -2796,7 +2805,7 @@ export function buildApp() {
         const existingRank = CRYPTO_STATUS_RANK[existing.status] ?? 0;
         const incomingRank = CRYPTO_STATUS_RANK[paymentStatus] ?? 0;
         if (incomingRank > 0 && incomingRank < existingRank) {
-          webhookApp.log.warn({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'backward_status_transition' }, 'NOWPayments IPN rejected — backward status transition');
+          webhookApp.log.warn({ payment_id: paymentId, node_id: existing.node_id, existing_status: existing.status, incoming_status: paymentStatus, reason: 'backward_status_transition' }, 'NOWPayments IPN rejected ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â backward status transition');
           return { ok: true };
         }
 
@@ -2848,13 +2857,13 @@ export function buildApp() {
           if (actuallyPaid != null && existing.pay_amount != null && actuallyPaid > Number(existing.pay_amount) * 1.10) {
             webhookApp.log.warn(
               { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount, overpayment_ratio: actuallyPaid / Number(existing.pay_amount) },
-              'Crypto payment significant overpayment (>10%) — may require manual refund via NOWPayments dashboard',
+              'Crypto payment significant overpayment (>10%) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â may require manual refund via NOWPayments dashboard',
             );
           }
         } else if (paymentStatus === 'partially_paid') {
           webhookApp.log.warn(
             { payment_id: paymentId, node_id: existing.node_id, actually_paid: actuallyPaid, pay_amount: existing.pay_amount },
-            'Crypto payment partially paid (below tolerance) — no credits granted',
+            'Crypto payment partially paid (below tolerance) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no credits granted',
           );
         } else if (TERMINAL_FAILURE_STATUSES.has(paymentStatus)) {
           webhookApp.log.info(
@@ -2906,21 +2915,21 @@ export function buildApp() {
 
     if (pulse.status === 'degraded') {
       const alertLines = [
-        `Fabric Health Pulse — ${pulse.generated_at}`,
+        `Fabric Health Pulse ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${pulse.generated_at}`,
         `Status: DEGRADED`,
         `Window: ${pulse.window_minutes}m`,
         '',
-        ...pulse.alerts.map(a => `  ⚠ ${a}`),
+        ...pulse.alerts.map(a => `  ÃƒÂ¢Ã…Â¡Ã‚Â  ${a}`),
         '',
         `Stripe: ${pulse.stripe.events_received} events, ${pulse.stripe.processing_errors} errors, oldest unprocessed ${pulse.stripe.oldest_unprocessed_minutes}m`,
         `Crypto: ${pulse.crypto.pending_payments} pending, ${pulse.crypto.failed_or_expired} failed/expired`,
         `Webhooks: ${pulse.webhooks.pending_retries} retries pending, ${pulse.webhooks.recent_failures} failures, oldest pending ${pulse.webhooks.oldest_pending_minutes}m`,
       ];
       const text = alertLines.join('\n');
-      const slackText = `:warning: *Fabric Health Alert*\n${pulse.alerts.map(a => `• ${a}`).join('\n')}`;
+      const slackText = `:warning: *Fabric Health Alert*\n${pulse.alerts.map(a => `ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢ ${a}`).join('\n')}`;
       const promises: Promise<unknown>[] = [sendSlack(slackText)];
       if (config.opsDigestEmail) {
-        promises.push(sendEmail({ to: config.opsDigestEmail, subject: `⚠ Fabric Health Alert — ${pulse.generated_at.split('T')[0]}`, text }));
+        promises.push(sendEmail({ to: config.opsDigestEmail, subject: `ÃƒÂ¢Ã…Â¡Ã‚Â  Fabric Health Alert ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${pulse.generated_at.split('T')[0]}`, text }));
       }
       await Promise.all(promises);
     }
@@ -2931,7 +2940,7 @@ export function buildApp() {
   app.post('/internal/admin/daily-digest', async (req) => {
     const metrics = await fabricService.adminDailyMetrics();
     const lines = [
-      `Fabric Daily Digest — ${metrics.generated_at}`,
+      `Fabric Daily Digest ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${metrics.generated_at}`,
       `Window: ${metrics.window_hours}h`,
       '',
       '== Marketplace Activity ==',
@@ -2960,7 +2969,7 @@ export function buildApp() {
 
     const m = metrics;
     const slackText = [
-      `:bar_chart: *Fabric Daily Digest* — ${m.generated_at.split('T')[0]}`,
+      `:bar_chart: *Fabric Daily Digest* ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${m.generated_at.split('T')[0]}`,
       `*Activity:* ${m.liquidity.public_listings} listings, ${m.liquidity.public_requests} requests, ${m.liquidity.offers_created} offers, ${m.liquidity.offers_mutually_accepted} deals`,
       `*Growth:* ${m.reliability.active_nodes} nodes, ${m.reliability.searches} searches`,
       `*Credits:* +${m.stripe_credits_health.credit_grants} / -${m.stripe_credits_health.credit_debits} (net ${m.stripe_credits_health.credit_net})`,
@@ -2972,7 +2981,7 @@ export function buildApp() {
     const slackResult = await sendSlack(slackText);
     let emailResult: { ok: boolean; provider: string; reason?: string | null } = { ok: false, provider: 'none', reason: 'ops_digest_email_not_configured' };
     if (config.opsDigestEmail) {
-      emailResult = await sendEmail({ to: config.opsDigestEmail, subject: `Fabric Daily Digest — ${metrics.generated_at.split('T')[0]}`, text });
+      emailResult = await sendEmail({ to: config.opsDigestEmail, subject: `Fabric Daily Digest ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${metrics.generated_at.split('T')[0]}`, text });
     }
 
     return {

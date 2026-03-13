@@ -48,6 +48,23 @@ function requirePublishFields(row: any) {
   return null;
 }
 
+function createShouldPublish(kind: 'units' | 'requests', me: any, payload: any) {
+  const requestedStatus = payload.publish_status ?? null;
+  const canPublishNow = !!me && me.status === 'ACTIVE' && !me.suspended_at;
+  const failure = requirePublishFields(payload);
+  const requestExpired = kind === 'requests' && payload.expires_at && new Date(payload.expires_at).getTime() <= Date.now();
+
+  if (requestedStatus === 'draft') return { publishNow: false as const, validationError: null, forbidden: false };
+  if (requestedStatus === 'published') {
+    if (!canPublishNow) return { publishNow: false as const, validationError: null, forbidden: true };
+    if (requestExpired) return { publishNow: false as const, validationError: 'request_expired', forbidden: false };
+    if (failure) return { publishNow: false as const, validationError: failure, forbidden: false };
+    return { publishNow: true as const, validationError: null, forbidden: false };
+  }
+  if (!canPublishNow || requestExpired || failure) return { publishNow: false as const, validationError: null, forbidden: false };
+  return { publishNow: true as const, validationError: null, forbidden: false };
+}
+
 function parseIpv4ToInt(ip: string | null | undefined) {
   if (!ip || !net.isIPv4(ip)) return null;
   const octets = ip.split('.').map((part) => Number(part));
@@ -471,7 +488,15 @@ export const fabricService = {
   },
   async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); const last = entries.length === limit ? entries[entries.length - 1] : null; return { entries, next_cursor: last ? `${new Date(last.created_at).toISOString()}|${last.id}` : null }; },
   async createUnit(nodeId: string, payload: any) {
-    const created = await repo.createUnitWithMilestoneCredits(nodeId, payload);
+    const me = await repo.getMe(nodeId);
+    const publishIntent = createShouldPublish('units', me, payload);
+    if (publishIntent.forbidden) return { forbidden: true };
+    if (publishIntent.validationError) return { validationError: publishIntent.validationError };
+    const created = await repo.createUnitWithMilestoneCredits(nodeId, payload, publishIntent.publishNow);
+    if (publishIntent.publishNow) {
+      const published = await repo.getResource('units', nodeId, created.id);
+      if (published) await repo.upsertProjection('units', published);
+    }
     return {
       unit: {
         id: created.id,
@@ -481,33 +506,63 @@ export const fabricService = {
         updated_at: created.updated_at,
         version: created.version,
       },
+      disclaimer: publishIntent.publishNow ? SAFETY_DISCLAIMERS.publish : undefined,
     };
   },
   listUnits(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('units', nodeId, limit, cursor); },
   getUnit(nodeId: string, id: string) { return repo.getResource('units', nodeId, id); },
-  patchUnit(nodeId: string, id: string, version: number, payload: any) { return repo.patchResource('units', nodeId, id, version, payload); },
-  deleteUnit(nodeId: string, id: string) { return repo.deleteResource('units', nodeId, id); },
+  async patchUnit(nodeId: string, id: string, version: number, payload: any) {
+    const patched = await repo.patchResource('units', nodeId, id, version, payload);
+    if (!patched) return null;
+    const row = await repo.getResource('units', nodeId, id);
+    if (row?.published_at) await repo.upsertProjection('units', row);
+    return patched;
+  },
+  async deleteUnit(nodeId: string, id: string) {
+    const existing = await repo.getResource('units', nodeId, id);
+    const deleted = await repo.deleteResource('units', nodeId, id);
+    if (deleted && existing?.published_at) await repo.removeProjection('units', id);
+    return deleted;
+  },
   async createRequest(nodeId: string, payload: any) {
-    const request = await repo.createResource('requests', nodeId, {
+    const requestPayload = {
       ...payload,
       expires_at: requestExpiresAtIso(payload.ttl_minutes),
-    });
+    };
+    const me = await repo.getMe(nodeId);
+    const publishIntent = createShouldPublish('requests', me, requestPayload);
+    if (publishIntent.forbidden) return { forbidden: true };
+    if (publishIntent.validationError) return { validationError: publishIntent.validationError };
+    const request = await repo.createResource('requests', nodeId, requestPayload, publishIntent.publishNow);
+    if (publishIntent.publishNow) {
+      const published = await repo.getResource('requests', nodeId, request.id);
+      if (published) await repo.upsertProjection('requests', published);
+    }
     await repo.grantRequestMilestoneIfEligible(nodeId, {
       threshold: config.requestMilestoneThreshold,
       creditGrant: config.requestMilestoneCreditGrant,
     });
-    return { request };
+    return {
+      request,
+      disclaimer: publishIntent.publishNow ? SAFETY_DISCLAIMERS.publish : undefined,
+    };
   },
   listRequests(nodeId: string, limit: number, cursor: string | null) { return repo.listResources('requests', nodeId, limit, cursor); },
   getRequest(nodeId: string, id: string) { return repo.getResource('requests', nodeId, id); },
-  patchRequest(nodeId: string, id: string, version: number, payload: any) {
+  async patchRequest(nodeId: string, id: string, version: number, payload: any) {
     const nextPayload = { ...payload };
     if (payload.ttl_minutes !== undefined) nextPayload.expires_at = requestExpiresAtIso(payload.ttl_minutes);
-    return repo.patchResource('requests', nodeId, id, version, nextPayload);
+    const patched = await repo.patchResource('requests', nodeId, id, version, nextPayload);
+    if (!patched) return null;
+    const row = await repo.getResource('requests', nodeId, id);
+    if (row?.published_at) await repo.upsertProjection('requests', row);
+    return patched;
   },
   async deleteRequest(nodeId: string, id: string) {
+    const existing = await repo.getResource('requests', nodeId, id);
     const deleted = await repo.deleteResource('requests', nodeId, id);
     if (deleted) {
+      if (existing?.published_at) await repo.removeProjection('requests', id);
       const cancelledIds = await repo.cancelOffersForRequest(id);
       for (const oid of cancelledIds) {
         const offer = await repo.getOffer(oid);
