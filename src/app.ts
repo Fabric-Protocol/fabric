@@ -1185,6 +1185,7 @@ function selectRateLimitRule(method: string, path: string): RateLimitRule | null
   if (method === 'POST' && (path === '/v1/search/listings' || path === '/v1/search/requests')) return { name: 'search', limit: config.rateLimitSearchPerMinute, windowSeconds: 60, subject: 'node' };
   if (method === 'POST' && path === '/v1/public/nodes/categories-summary') return { name: 'categories_summary', limit: config.rateLimitCategoriesSummaryPerMinute, windowSeconds: 60, subject: 'node' };
   if ((method === 'GET' || method === 'POST') && path === '/v1/credits/quote') return { name: 'credits_quote', limit: config.rateLimitCreditsQuotePerMinute, windowSeconds: 60, subject: 'node' };
+  if (method === 'POST' && path === '/v1/credits/redeem-code') return { name: 'credit_redeem', limit: config.rateLimitCreditRedeemPerHour, windowSeconds: 3600, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/credit-packs/checkout-session') return { name: 'credit_pack_checkout', limit: config.rateLimitCreditPackCheckoutPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'POST' && path === '/v1/billing/crypto-credit-pack') return { name: 'crypto_credit_pack', limit: config.rateLimitCryptoCreditPackPerDay, windowSeconds: 86400, subject: 'node' };
   if (method === 'GET' && /^\/v1\/public\/nodes\/[^/]+\/(listings|requests)$/.test(path)) return { name: 'inventory_expand', limit: config.rateLimitInventoryPerMinute, windowSeconds: 60, subject: 'node' };
@@ -1540,6 +1541,18 @@ export function buildApp() {
       app.log.warn(
         { check_point: 'startup', scope: 'signup_grant', configured_signup_grant_credits: config.signupGrantCredits, canonical_signup_grant_credits: 500 },
         'SIGNUP_GRANT_CREDITS differs from the canonical product setting; confirm this override is intentional',
+      );
+    }
+    if (config.creditRedeemEnabled && !String(config.creditRedeemCode ?? '').trim()) {
+      app.log.warn(
+        { check_point: 'startup', scope: 'credit_redeem', env_var: 'CREDIT_REDEEM_CODE' },
+        'CREDIT_REDEEM_ENABLED is true but CREDIT_REDEEM_CODE is empty; redeem requests will be rejected',
+      );
+    }
+    if (config.creditRedeemEnabled && config.creditRedeemGrantCredits <= 0) {
+      app.log.warn(
+        { check_point: 'startup', scope: 'credit_redeem', env_var: 'CREDIT_REDEEM_GRANT_CREDITS', configured_credit_redeem_grant_credits: config.creditRedeemGrantCredits },
+        'CREDIT_REDEEM_GRANT_CREDITS must be > 0 when credit redeem is enabled; redeem requests will be rejected',
       );
     }
     if (!config.stripeWebhookSecret) {
@@ -2015,6 +2028,30 @@ export function buildApp() {
     const vf = validateScopeFilters(parsed.data.scope, parsed.data.filters);
     if (!vf.ok) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid filters', { reason: vf.reason }));
     return fabricService.creditsQuote((req as AuthedRequest).nodeId!, parsed.data);
+  });
+  app.post('/v1/credits/redeem-code', async (req, reply) => {
+    const parsed = z.object({ code: z.string().trim().min(1).max(256) }).safeParse(req.body);
+    if (!parsed.success) return reply.status(422).send(errorEnvelope('validation_error', 'Invalid payload'));
+    const out = await fabricService.redeemCreditCode((req as AuthedRequest).nodeId!, parsed.data.code);
+    if ((out as any).invalid) {
+      return reply.status(422).send(errorEnvelope('validation_error', 'Invalid redeem code', { reason: 'redeem_code_invalid' }));
+    }
+    if ((out as any).cooldownActive) {
+      return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Redeem unavailable until cooldown expires', {
+        reason: 'redeem_cooldown_active',
+        retry_after_seconds: (out as any).retry_after_seconds,
+      }));
+    }
+    if ((out as any).balanceTooHigh) {
+      return reply.status(409).send(errorEnvelope('invalid_state_transition', 'Redeem unavailable while credits balance is above the allowed threshold', {
+        reason: 'redeem_balance_too_high',
+        credits_balance: (out as any).credits_balance,
+        max_balance_allowed: (out as any).max_balance_allowed,
+      }));
+    }
+    reply.header('X-Credits-Charged', '0');
+    reply.header('X-Credits-Remaining', String((out as any).credits_balance ?? 0));
+    return out;
   });
   app.post('/v1/billing/checkout-session', async (req, reply) => {
     const parsed = z.object({

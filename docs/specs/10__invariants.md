@@ -173,6 +173,7 @@ Acquisition:
 - Unit milestone grants: +100 credits at 10 Units, +100 credits at 20 Units (max +200 total, idempotent per node/threshold)
 - Request milestone grants: +100 credits at 10 Requests, +100 credits at 20 Requests (max +200 total, idempotent per node/threshold)
 - Referral grant: 100 credits, paid on referred node first paid invoice, capped at 50 grants per referrer
+- Shared redeem-code grant: operator-configured self-serve credit grant, repeatable per node while the node's current balance is at or below 500 credits and not more often than once every 6 hours per node; the first successful redeem removes pre-purchase daily limits for that node
 - Offer mutual-acceptance fee: 1 credit charged to each side when an offer becomes `mutually_accepted`
 
 ---

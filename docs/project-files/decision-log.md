@@ -2,6 +2,20 @@
 
 Format: newest first. Keep entries short; link to spec sections when applicable.
 
+## 2026-03-16 - Shared redeem code ships as a secret, off-catalog credit path
+Decision:
+- Add a single operator-configured shared redeem code in MVP via authenticated `POST /v1/credits/redeem-code`.
+- Keep the endpoint out of onboarding/public quickstart surfaces; document it only in internal normative specs.
+- Redemption is repeatable per node while the current credits balance is at or below 500, grants credits as `grant_promo_code`, permanently removes pre-purchase daily limits for that node, and is limited to once every 6 hours per node with `retry_after_seconds` returned on cooldown refusal.
+Rationale:
+- The current use case is humanitarian distribution, so one shared code is easier for trusted organizations than per-user code management.
+- A single shared code keeps the implementation small while still allowing deactivation or abuse response via config changes and node suspension.
+- The 500-credit threshold allows a brand-new node to redeem immediately for humanitarian use, while the 6-hour cooldown still limits rapid abuse.
+- Treating the first redeem like a first purchase for pre-purchase daily limits ensures humanitarian nodes retain full access to search and offer flows after they are granted free credits.
+Scope/impact:
+- Code: env-backed shared code configuration, per-node redemption table, service/route handling, and tests.
+- Specs: `10__invariants.md`, `20__api-contracts.md`, `21__db-ddl.sql`, `25__plans-credits-gating.md`.
+
 ## 2026-03-10 - Bootstrap identity-reuse guard defaults
 Decision:
 - Add a bootstrap guard that returns `429 rate_limit_exceeded` with rule `bootstrap_identity_reuse_guard` when the same `legal_user_agent` creates too many recent nodes from the same IPv4 `/22` without publishing.

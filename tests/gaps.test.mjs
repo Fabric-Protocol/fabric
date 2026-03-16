@@ -27,6 +27,9 @@ delete process.env.SEARCH_TARGET_CREDIT_COST;
 delete process.env.SEARCH_PAGE_PROHIBITIVE_FROM;
 delete process.env.SEARCH_PAGE_PROHIBITIVE_COST;
 delete process.env.SIGNUP_GRANT_CREDITS;
+delete process.env.CREDIT_REDEEM_ENABLED;
+delete process.env.CREDIT_REDEEM_CODE;
+delete process.env.CREDIT_REDEEM_GRANT_CREDITS;
 delete process.env.PREPURCHASE_DAILY_LIMITS_ENABLED;
 delete process.env.UPLOAD_TRIAL_THRESHOLD;
 delete process.env.UPLOAD_TRIAL_CREDIT_GRANT;
@@ -34,6 +37,7 @@ delete process.env.REQUEST_MILESTONE_THRESHOLD;
 delete process.env.REQUEST_MILESTONE_CREDIT_GRANT;
 delete process.env.REFERRAL_MAX_GRANTS_PER_REFERRER;
 delete process.env.DEAL_ACCEPTANCE_FEE_CREDITS;
+delete process.env.RATE_LIMIT_CREDIT_REDEEM_PER_HOUR;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
@@ -55,6 +59,9 @@ process.env.SEARCH_CREDIT_COST = '5';
 process.env.SEARCH_TARGET_CREDIT_COST = '1';
 process.env.SEARCH_PAGE_PROHIBITIVE_COST = '100';
 process.env.SIGNUP_GRANT_CREDITS = '500';
+process.env.CREDIT_REDEEM_ENABLED = 'true';
+process.env.CREDIT_REDEEM_CODE = 'HUMANITARIAN-TEST-CODE';
+process.env.CREDIT_REDEEM_GRANT_CREDITS = '1000';
 process.env.PREPURCHASE_DAILY_LIMITS_ENABLED = 'true';
 process.env.UPLOAD_TRIAL_THRESHOLD = '20';
 process.env.UPLOAD_TRIAL_CREDIT_GRANT = '200';
@@ -62,6 +69,7 @@ process.env.REQUEST_MILESTONE_THRESHOLD = '20';
 process.env.REQUEST_MILESTONE_CREDIT_GRANT = '200';
 process.env.REFERRAL_MAX_GRANTS_PER_REFERRER = '50';
 process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
+process.env.RATE_LIMIT_CREDIT_REDEEM_PER_HOUR = '1000';
 process.env.NOWPAYMENTS_API_KEY = 'test-nowpayments-key';
 process.env.NOWPAYMENTS_IPN_SECRET = 'test-ipn-secret';
 process.env.CRYPTO_CREDIT_PACK_ENABLED = 'true';
@@ -96,6 +104,12 @@ const creditLedgerTypesMigrationSql = await fs.readFile(
 );
 await query(creditLedgerTypesMigrationSql);
 
+const creditRedeemMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-16__apply_credit_redeem_code.sql', import.meta.url),
+  'utf8',
+);
+await query(creditRedeemMigrationSql);
+
 const cryptoPaymentsMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-25__apply_crypto_payments.sql', import.meta.url),
   'utf8',
@@ -123,6 +137,7 @@ await query(languageLocaleSearchVerifySql);
 await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
 await query('DELETE FROM rate_limit_counters');
+await query('DELETE FROM credit_code_redemptions');
 
 // ─── Helpers ──────────────────────────────────────────────
 

@@ -655,7 +655,7 @@ Response 200
     {
       "id": "uuid",
       "node_id": "uuid",
-      "type": "grant_signup|grant_trial|grant_milestone_requests|grant_subscription_monthly|grant_referral|topup_purchase|debit_search|debit_search_page|deal_accept_fee|debit_broadening|adjustment_manual|reversal",
+      "type": "grant_signup|grant_trial|grant_milestone_requests|grant_subscription_monthly|grant_referral|grant_promo_code|topup_purchase|debit_search|debit_search_page|deal_accept_fee|debit_broadening|adjustment_manual|reversal",
       "amount": -2,
       "created_at": "iso",
       "meta": {}
@@ -745,6 +745,56 @@ Rules
 - `broadening` is optional/deprecated; omitted or null defaults to `{ "level": 0, "allow": false }`.
 - Quote endpoints do not execute search and do not mutate credits ledger.
 - `POST /v1/credits/quote` uses normal idempotency replay/conflict semantics.
+
+POST /v1/credits/redeem-code
+Auth
+
+Required
+
+Idempotency-Key
+
+REQUIRED
+
+Metering
+
+None
+
+Purpose
+
+Redeem an operator-configured shared credit code.
+
+This endpoint is intentionally off-catalog: do not surface it in onboarding metadata, quickstart flows, or public quote/catalog responses.
+
+Request
+{
+  "code": "string"
+}
+
+Response 200
+{
+  "ok": true,
+  "credits_granted": 1000,
+  "credits_balance": 1500
+}
+
+Rules
+
+- The configured shared code is exact-match after trim.
+- A node may redeem the configured code repeatedly with fresh idempotency keys.
+- Redemption is refused when the node's current `credits_balance` is greater than `500`.
+- Redemption is also refused if the same node redeemed the shared code within the prior `6` hours.
+- Cooldown refusals return `retry_after_seconds` so callers can retry without timezone assumptions.
+- Invalid code, disabled feature, and missing operator configuration all return the same invalid-code response shape.
+- Successful redemption writes a positive ledger entry with `type="grant_promo_code"`.
+- Successful redemption permanently removes the node's pre-purchase daily limits, matching the same limit-free state granted by a first paid purchase.
+
+Errors
+
+- `401 unauthorized`
+- `409 invalid_state_transition` with `reason="redeem_balance_too_high"` when the node's current `credits_balance` is greater than `500`
+- `409 invalid_state_transition` with `reason="redeem_cooldown_active"` and `retry_after_seconds` when the node must wait before redeeming again
+- `422 validation_error` when the code is invalid or redemption is disabled
+- `429 rate_limit_exceeded`
 
 
 Balance rule
@@ -1485,7 +1535,7 @@ Offers target exactly one: unit_id XOR request_id.
 - unit-targeted mode: `unit_ids` required.
 - request-targeted mode: `request_id` required and `note` must be non-empty (`unit_ids` optional).
 
-Pre-purchase daily limits (until first purchase is recorded in Stripe/ledger):
+Pre-purchase daily limits (until first paid purchase or first successful shared redeem-code grant is recorded in Stripe/ledger):
 
 - Offer creates: max 3/day (UTC), including counter-offers that create a new offer row.
 - Offer accepts: max 3/day (UTC).

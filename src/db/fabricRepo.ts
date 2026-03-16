@@ -309,6 +309,85 @@ export async function addCreditIdempotent(nodeId: string, type: string, amount: 
   }
 }
 
+export async function redeemSharedCreditCode(
+  nodeId: string,
+  codeHash: string,
+  creditsGranted: number,
+  maxBalanceAllowed: number,
+  cooldownSeconds: number,
+) {
+  const safeCooldownSeconds = Math.max(1, Math.trunc(cooldownSeconds));
+  const client = await (pool as any).connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('select pg_advisory_xact_lock(hashtext($1)::bigint)', [nodeId]);
+
+    const balanceRows = await client.query(
+      'select coalesce(sum(amount), 0)::text as balance from credit_ledger where node_id = $1',
+      [nodeId],
+    );
+    const balanceBefore = Number(balanceRows.rows[0]?.balance ?? 0);
+    if (balanceBefore > maxBalanceAllowed) {
+      await client.query('ROLLBACK');
+      return {
+        redeemed: false,
+        balanceBefore,
+        balanceTooHigh: true,
+        cooldownActive: false,
+        retryAfterSeconds: 0,
+      };
+    }
+
+    const cooldownRows = await client.query(
+      `select greatest(
+         ceil(extract(epoch from ((redeemed_at + ($3::int * interval '1 second')) - now()))),
+         0
+       )::int as retry_after_seconds
+       from credit_code_redemptions
+       where node_id = $1
+         and code_hash = $2
+       order by redeemed_at desc
+       limit 1`,
+      [nodeId, codeHash, safeCooldownSeconds],
+    );
+    const retryAfterSeconds = Number(cooldownRows.rows[0]?.retry_after_seconds ?? 0);
+    if (retryAfterSeconds > 0) {
+      await client.query('ROLLBACK');
+      return {
+        redeemed: false,
+        balanceBefore,
+        balanceTooHigh: false,
+        cooldownActive: true,
+        retryAfterSeconds,
+      };
+    }
+
+    await client.query(
+      'insert into credit_code_redemptions(node_id, code_hash, credits_granted) values($1, $2, $3)',
+      [nodeId, codeHash, creditsGranted],
+    );
+    await client.query(
+      "insert into credit_ledger(node_id, type, amount, meta) values($1, 'grant_promo_code', $2, '{}'::jsonb)",
+      [nodeId, creditsGranted],
+    );
+    await client.query('COMMIT');
+    return {
+      redeemed: true,
+      balanceBefore,
+      balanceTooHigh: false,
+      cooldownActive: false,
+      retryAfterSeconds: 0,
+    };
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Atomically check balance and debit credits in a single transaction.
  * Uses advisory lock to serialize concurrent debits for the same node.
@@ -1976,7 +2055,7 @@ export async function getPrepurchaseOfferCreateUsage(nodeId: string) {
            select 1
            from credit_ledger cl
            where cl.node_id = $1::uuid
-             and cl.type = 'topup_purchase'
+             and cl.type in ('topup_purchase', 'grant_promo_code')
              and cl.amount > 0
          )
          or exists (
@@ -2025,7 +2104,7 @@ export async function getPrepurchaseOfferAcceptUsage(nodeId: string) {
            select 1
            from credit_ledger cl
            where cl.node_id = $1::uuid
-             and cl.type = 'topup_purchase'
+             and cl.type in ('topup_purchase', 'grant_promo_code')
              and cl.amount > 0
          )
          or exists (
@@ -2077,7 +2156,7 @@ export async function getPrepurchaseSearchUsage(nodeId: string) {
            select 1
            from credit_ledger cl
            where cl.node_id = $1::uuid
-             and cl.type = 'topup_purchase'
+             and cl.type in ('topup_purchase', 'grant_promo_code')
              and cl.amount > 0
          )
          or exists (

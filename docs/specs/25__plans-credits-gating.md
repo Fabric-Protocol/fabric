@@ -83,7 +83,7 @@ Implementation note:
 ### 2.6 Ledger behavior
 - Search/expand writes negative entries (`debit_search`, `debit_search_page`).
 - Deal finalization fee writes negative entries (`deal_accept_fee`).
-- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_milestone_requests`, `grant_subscription_monthly`, `grant_referral`, `topup_purchase`).
+- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_milestone_requests`, `grant_subscription_monthly`, `grant_referral`, `grant_promo_code`, `topup_purchase`).
 - Balance is authoritative `SUM(amount)` per node.
 
 ### 2.7 Offer mutual-acceptance fee
@@ -96,6 +96,7 @@ Implementation note:
 - Search: `20/min`
 - Search scrape guard (triggered by prohibitive paging or repeated broad queries): stricter than `search` (returns `429 rate_limit_exceeded`)
 - Credits quote: `60/min`
+- Shared credit redeem: `10/hour`
 - Inventory expand: `6/min`
 - Node per-category drilldown: minutely per node (cheap + paginated + rate-limited)
 - Offer create/counter: `30/min`
@@ -146,6 +147,17 @@ Implementation note:
 - Grant: `+100` credits at each milestone (max `+200`) as `grant_milestone_requests`.
 - Idempotency/audit:
   - Credit grants are idempotent per node/milestone threshold.
+
+## 6d) Shared redeem code
+- Endpoint: `POST /v1/credits/redeem-code`
+- Shape: one operator-configured shared code in MVP; not listed in onboarding metadata or public quote/catalog responses.
+- Grant: operator-configured positive credit grant as `grant_promo_code`.
+- Purchase-equivalence: a successful redeem permanently removes pre-purchase daily limits for that node, matching the same entitlement state as a first paid purchase.
+- Limits:
+  - Redemptions are repeatable per node with fresh idempotency keys.
+  - Refuse redemption while the node's current credits balance is greater than `500`.
+  - Refuse redemption if the same node redeemed the shared code within the previous `6` hours; return `retry_after_seconds`.
+  - Disabled/missing configuration and invalid code all return the same invalid-code behavior.
 
 ## 7) Credits quote endpoints
 - `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).

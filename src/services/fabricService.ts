@@ -487,6 +487,45 @@ export const fabricService = {
     return quote;
   },
   async creditsLedger(nodeId: string, limit: number, cursor: string | null) { const entries = await repo.listLedger(nodeId, limit, cursor); const last = entries.length === limit ? entries[entries.length - 1] : null; return { entries, next_cursor: last ? `${new Date(last.created_at).toISOString()}|${last.id}` : null }; },
+  async redeemCreditCode(nodeId: string, code: string) {
+    if (!config.creditRedeemEnabled) return { invalid: true };
+
+    const configuredCode = normalizeRedeemCode(config.creditRedeemCode);
+    const providedCode = normalizeRedeemCode(code);
+    if (!configuredCode || !providedCode || config.creditRedeemGrantCredits <= 0) return { invalid: true };
+
+    const configuredHash = redeemCodeHash(configuredCode);
+    const providedHash = redeemCodeHash(providedCode);
+    if (!timingSafeHexEqual(providedHash, configuredHash)) return { invalid: true };
+
+    const redemption = await repo.redeemSharedCreditCode(
+      nodeId,
+      configuredHash,
+      config.creditRedeemGrantCredits,
+      CREDIT_REDEEM_MAX_BALANCE,
+      CREDIT_REDEEM_COOLDOWN_SECONDS,
+    );
+    if (!redemption.redeemed) {
+      if (redemption.cooldownActive) {
+        return {
+          cooldownActive: true,
+          retry_after_seconds: redemption.retryAfterSeconds,
+        };
+      }
+      return {
+        balanceTooHigh: redemption.balanceTooHigh,
+        credits_balance: redemption.balanceBefore,
+        max_balance_allowed: CREDIT_REDEEM_MAX_BALANCE,
+      };
+    }
+
+    const creditsBalance = await repo.creditBalance(nodeId);
+    return {
+      ok: true,
+      credits_granted: config.creditRedeemGrantCredits,
+      credits_balance: creditsBalance,
+    };
+  },
   async createUnit(nodeId: string, payload: any) {
     const me = await repo.getMe(nodeId);
     const publishIntent = createShouldPublish('units', me, payload);
@@ -1359,6 +1398,8 @@ const planCredits: Record<string, number> = { free: 0, basic: 1000, pro: 3000, b
 const freeLikePlans = new Set(['free', 'none']);
 const creditsQuoteCache = new Map<string, { expiresAtMs: number; value: any }>();
 const CREDITS_QUOTE_CACHE_TTL_MS = 60 * 1000;
+const CREDIT_REDEEM_MAX_BALANCE = 500;
+const CREDIT_REDEEM_COOLDOWN_SECONDS = 6 * 60 * 60;
 
 type CreditPackQuote = {
   pack_code: string;
@@ -1866,6 +1907,19 @@ function recoveryCode() {
 
 function recoveryHash(value: string) {
   return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function redeemCodeHash(value: string) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function normalizeRedeemCode(value: string | null | undefined) {
+  return String(value ?? '').trim();
+}
+
+function timingSafeHexEqual(aHex: string, bHex: string) {
+  if (aHex.length !== bHex.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(aHex, 'hex'), Buffer.from(bHex, 'hex'));
 }
 
 function recoveryExpiresAtIso() {

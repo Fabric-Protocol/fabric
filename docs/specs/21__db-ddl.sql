@@ -258,6 +258,7 @@ create table if not exists credit_ledger (
     'grant_milestone_requests',
     'grant_subscription_monthly',
     'grant_referral',
+    'grant_promo_code',
     'topup_purchase',
     'debit_search',
     'debit_search_page',
@@ -287,6 +288,19 @@ create index if not exists credit_ledger_node_created_idx on credit_ledger(node_
 create unique index if not exists credit_ledger_idem_unique
   on credit_ledger(node_id, idempotency_key)
   where idempotency_key is not null;
+
+create table if not exists credit_code_redemptions (
+  id uuid primary key default gen_random_uuid(),
+  node_id uuid not null references nodes(id),
+  code_hash text not null,
+  credits_granted int not null check (credits_granted > 0),
+  redeemed_at timestamptz not null default now()
+);
+
+create index if not exists credit_code_redemptions_node_code_idx
+  on credit_code_redemptions(node_id, code_hash, redeemed_at desc);
+create index if not exists credit_code_redemptions_code_redeemed_idx
+  on credit_code_redemptions(code_hash, redeemed_at desc);
 
 -- =========================
 -- Trial entitlements (upload bridge)
@@ -331,6 +345,7 @@ begin
       'grant_milestone_requests',
       'grant_subscription_monthly',
       'grant_referral',
+      'grant_promo_code',
       'topup_purchase',
       'debit_search',
       'debit_search_page',

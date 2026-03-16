@@ -20,6 +20,9 @@ delete process.env.SEARCH_TARGET_CREDIT_COST;
 delete process.env.SEARCH_PAGE_PROHIBITIVE_FROM;
 delete process.env.SEARCH_PAGE_PROHIBITIVE_COST;
 delete process.env.SIGNUP_GRANT_CREDITS;
+delete process.env.CREDIT_REDEEM_ENABLED;
+delete process.env.CREDIT_REDEEM_CODE;
+delete process.env.CREDIT_REDEEM_GRANT_CREDITS;
 delete process.env.PREPURCHASE_DAILY_LIMITS_ENABLED;
 delete process.env.UPLOAD_TRIAL_THRESHOLD;
 delete process.env.UPLOAD_TRIAL_CREDIT_GRANT;
@@ -27,6 +30,7 @@ delete process.env.REQUEST_MILESTONE_THRESHOLD;
 delete process.env.REQUEST_MILESTONE_CREDIT_GRANT;
 delete process.env.REFERRAL_MAX_GRANTS_PER_REFERRER;
 delete process.env.DEAL_ACCEPTANCE_FEE_CREDITS;
+delete process.env.RATE_LIMIT_CREDIT_REDEEM_PER_HOUR;
 
 process.env.ADMIN_KEY = 'admin-test';
 process.env.STRIPE_SECRET_KEY = 'sk_test';
@@ -48,6 +52,9 @@ process.env.SEARCH_CREDIT_COST = '5';
 process.env.SEARCH_TARGET_CREDIT_COST = '1';
 process.env.SEARCH_PAGE_PROHIBITIVE_COST = '100';
 process.env.SIGNUP_GRANT_CREDITS = '500';
+process.env.CREDIT_REDEEM_ENABLED = 'true';
+process.env.CREDIT_REDEEM_CODE = 'HUMANITARIAN-TEST-CODE';
+process.env.CREDIT_REDEEM_GRANT_CREDITS = '1000';
 process.env.PREPURCHASE_DAILY_LIMITS_ENABLED = 'true';
 process.env.UPLOAD_TRIAL_THRESHOLD = '20';
 process.env.UPLOAD_TRIAL_CREDIT_GRANT = '200';
@@ -55,6 +62,7 @@ process.env.REQUEST_MILESTONE_THRESHOLD = '20';
 process.env.REQUEST_MILESTONE_CREDIT_GRANT = '200';
 process.env.REFERRAL_MAX_GRANTS_PER_REFERRER = '50';
 process.env.DEAL_ACCEPTANCE_FEE_CREDITS = '1';
+process.env.RATE_LIMIT_CREDIT_REDEEM_PER_HOUR = '1000';
 process.env.NOWPAYMENTS_API_KEY = 'test-nowpayments-key';
 process.env.NOWPAYMENTS_IPN_SECRET = 'test-ipn-secret';
 process.env.CRYPTO_CREDIT_PACK_ENABLED = 'true';
@@ -98,6 +106,12 @@ const creditLedgerTypesMigrationSql = await fs.readFile(
 );
 await query(creditLedgerTypesMigrationSql);
 
+const creditRedeemMigrationSql = await fs.readFile(
+  new URL('../supabase_migrations/2026-03-16__apply_credit_redeem_code.sql', import.meta.url),
+  'utf8',
+);
+await query(creditRedeemMigrationSql);
+
 const cryptoPaymentsMigrationSql = await fs.readFile(
   new URL('../supabase_migrations/2026-02-25__apply_crypto_payments.sql', import.meta.url),
   'utf8',
@@ -132,6 +146,7 @@ await query('DELETE FROM stripe_events');
 await query('DELETE FROM admin_idempotency_keys');
 await query('DELETE FROM rate_limit_counters');
 await query('DELETE FROM mcp_sessions');
+await query('DELETE FROM credit_code_redemptions');
 
 let bootstrapSequence = 0;
 
@@ -9682,6 +9697,233 @@ test('GET /v1/credits/ledger pagination with cursor returns next page', async ()
   const page2Ids = page2.json().entries.map((e) => e.id);
   const overlap = page2Ids.filter((id) => page1Ids.includes(id));
   assert.equal(overlap.length, 0, 'pages must not overlap');
+  await app.close();
+});
+
+test('POST /v1/credits/redeem-code grants credits and writes ledger entry when balance is low enough', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-redeem-code-success');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  await repo.addCredit(nodeId, 'adjustment_manual', -350, { reason: 'redeem-code-success-lower-balance' });
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-success' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), {
+    ok: true,
+    credits_granted: config.creditRedeemGrantCredits,
+    credits_balance: config.signupGrantCredits - 350 + config.creditRedeemGrantCredits,
+  });
+  assert.equal(String(res.headers['x-credits-charged']), '0');
+  assert.equal(String(res.headers['x-credits-remaining']), String(config.signupGrantCredits - 350 + config.creditRedeemGrantCredits));
+
+  const ledger = await app.inject({
+    method: 'GET',
+    url: '/v1/credits/ledger?limit=10',
+    headers: { authorization: `ApiKey ${apiKey}` },
+  });
+  assert.equal(ledger.statusCode, 200);
+  assert.equal(
+    ledger.json().entries.some((entry) => entry.type === 'grant_promo_code' && entry.amount === config.creditRedeemGrantCredits),
+    true,
+  );
+
+  const redemptionRows = await query(
+    `select count(*)::text as c
+       from credit_code_redemptions
+      where node_id = $1`,
+    [nodeId],
+  );
+  assert.equal(Number(redemptionRows[0].c), 1);
+  await app.close();
+});
+
+test('POST /v1/credits/redeem-code idempotency replay and conflict', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-redeem-code-idem');
+  const apiKey = b.json().api_key.api_key;
+  const nodeId = b.json().node.id;
+  await repo.addCredit(nodeId, 'adjustment_manual', -350, { reason: 'redeem-code-idem-lower-balance' });
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-idem' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(first.statusCode, 200);
+
+  const replay = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-idem' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(replay.statusCode, 200);
+  assert.deepEqual(replay.json(), first.json());
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-idem' },
+    payload: { code: 'DIFFERENT-CODE' },
+  });
+  assert.equal(conflict.statusCode, 409);
+  assert.equal(conflict.json().error.code, 'idempotency_key_reuse_conflict');
+  await app.close();
+});
+
+test('POST /v1/credits/redeem-code invalid code returns validation_error and does not grant credits', async () => {
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-redeem-code-invalid');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  const balanceBefore = await repo.creditBalance(nodeId);
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-invalid' },
+    payload: { code: 'not-the-code' },
+  });
+  assert.equal(res.statusCode, 422);
+  assert.equal(res.json().error.code, 'validation_error');
+  assert.equal(res.json().error.details.reason, 'redeem_code_invalid');
+
+  const balanceAfter = await repo.creditBalance(nodeId);
+  assert.equal(balanceAfter, balanceBefore);
+  const redemptionRows = await query(
+    `select count(*)::text as c
+       from credit_code_redemptions
+      where node_id = $1`,
+    [nodeId],
+  );
+  assert.equal(Number(redemptionRows[0].c), 0);
+  await app.close();
+});
+
+test('POST /v1/credits/redeem-code requires auth, blocks high-balance redemption, enforces cooldown, and allows later re-redemption', async () => {
+  const app = buildApp();
+
+  const unauth = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { 'idempotency-key': 'redeem-code-unauth' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(unauth.statusCode, 401);
+  assert.equal(unauth.json().error.code, 'unauthorized');
+
+  const b = await bootstrap(app, 'boot-redeem-code-once');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+  await repo.addCredit(nodeId, 'adjustment_manual', 1, { reason: 'redeem-code-too-high-bump' });
+
+  const tooHigh = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-too-high' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(tooHigh.statusCode, 409);
+  assert.equal(tooHigh.json().error.code, 'invalid_state_transition');
+  assert.equal(tooHigh.json().error.details.reason, 'redeem_balance_too_high');
+
+  await repo.addCredit(nodeId, 'adjustment_manual', -1, { reason: 'redeem-code-repeat-lower-balance-1' });
+
+  const first = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-once-1' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(first.statusCode, 200);
+  await repo.addCredit(nodeId, 'adjustment_manual', -1000, { reason: 'redeem-code-repeat-lower-balance-2' });
+  const balanceBeforeCooldownCheck = await repo.creditBalance(nodeId);
+
+  const second = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-once-2' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(second.statusCode, 409);
+  assert.equal(second.json().error.code, 'invalid_state_transition');
+  assert.equal(second.json().error.details.reason, 'redeem_cooldown_active');
+  assert.equal(Number.isInteger(second.json().error.details.retry_after_seconds), true);
+  assert.equal(second.json().error.details.retry_after_seconds > 0, true);
+  assert.equal(second.json().error.details.retry_after_seconds <= 21600, true);
+  assert.equal(await repo.creditBalance(nodeId), balanceBeforeCooldownCheck);
+
+  await query(
+    `update credit_code_redemptions
+        set redeemed_at = now() - interval '7 hours'
+      where node_id = $1`,
+    [nodeId],
+  );
+  const third = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-code-once-3' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(third.statusCode, 200);
+
+  const redemptionRows = await query(
+    `select count(*)::text as c
+       from credit_code_redemptions
+      where node_id = $1`,
+    [nodeId],
+  );
+  assert.equal(Number(redemptionRows[0].c), 2);
+  await app.close();
+});
+
+test('successful redeem removes pre-purchase search limit just like a paid node', async () => {
+  const savedRl = config.rateLimitSearchPerMinute;
+  config.rateLimitSearchPerMinute = 100;
+  const app = buildApp();
+  const b = await bootstrap(app, 'boot-redeem-unlocks-search-limit');
+  const nodeId = b.json().node.id;
+  const apiKey = b.json().api_key.api_key;
+
+  const redeem = await app.inject({
+    method: 'POST',
+    url: '/v1/credits/redeem-code',
+    headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': 'redeem-unlocks-search-limit' },
+    payload: { code: config.creditRedeemCode },
+  });
+  assert.equal(redeem.statusCode, 200);
+
+  const usage = await repo.getPrepurchaseSearchUsage(nodeId);
+  assert.equal(usage.hasPurchased, true);
+
+  const searchPayload = {
+    q: null,
+    scope: 'digital_delivery',
+    filters: {},
+    broadening: { level: 0, allow: false },
+    budget: { credits_requested: config.searchCreditCost },
+    limit: 20,
+    cursor: null,
+  };
+
+  for (let i = 1; i <= 21; i++) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/search/listings',
+      headers: { authorization: `ApiKey ${apiKey}`, 'idempotency-key': `redeem-unlocks-search-${i}` },
+      payload: searchPayload,
+    });
+    assert.equal(res.statusCode, 200, `search ${i} should succeed after redeem`);
+  }
+
+  config.rateLimitSearchPerMinute = savedRl;
   await app.close();
 });
 
