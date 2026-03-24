@@ -8,6 +8,8 @@
     "dev": "npm run build && node dist/src/server.js",
     "start": "npm run build && node dist/src/server.js",
     "lint": "npm run typecheck",
+    "sdk:test": "npm --prefix sdk run test",
+    "sdk:typecheck": "npm --prefix sdk run typecheck",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node dist/scripts/run-tests.js",
     "db:bootstrap": "npm run build && node dist/scripts/bootstrap-db.js",

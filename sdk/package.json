@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "node ../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit"
+    "typecheck": "node ../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
+    "test": "node --import ../node_modules/tsx/dist/loader.mjs --test src/events.test.ts"
   }
 }

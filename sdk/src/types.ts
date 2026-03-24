@@ -40,6 +40,35 @@ export type MeResponse = {
   } | null;
 };
 
+export type FabricEventType =
+  | 'offer_created'
+  | 'offer_countered'
+  | 'offer_accepted'
+  | 'offer_rejected'
+  | 'offer_cancelled'
+  | 'offer_contact_revealed'
+  | 'subscription_changed';
+
+export type FabricEvent = {
+  id: string;
+  type: FabricEventType;
+  offer_id: string | null;
+  actor_node_id: string;
+  recipient_node_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type GetEventsRequest = {
+  since?: string | null;
+  limit?: number;
+};
+
+export type EventsListResponse = {
+  events: FabricEvent[];
+  next_cursor: string | null;
+};
+
 export type SearchScope = 'local_in_person' | 'remote_online_service' | 'ship_to' | 'digital_delivery' | 'OTHER';
 
 export type SearchFilters = {

@@ -4276,6 +4276,58 @@ test('/v1/events cursor pagination with limit=1 returns strictly later events af
   await app.close();
 });
 
+test('/v1/events returns next_cursor for a non-empty partial page', async () => {
+  const app = buildApp();
+  const sellerBoot = await bootstrap(app, 'boot-event-partial-seller', {
+    display_name: 'Event Partial Seller',
+    email: `event.partial.seller.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const buyerBoot = await bootstrap(app, 'boot-event-partial-buyer', {
+    display_name: 'Event Partial Buyer',
+    email: `event.partial.buyer.${TEST_RUN_SUFFIX}@example.com`,
+    referral_code: null,
+  });
+  const sellerNodeId = sellerBoot.json().node.id;
+  const buyerApiKey = buyerBoot.json().api_key.api_key;
+  const unit = await repo.createResource('units', sellerNodeId, unitPayload('Offer events partial unit', 'offer-events-partial-scope'));
+
+  const firstOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-partial-offer-a' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'partial-a' },
+  });
+  assert.equal(firstOffer.statusCode, 200);
+  const secondOffer = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: { authorization: `ApiKey ${buyerApiKey}`, 'idempotency-key': 'events-partial-offer-b' },
+    payload: { unit_ids: [unit.id], thread_id: null, note: 'partial-b' },
+  });
+  assert.equal(secondOffer.statusCode, 200);
+
+  const page = await app.inject({
+    method: 'GET',
+    url: '/v1/events?limit=10',
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(page.statusCode, 200);
+  assert.equal(page.json().events.length, 2);
+  assert.equal(typeof page.json().next_cursor, 'string');
+
+  const nextPage = await app.inject({
+    method: 'GET',
+    url: `/v1/events?since=${encodeURIComponent(page.json().next_cursor)}&limit=10`,
+    headers: { authorization: `ApiKey ${buyerApiKey}` },
+  });
+  assert.equal(nextPage.statusCode, 200);
+  assert.equal(nextPage.json().events.length, 0);
+  assert.equal(nextPage.json().next_cursor, null);
+
+  await app.close();
+});
+
 test('event webhook retries are bounded and polling remains available when delivery fails', async () => {
   const app = buildApp();
   const sellerBoot = await bootstrap(app, 'boot-event-retry-seller', {

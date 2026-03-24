@@ -906,7 +906,7 @@ export const fabricService = {
     const last = rows[rows.length - 1];
     return {
       events,
-      next_cursor: rows.length === limit && last ? encodeEventCursor(last.created_at, last.id) : null,
+      next_cursor: last ? encodeEventCursor(last.created_at, last.id) : null,
     };
   },
   async adminDailyMetrics() {

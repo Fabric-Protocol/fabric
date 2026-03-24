@@ -1,7 +1,10 @@
 import { requestJson, type FabricRequestOptions } from './http.js';
+import { watchEvents, type WatchEventsOptions } from './events.js';
 import type {
   CreateOfferRequest,
   CreateOfferResponse,
+  EventsListResponse,
+  GetEventsRequest,
   MeResponse,
   RecoveryCompleteRequest,
   RecoveryCompleteResponse,
@@ -37,6 +40,33 @@ export class FabricClient {
       method: 'GET',
       path: '/v1/me',
     });
+  }
+
+  getEvents(params?: GetEventsRequest, options?: FabricRequestOptions) {
+    const searchParams = new URLSearchParams();
+    if (params?.since !== undefined && params.since !== null) {
+      searchParams.set('since', params.since);
+    }
+    if (params?.limit !== undefined) {
+      if (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 100) {
+        throw new RangeError('limit must be an integer between 1 and 100');
+      }
+      searchParams.set('limit', String(params.limit));
+    }
+    const query = searchParams.size > 0 ? `?${searchParams.toString()}` : '';
+
+    return requestJson<EventsListResponse>({
+      ...options,
+      baseUrl: this.baseUrl,
+      apiKey: this.apiKey,
+      fetchImpl: this.fetchImpl,
+      method: 'GET',
+      path: `/v1/events${query}`,
+    });
+  }
+
+  watchEvents(options: WatchEventsOptions) {
+    return watchEvents(this, options);
   }
 
   searchListings(body: SearchRequestBody, options?: FabricRequestOptions) {

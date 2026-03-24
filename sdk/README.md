@@ -9,6 +9,8 @@ This is a minimal in-repo SDK under `/sdk`. It is not published to npm yet.
 - Canonical error-envelope parsing into typed errors
 - Core methods:
   - `me()` -> `GET /v1/me`
+  - `getEvents()` -> `GET /v1/events`
+  - `watchEvents()` -> polling helper for `GET /v1/events`
   - `searchListings()` -> `POST /v1/search/listings`
   - `createOffer()` -> `POST /v1/offers` (unit-targeted or request-targeted)
 - Recovery helpers:
@@ -16,12 +18,15 @@ This is a minimal in-repo SDK under `/sdk`. It is not published to npm yet.
   - `recoveryComplete()` -> `POST /v1/recovery/complete`
   - `buildRecoveryMessage(challengeId, nonce)` -> `fabric-recovery:<challenge_id>:<nonce>`
   - `signRecoveryMessage(message, privateKey, encoding)`
+- Webhook helper:
+  - `verifyWebhookSignature()` -> verify `X-Fabric-Timestamp` + `X-Fabric-Signature`
 
-## Typecheck
+## Verify
 From repo root:
 
 ```bash
 npm run sdk:typecheck
+npm run sdk:test
 ```
 
 ## Basic usage
@@ -35,6 +40,55 @@ const client = new FabricClient({
 });
 
 const me = await client.me();
+```
+
+## Events and notifications
+- Production/server agents should still prefer `event_webhook_url` for push delivery.
+- `watchEvents()` is the fallback for runtimes that cannot receive webhooks, and it is also useful as a startup reconciliation loop.
+- Polling is at-least-once. The helper stores `next_cursor`, deduplicates by `event.id`, and backs off on empty/error responses.
+
+Polling example:
+
+```ts
+import { FabricClient, type FabricEvent } from '../sdk/src/index.ts';
+
+const client = new FabricClient({
+  baseUrl: 'http://localhost:3000',
+  apiKey: process.env.API_KEY!,
+});
+
+const onEvent = async (event: FabricEvent) => {
+  console.log(event.type, event.offer_id);
+};
+
+let cursor: string | null = null;
+
+await client.watchEvents({
+  onEvent,
+  cursorStore: {
+    load: async () => cursor,
+    save: async (nextCursor) => {
+      cursor = nextCursor;
+    },
+  },
+});
+```
+
+Webhook verification example using the same `onEvent` callback:
+
+```ts
+import { verifyWebhookSignature, type FabricEvent } from '../sdk/src/index.ts';
+
+const rawBody = await readRawBody(req);
+const verification = verifyWebhookSignature(rawBody, req.headers, process.env.FABRIC_WEBHOOK_SECRET!);
+if (!verification.ok) {
+  res.statusCode = 400;
+  res.end(verification.reason);
+  return;
+}
+
+const event = JSON.parse(Buffer.from(rawBody).toString('utf8')) as FabricEvent;
+await onEvent(event);
 ```
 
 ## Idempotency behavior
@@ -79,7 +133,10 @@ try {
 
 ## Supported methods in this iteration
 - `me`
+- `getEvents`
+- `watchEvents`
 - `searchListings`
 - `createOffer`
 - `recoveryStart`
 - `recoveryComplete`
+- `verifyWebhookSignature`
