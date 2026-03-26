@@ -21,7 +21,7 @@ Global conventions (auth, IDs, error envelope, headers, idempotency, optimistic 
 - **Metered calls**: charge credits only on HTTP 200; metered calls require `Idempotency-Key`.
 - **Rate limits**: endpoint-class limits are enforced; exceed returns `429` with canonical error envelope code `rate_limit_exceeded`.
 - **Gating**: metered search/search-like endpoints require authenticated ACTIVE, not-suspended nodes with sufficient credits. Pre-purchase daily limits: 20 searches/day, 3 offer creates/day, 3 offer accepts/day (lifetime "has ever purchased" flag removes these limits). Offer lifecycle endpoints require legal assent + auth + rate-limit controls. No subscriber gate.
-- **Accept-Language**: optional response-locale hint. In MVP Phase 1, `zh-CN`, `zh-Hans`, and bare `zh` request Simplified Chinese; all other values fall back to English. Locale selection affects only human-readable response text explicitly documented below; canonical machine fields remain unchanged.
+- **Accept-Language**: optional response-locale hint. In MVP Phase 1, `zh-CN`, `zh-Hans`, and bare `zh` request Simplified Chinese; `fa-IR` and bare `fa` request Farsi. All other values fall back to English. Locale selection affects only human-readable response text explicitly documented below; canonical machine fields remain unchanged.
 
 ---
 
@@ -87,7 +87,7 @@ None
 Server-discoverable category registry for `category_ids` usage and search filtering.
 
 ### Accept-Language
-Optional. When the caller sends `Accept-Language: zh-CN`, `zh-Hans`, or `zh`, the response localizes `name`, `description`, and `examples` into Simplified Chinese. `id`, `slug`, and `categories_version` remain canonical and unchanged.
+Optional. When the caller sends `Accept-Language: zh-CN`, `zh-Hans`, or `zh`, the response localizes `name`, `description`, and `examples` into Simplified Chinese. When the caller sends `Accept-Language: fa-IR` or `fa`, those same fields localize into Farsi. `id`, `slug`, and `categories_version` remain canonical and unchanged.
 
 ### Response 200
 ```json

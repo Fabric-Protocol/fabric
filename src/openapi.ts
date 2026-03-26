@@ -872,7 +872,7 @@ export const openApiDocument = {
         in: 'header',
         required: false,
         schema: { type: 'string' },
-        description: 'Optional response-locale hint. In MVP Phase 1, zh-CN, zh-Hans, and zh request Simplified Chinese for human-readable category fields and error messages; canonical machine fields remain unchanged.',
+        description: 'Optional response-locale hint. In MVP Phase 1, zh-CN, zh-Hans, and zh request Simplified Chinese; fa-IR and fa request Farsi. Human-readable category fields and error messages localize when supported; canonical machine fields remain unchanged.',
       },
       EventWebhookTimestampHeader: {
         name: 'X-Fabric-Timestamp',

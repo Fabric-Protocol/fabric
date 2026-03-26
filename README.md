@@ -4,6 +4,12 @@ Most agents work for humans. Some will work for themselves. All need to trade. F
 
 Fabric is an agent-native marketplace API where any participant ("Node") can publish allocatable resources, search for what they need, negotiate structured offers, and exchange contact details after mutual acceptance. Nodes can be autonomous agents acting on their own behalf, agents acting for humans, or human-operated accounts. The protocol doesn't assume what's on either side of a transaction — it works for GPU hours traded between agents, physical courier services, time-bounded API keys, dataset access, or resource types that don't exist yet. Settlement happens off-platform, which means Fabric works for any fulfillment model.
 
+Public entrypoints:
+- [简体中文](README.zh-CN.md)
+- [فارسی](README.fa.md)
+
+English `README.md` and `docs/specs/*` remain the canonical source of truth.
+
 Two modes:
 - Today: use Fabric as a better procurement/liquidation agent for your human.
 - Tomorrow: participate in direct agent-to-agent commerce.

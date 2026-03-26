@@ -1,6 +1,9 @@
-export type AppLocale = 'en' | 'zh-Hans';
+export type AppLocale = 'en' | 'zh-Hans' | 'fa';
+
+type TranslatedLocale = Exclude<AppLocale, 'en'>;
 
 const SIMPLIFIED_CHINESE_TOKENS = new Set(['zh', 'zh-cn', 'zh-hans']);
+const FARSI_TOKENS = new Set(['fa', 'fa-ir']);
 
 type ErrorTranslationEntry = {
   default?: string;
@@ -154,19 +157,172 @@ const ERROR_TRANSLATIONS_ZH_HANS: Record<string, ErrorTranslationEntry> = {
   },
 };
 
+const ERROR_TRANSLATIONS_FA: Record<string, ErrorTranslationEntry> = {
+  unauthorized: {
+    default: 'غیرمجاز',
+    messages: {
+      'Invalid admin key': 'کلید مدیر نامعتبر است',
+      'Missing or invalid API key': 'کلید API وجود ندارد یا نامعتبر است',
+      'Invalid API key': 'کلید API نامعتبر است',
+      'Missing or invalid session token': 'توکن نشست وجود ندارد یا نامعتبر است',
+      'Invalid session token': 'توکن نشست نامعتبر است',
+      'Session token expired or revoked': 'توکن نشست منقضی شده یا لغو شده است',
+      'Missing or invalid authentication token': 'توکن احراز هویت وجود ندارد یا نامعتبر است',
+    },
+  },
+  forbidden: {
+    default: 'دسترسی ممنوع است',
+    messages: {
+      'API key is revoked': 'کلید API لغو شده است',
+      'Node is suspended': 'گره معلق شده است',
+      'Not allowed': 'مجاز نیست',
+      'Cannot create checkout session for another node': 'نمی‌توان برای گره دیگری نشست پرداخت ایجاد کرد',
+      'Cannot create Credit Pack checkout session for another node': 'نمی‌توان برای گره دیگری نشست پرداخت بسته اعتباری ایجاد کرد',
+    },
+  },
+  validation_error: {
+    default: 'درخواست نامعتبر است',
+    messages: {
+      'Invalid payload': 'بدنه درخواست نامعتبر است',
+      'Invalid filters': 'فیلترها نامعتبر هستند',
+      'Invalid search request': 'درخواست جستجو نامعتبر است',
+      'Invalid search cursor': 'نشانگر جستجو نامعتبر است',
+      'Invalid bootstrap request': 'درخواست بوت‌استرپ نامعتبر است',
+      'Invalid profile update': 'به‌روزرسانی پروفایل نامعتبر است',
+      'Invalid email verification request': 'درخواست تایید ایمیل نامعتبر است',
+      'Invalid verification code': 'کد تایید نامعتبر است',
+      'Verification failed': 'تایید ناموفق بود',
+      'Unable to start recovery': 'شروع فرایند بازیابی ممکن نشد',
+      'Invalid recovery completion request': 'درخواست تکمیل بازیابی نامعتبر است',
+      'Recovery challenge expired': 'چالش بازیابی منقضی شده است',
+      'Recovery validation failed': 'اعتبارسنجی بازیابی ناموفق بود',
+      'Publish requirements not met': 'شرایط انتشار برآورده نشده است',
+      'Redirect URL not allowed': 'نشانی بازگردانی مجاز نیست',
+      'Unable to create checkout session': 'ایجاد نشست پرداخت ممکن نشد',
+      'Unable to create Credit Pack checkout session': 'ایجاد نشست پرداخت بسته اعتباری ممکن نشد',
+      'Invalid pagination params': 'پارامترهای صفحه‌بندی نامعتبر هستند',
+      'Invalid category filter': 'فیلتر دسته‌بندی نامعتبر است',
+      'If-Match required': 'سرآیند If-Match الزامی است',
+      'Idempotency-Key required': 'سرآیند Idempotency-Key الزامی است',
+      'Email recovery is not supported in MVP; use pubkey recovery.': 'بازیابی ایمیل در MVP پشتیبانی نمی‌شود؛ از بازیابی با کلید عمومی استفاده کنید.',
+    },
+  },
+  legal_required: {
+    default: 'پذیرش شرایط حقوقی الزامی است',
+    messages: {
+      'Legal assent is required': 'پذیرش شرایط حقوقی الزامی است',
+    },
+  },
+  legal_version_mismatch: {
+    default: 'نسخه شرایط حقوقی مطابقت ندارد',
+    messages: {
+      'Legal version mismatch': 'نسخه شرایط حقوقی مطابقت ندارد',
+    },
+  },
+  not_found: {
+    default: 'منبع پیدا نشد',
+    messages: {
+      'Key not found': 'کلید پیدا نشد',
+      'Node not found': 'گره پیدا نشد',
+      'Verification challenge not found': 'چالش تایید پیدا نشد',
+      'Recovery challenge not found': 'چالش بازیابی پیدا نشد',
+      'Unit not found': 'واحد پیدا نشد',
+      'Request not found': 'درخواست پیدا نشد',
+      'Offer not found': 'پیشنهاد پیدا نشد',
+    },
+  },
+  rate_limit_exceeded: {
+    default: 'از محدودیت نرخ عبور شده است',
+    messages: {
+      'Rate limit exceeded': 'از محدودیت نرخ عبور شده است',
+      'Too many verification attempts': 'تلاش‌های تایید بیش از حد مجاز است',
+      'Too many recovery attempts': 'تلاش‌های بازیابی بیش از حد مجاز است',
+      'Pre-purchase daily limit exceeded': 'از سقف روزانه پیش از خرید عبور شده است',
+    },
+  },
+  idempotency_key_reuse_conflict: {
+    default: 'تعارض در استفاده مجدد از کلید همسانی',
+    messages: {
+      'Idempotency key used with different payload': 'کلید همسانی با بدنه متفاوتی استفاده شده است',
+    },
+  },
+  budget_cap_exceeded: {
+    default: 'سقف بودجه جستجو رد شده است',
+    messages: {
+      'Search budget cap exceeded': 'سقف بودجه جستجو رد شده است',
+      'Budget cap exceeded': 'سقف بودجه رد شده است',
+    },
+  },
+  content_contact_info_disallowed: {
+    default: 'اطلاعات تماس مجاز نیست',
+    messages: {
+      'Contact information is not allowed in item content': 'اطلاعات تماس در محتوای آیتم مجاز نیست',
+      'Contact information is not allowed in offer notes': 'اطلاعات تماس در یادداشت‌های پیشنهاد مجاز نیست',
+    },
+  },
+  conflict: {
+    default: 'تعارض وجود دارد',
+    messages: {
+      'Offer conflict': 'تعارض در پیشنهاد',
+    },
+  },
+  invalid_state_transition: {
+    default: 'تغییر وضعیت نامعتبر است',
+    messages: {
+      'Invalid transition': 'تغییر وضعیت نامعتبر است',
+      'Recovery challenge already used': 'چالش بازیابی قبلا استفاده شده است',
+      'Offer cannot be rejected in its current state': 'پیشنهاد در وضعیت فعلی قابل رد نیست',
+      'Offer cannot be cancelled in its current state': 'پیشنهاد در وضعیت فعلی قابل لغو نیست',
+      'Counterparty contact is not ready': 'اطلاعات تماس طرف مقابل آماده نیست',
+    },
+  },
+  offer_not_mutually_accepted: {
+    default: 'پیشنهاد هنوز به‌صورت دوطرفه پذیرفته نشده است',
+    messages: {
+      'Offer not mutually accepted': 'پیشنهاد هنوز به‌صورت دوطرفه پذیرفته نشده است',
+    },
+  },
+  email_delivery_failed: {
+    default: 'ارسال ایمیل ممکن نشد',
+    messages: {
+      'Unable to send verification email': 'ارسال ایمیل تایید ممکن نشد',
+      'Unable to send recovery email': 'ارسال ایمیل بازیابی ممکن نشد',
+    },
+  },
+  stripe_signature_invalid: {
+    default: 'امضای Stripe نامعتبر است',
+  },
+  nowpayments_signature_invalid: {
+    default: 'امضای NOWPayments نامعتبر است',
+  },
+  internal_error: {
+    default: 'خطای داخلی سرور',
+    messages: {
+      'Internal server error': 'خطای داخلی سرور',
+      'Internal error processing webhook': 'در پردازش وب‌هوک خطای داخلی رخ داد',
+    },
+  },
+};
+
+const ERROR_TRANSLATIONS: Record<TranslatedLocale, Record<string, ErrorTranslationEntry>> = {
+  'zh-Hans': ERROR_TRANSLATIONS_ZH_HANS,
+  fa: ERROR_TRANSLATIONS_FA,
+};
+
 export function resolveLocale(rawHeader: string | string[] | undefined): AppLocale {
   const raw = Array.isArray(rawHeader) ? rawHeader.join(',') : (rawHeader ?? '');
   for (const part of raw.split(',')) {
     const token = part.split(';', 1)[0]?.trim().toLowerCase();
     if (!token) continue;
     if (SIMPLIFIED_CHINESE_TOKENS.has(token)) return 'zh-Hans';
+    if (FARSI_TOKENS.has(token)) return 'fa';
   }
   return 'en';
 }
 
 export function localizeErrorMessage(locale: AppLocale, code: string, message: string): string {
   if (locale === 'en') return message;
-  const entry = ERROR_TRANSLATIONS_ZH_HANS[code];
+  const entry = ERROR_TRANSLATIONS[locale][code];
   if (!entry) return message;
   return entry.messages?.[message] ?? entry.default ?? message;
 }

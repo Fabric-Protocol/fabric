@@ -333,7 +333,7 @@ MVP ranking uses:
 
 - `fts_rank` as the numeric lexical relevance score returned in the response sort tuple.
 - For non-CJK queries, `fts_rank` comes from Postgres full-text search on precomputed projection vectors (`search_tsv`) built from `title`, `public_summary`, `description`, and `tags`.
-- For queries containing Han characters, `fts_rank` comes from Chinese-safe lexical matching on a Unicode-preserving derived search field (`search_text`) built from `title`, `public_summary`, `description`, and `tags`.
+- For queries containing Han characters or Arabic-script characters (including Farsi), `fts_rank` comes from Unicode-preserving lexical matching on a derived search field (`search_text`) built from `title`, `public_summary`, `description`, and `tags`.
 - `route_specificity_score` for `ship_to` scope (specific `CC-AA` matches score above broad `CC` matches; destination and origin scores add).
 - `recency_score` as `extract(epoch from updated_at)` for transparency/debugging.
 - `distance_miles` remains `null` in Phase 0.5 (geo ranking deferred).

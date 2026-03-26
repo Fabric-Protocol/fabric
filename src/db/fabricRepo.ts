@@ -992,8 +992,8 @@ function parseRegionFilters(raw: unknown): RegionFilter[] {
   });
 }
 
-function containsHanCharacters(value: string) {
-  return /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(value);
+function requiresUnicodeLexicalFallback(value: string) {
+  return /\p{Script=Han}|\p{Script=Arabic}/u.test(value);
 }
 
 function buildRegionMatchExpressions(regionCountryExpr: string, regionAdminExpr: string, filters: RegionFilter[], params: unknown[], nextIdx: { value: number }) {
@@ -1054,7 +1054,7 @@ export async function searchPublic(
     const qIdx = nextIdx.value;
     params.push(trimmedQ);
     nextIdx.value += 1;
-    if (containsHanCharacters(trimmedQ)) {
+    if (requiresUnicodeLexicalFallback(trimmedQ)) {
       const qRef = `$${qIdx}`;
       const safeTagsJson = `case when jsonb_typeof(coalesce(p.doc->'tags','[]'::jsonb)) = 'array' then p.doc->'tags' else '[]'::jsonb end`;
       const titleMatch = `position(lower(${qRef}) in lower(coalesce(p.doc->>'title',''))) > 0`;

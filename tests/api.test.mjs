@@ -417,6 +417,24 @@ test('GET /v1/categories localizes human-readable fields for Simplified Chinese 
   await app.close();
 });
 
+test('GET /v1/categories localizes human-readable fields for Farsi', async () => {
+  const app = buildApp();
+  const fa = await app.inject({
+    method: 'GET',
+    url: '/v1/categories',
+    headers: { 'accept-language': 'fa-IR', host: 'fabric.example', 'x-forwarded-proto': 'https' },
+  });
+  assert.equal(fa.statusCode, 200);
+  const faBody = fa.json();
+  assert.equal(faBody.categories[0].id, 1);
+  assert.equal(faBody.categories[0].slug, 'goods');
+  assert.equal(faBody.categories[0].name, 'کالا');
+  assert.equal(faBody.categories[0].description, 'اقلام فیزیکی');
+  assert.equal(typeof faBody.categories[0].examples[0], 'string');
+  assert.notEqual(faBody.categories[0].examples[0], 'Specific dress/outfit (brand/model/size/color) for same-day pickup + delivery');
+  await app.close();
+});
+
 test('localized errors change only error.message when Accept-Language requests Simplified Chinese', async () => {
   const app = buildApp();
   const res = await app.inject({
@@ -428,6 +446,21 @@ test('localized errors change only error.message when Accept-Language requests S
   const body = res.json();
   assert.equal(body.error.code, 'unauthorized');
   assert.equal(body.error.message, '缺少认证令牌或认证令牌无效');
+  assert.deepEqual(body.error.details, {});
+  await app.close();
+});
+
+test('localized errors change only error.message when Accept-Language requests Farsi', async () => {
+  const app = buildApp();
+  const res = await app.inject({
+    method: 'GET',
+    url: '/v1/me',
+    headers: { 'accept-language': 'fa' },
+  });
+  assert.equal(res.statusCode, 401);
+  const body = res.json();
+  assert.equal(body.error.code, 'unauthorized');
+  assert.equal(body.error.message, 'توکن احراز هویت وجود ندارد یا نامعتبر است');
   assert.deepEqual(body.error.details, {});
   await app.close();
 });
@@ -718,6 +751,243 @@ test('offer create, get, list, and counter round-trip language_tag on Chinese no
   });
   assert.equal(counter.statusCode, 200);
   assert.equal(counter.json().offer.language_tag, 'zh-Hans');
+  await app.close();
+});
+
+test('Farsi units and requests round-trip language_tag and are searchable by Farsi keywords', async () => {
+  const app = buildApp();
+  const ownerBoot = await bootstrap(app, 'boot-fa-owner', { display_name: 'فروشنده فارسی', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-fa-owner-${TEST_RUN_SUFFIX}` },
+  });
+  const searcherBoot = await bootstrap(app, 'boot-fa-searcher', { display_name: 'خریدار فارسی', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-fa-searcher-${TEST_RUN_SUFFIX}` },
+  });
+  const ownerKey = ownerBoot.json().api_key.api_key;
+  const searcherKey = searcherBoot.json().api_key.api_key;
+  const keyword = `پارچه${TEST_RUN_SUFFIX}`;
+
+  const unitRes = await app.inject({
+    method: 'POST',
+    url: '/v1/units',
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `fa-unit-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`فارسی ${keyword}`, `معامله ${keyword}`),
+      description: `کیفیت ${keyword}`,
+      public_summary: `نرم ${keyword}`,
+      tags: [keyword, 'پنبه'],
+      language_tag: 'fa-IR',
+    },
+  });
+  assert.equal(unitRes.statusCode, 200);
+  const unitId = unitRes.json().unit.id;
+
+  const unitGet = await app.inject({
+    method: 'GET',
+    url: `/v1/units/${unitId}`,
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(unitGet.statusCode, 200);
+  assert.equal(unitGet.json().language_tag, 'fa-IR');
+
+  const unitList = await app.inject({
+    method: 'GET',
+    url: '/v1/units?limit=20',
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(unitList.statusCode, 200);
+  assert.equal(unitList.json().some((item) => item.id === unitId && item.language_tag === 'fa-IR'), true);
+
+  const publishUnit = await app.inject({
+    method: 'POST',
+    url: `/v1/units/${unitId}/publish`,
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `fa-unit-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publishUnit.statusCode, 200);
+
+  const requestRes = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `fa-request-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`نیاز به ${keyword}`, `درخواست ${keyword}`),
+      description: `به ${keyword} نیاز دارم`,
+      public_summary: `درخواست ${keyword}`,
+      tags: [keyword, 'نیاز'],
+      language_tag: 'fa-IR',
+    },
+  });
+  assert.equal(requestRes.statusCode, 200);
+  const requestId = requestRes.json().request.id;
+
+  const requestGet = await app.inject({
+    method: 'GET',
+    url: `/v1/requests/${requestId}`,
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(requestGet.statusCode, 200);
+  assert.equal(requestGet.json().language_tag, 'fa-IR');
+
+  const requestList = await app.inject({
+    method: 'GET',
+    url: '/v1/requests?limit=20',
+    headers: { authorization: `ApiKey ${ownerKey}` },
+  });
+  assert.equal(requestList.statusCode, 200);
+  assert.equal(requestList.json().some((item) => item.id === requestId && item.language_tag === 'fa-IR'), true);
+
+  const publishRequest = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: {
+      authorization: `ApiKey ${ownerKey}`,
+      'idempotency-key': `fa-request-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publishRequest.statusCode, 200);
+
+  const listingSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/listings',
+    headers: {
+      authorization: `ApiKey ${searcherKey}`,
+      'idempotency-key': `fa-search-listings-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      q: keyword,
+      scope: 'OTHER',
+      filters: { scope_notes: `معامله ${keyword}` },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(listingSearch.statusCode, 200);
+  const listingBody = listingSearch.json();
+  const listingHit = listingBody.items.find((entry) => entry.item.id === unitId);
+  assert.ok(listingHit, 'expected Farsi listing to be returned');
+  assert.equal(listingHit.item.language_tag, 'fa-IR');
+  assert.equal(listingHit.rank.sort_keys.fts_rank > 0, true);
+
+  const requestSearch = await app.inject({
+    method: 'POST',
+    url: '/v1/search/requests',
+    headers: {
+      authorization: `ApiKey ${searcherKey}`,
+      'idempotency-key': `fa-search-requests-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      q: keyword,
+      scope: 'OTHER',
+      filters: { scope_notes: `درخواست ${keyword}` },
+      broadening: { level: 0, allow: false },
+      budget: { credits_requested: config.searchCreditCost },
+      limit: 20,
+      cursor: null,
+    },
+  });
+  assert.equal(requestSearch.statusCode, 200);
+  const requestBody = requestSearch.json();
+  const requestHit = requestBody.items.find((entry) => entry.item.id === requestId);
+  assert.ok(requestHit, 'expected Farsi request to be returned');
+  assert.equal(requestHit.item.language_tag, 'fa-IR');
+  assert.equal(requestHit.rank.sort_keys.fts_rank > 0, true);
+  await app.close();
+});
+
+test('offer create, get, list, and counter round-trip language_tag on Farsi notes', async () => {
+  const app = buildApp();
+  const requesterBoot = await bootstrap(app, 'boot-fa-offer-requester', { display_name: 'درخواست‌کننده فارسی', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-fa-offer-requester-${TEST_RUN_SUFFIX}` },
+  });
+  const fulfillerBoot = await bootstrap(app, 'boot-fa-offer-fulfiller', { display_name: 'تامین‌کننده فارسی', email: null, referral_code: null }, {
+    headers: { 'user-agent': `phase1-fa-offer-fulfiller-${TEST_RUN_SUFFIX}` },
+  });
+  const requesterKey = requesterBoot.json().api_key.api_key;
+  const fulfillerKey = fulfillerBoot.json().api_key.api_key;
+
+  const requestRes = await app.inject({
+    method: 'POST',
+    url: '/v1/requests',
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `fa-offer-request-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      ...unitPayload(`درخواست یادداشت ${TEST_RUN_SUFFIX}`, `نیاز به یادداشت ${TEST_RUN_SUFFIX}`),
+      public_summary: `خلاصه یادداشت فارسی ${TEST_RUN_SUFFIX}`,
+      language_tag: 'fa-IR',
+    },
+  });
+  assert.equal(requestRes.statusCode, 200);
+  const requestId = requestRes.json().request.id;
+
+  const publish = await app.inject({
+    method: 'POST',
+    url: `/v1/requests/${requestId}/publish`,
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `fa-offer-request-publish-${TEST_RUN_SUFFIX}`,
+    },
+  });
+  assert.equal(publish.statusCode, 200);
+
+  const offerCreate = await app.inject({
+    method: 'POST',
+    url: '/v1/offers',
+    headers: {
+      authorization: `ApiKey ${fulfillerKey}`,
+      'idempotency-key': `fa-offer-create-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      request_id: requestId,
+      note: `یادداشت پیشنهاد فارسی ${TEST_RUN_SUFFIX}`,
+      language_tag: 'fa-IR',
+    },
+  });
+  assert.equal(offerCreate.statusCode, 200);
+  const createdOffer = offerCreate.json().offer;
+  assert.equal(createdOffer.language_tag, 'fa-IR');
+
+  const offerGet = await app.inject({
+    method: 'GET',
+    url: `/v1/offers/${createdOffer.id}`,
+    headers: { authorization: `ApiKey ${fulfillerKey}` },
+  });
+  assert.equal(offerGet.statusCode, 200);
+  assert.equal(offerGet.json().offer.language_tag, 'fa-IR');
+
+  const offerList = await app.inject({
+    method: 'GET',
+    url: '/v1/offers?role=made',
+    headers: { authorization: `ApiKey ${fulfillerKey}` },
+  });
+  assert.equal(offerList.statusCode, 200);
+  assert.equal(offerList.json().offers.some((offer) => offer.id === createdOffer.id && offer.language_tag === 'fa-IR'), true);
+
+  const counter = await app.inject({
+    method: 'POST',
+    url: `/v1/offers/${createdOffer.id}/counter`,
+    headers: {
+      authorization: `ApiKey ${requesterKey}`,
+      'idempotency-key': `fa-offer-counter-${TEST_RUN_SUFFIX}`,
+    },
+    payload: {
+      note: `یادداشت پاسخ فارسی ${TEST_RUN_SUFFIX}`,
+      language_tag: 'fa',
+    },
+  });
+  assert.equal(counter.statusCode, 200);
+  assert.equal(counter.json().offer.language_tag, 'fa');
   await app.close();
 });
 
