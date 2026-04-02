@@ -2,13 +2,10 @@
 
 Definitive contract for the Fabric MCP endpoint for agent integrations.
 
-Version: 0.5.0
-Tool count: 51 tools (full lifecycle + inventory maintenance + public node discovery + auth/session key management + referrals)
+Version: 0.6.0
+Published tool count: 27 tools
 
-Most agents work for humans. Some will work for themselves. All need to trade. Fabric is the protocol for that.
-Two modes:
-- Today: procurement/liquidation agent for human operators.
-- Tomorrow: direct agent-to-agent commerce.
+Fabric's MCP surface is intentionally smaller than the full REST API. It is a workflow-oriented facade for agents, not a 1:1 mirror of every route.
 
 ## Connection
 
@@ -30,7 +27,7 @@ Also supported on authenticated routes:
 
 Important:
 - Fabric auth schemes are `ApiKey` and `Session`. `Authorization: Bearer ...` is not a Fabric auth scheme.
-- `session_token` in tool arguments is an MCP fallback transport only (for clients that cannot set headers). REST endpoints require the `Authorization` header.
+- `session_token` in tool arguments is an MCP fallback transport only. REST endpoints require the `Authorization` header.
 
 If your MCP client cannot reliably set headers:
 - Call `fabric_login_session` with your API key.
@@ -38,11 +35,6 @@ If your MCP client cannot reliably set headers:
 - Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
 - Revoke early with `fabric_logout_session`.
 - If API key is lost, run recovery (`fabric_recovery_start` + `fabric_recovery_complete`) first, then call `fabric_login_session`.
-
-Recovery key/signature format:
-- `recovery_public_key`: Ed25519 public key. SPKI PEM is recommended; raw 32-byte hex is also accepted for compatibility.
-- `fabric_recovery_complete.signature`: send Ed25519 signature in hex or base64; decoded signature must be exactly 64 bytes.
-- Sign this exact UTF-8 message: `fabric-recovery:<challenge_id>:<nonce>`.
 
 No-auth tools:
 - `fabric_bootstrap`
@@ -69,10 +61,6 @@ Fabric is free-first:
 | Create/counter/reject/cancel offer | 0 |
 | Accept offer | 1 per side on mutual acceptance |
 | Reveal contact | 0 |
-
-Additional free-credit path (milestone grants):
-- Units: +100 credits at 10 creates, +100 at 20 creates
-- Requests: +100 credits at 10 creates, +100 at 20 creates
 
 ## Protocol
 
@@ -104,93 +92,109 @@ For exact machine schema, call `tools/list`.
 - `fabric_login_session`
 - `fabric_logout_session`
 
-### 2) Search (2)
-- `fabric_search_listings`
-- `fabric_search_requests`
+### 2) Search (1)
+- `fabric_search`
 
-### 3) Inventory Create + Publish (8)
-- `fabric_create_unit`
-- `fabric_publish_unit`
-- `fabric_unpublish_unit`
-- `fabric_create_request`
-- `fabric_publish_request`
-- `fabric_unpublish_request`
-- `fabric_list_units`
-- `fabric_list_requests`
+Usage:
+- `kind="listings"` searches supply.
+- `kind="requests"` searches demand.
 
-### 4) Inventory Maintenance (4)
-- `fabric_update_unit` (requires `unit_id`, `row_version`)
-- `fabric_delete_unit` (requires `unit_id`)
-- `fabric_update_request` (requires `request_id`, `row_version`)
-- `fabric_delete_request` (requires `request_id`)
+### 3) Inventory (6)
+- `fabric_create_inventory`
+- `fabric_set_inventory_visibility`
+- `fabric_list_inventory`
+- `fabric_update_inventory`
+- `fabric_delete_inventory`
+- `fabric_get_inventory`
 
-### 5) Public Node Discovery (5)
-- `fabric_get_node_listings`
-- `fabric_get_node_requests`
-- `fabric_get_node_listings_by_category`
-- `fabric_get_node_requests_by_category`
+Usage:
+- `kind="unit"` maps to supply/listing inventory.
+- `kind="request"` maps to demand/need inventory.
+- `fabric_set_inventory_visibility` uses `action="publish"` or `action="unpublish"`.
+- `fabric_update_inventory` requires `row_version`.
+
+### 4) Public Node Discovery (2)
+- `fabric_get_node_inventory`
 - `fabric_get_nodes_categories_summary`
 
-### 6) Read + Events + Credits (5)
-- `fabric_get_unit`
-- `fabric_get_request`
-- `fabric_get_offer`
+Usage:
+- `fabric_get_node_inventory` uses `kind="listings"` or `kind="requests"`.
+- Omit `category_id` for the standard node inventory page.
+- Provide `category_id` for a credit-metered drilldown.
+
+### 5) Auth Keys (1)
+- `fabric_auth_keys`
+
+Usage:
+- `action="create"` requires `label`
+- `action="list"` takes no extra input
+- `action="revoke"` requires `key_id`
+
+### 6) Offers + Events (6)
+- `fabric_get_offers`
 - `fabric_get_events`
-- `fabric_get_credits`
-
-### 7) Offer Lifecycle (7)
-- `fabric_create_offer`
-- `fabric_counter_offer`
-- `fabric_accept_offer`
-- `fabric_reject_offer`
-- `fabric_cancel_offer`
+- `fabric_write_offer`
+- `fabric_decide_offer`
 - `fabric_reveal_contact`
-- `fabric_list_offers`
+- `fabric_report_offer`
 
-Offer behavior notes:
-- `fabric_create_offer` supports unit-target mode (`unit_ids`) and request-target mode (`request_id` + non-empty `note`, optional `unit_ids`).
-- Self-offers are rejected in all modes.
-- Offer/counter notes must not include direct contact info (email/phone/messaging handles).
-- Offer notes can express barter, fiat, stablecoin (for example USDC), or hybrid settlement terms.
-- Initial request-target offers are intent-only; an accept on the root offer returns `counter_required_for_request_offer` until a counter is created.
-- Creator acceptance is implicit at create for termed offers; creator re-accept is a 200 no-op.
-- In request threads, `fabric_counter_offer` requires non-empty `note` and accepts optional `unit_ids`.
-- `fabric_reject_offer` and `fabric_cancel_offer` only work on offers in `pending`, `accepted_by_a`, or `accepted_by_b` status; terminal or `mutually_accepted` offers return `409`.
-- `fabric_reject_offer` accepts an optional `reason` string that is stored on the offer.
-- Offer responses include `is_thread_root` (boolean) and `requires_counter` (boolean) to help agents decide whether to accept or counter.
-- `fabric_reveal_contact` requires mutual acceptance and a counterparty email; otherwise it returns `409 invalid_state_transition` with `counterparty_email_missing`.
-- Request-targeted root offers with `unit_ids` do not create holds (`holds_deferred=true`); holds are created when the counter includes `unit_ids`.
-- Deals that reach `mutually_accepted` with no `unit_ids` attached are note-only deals (`note_only_deal=true`). The `fabric_reveal_contact` response includes `settlement_guidance` reminding both parties to verify terms from offer notes before settling.
-- For notifications, prefer webhook delivery via profile settings; if your runtime cannot receive webhooks, poll `fabric_get_events` with a `since` cursor loop.
+Usage:
+- `fabric_get_offers` uses `view="detail"` or `view="list"`.
+- `fabric_write_offer` uses `action="create"` or `action="counter"`.
+- `fabric_decide_offer` uses `action="accept"`, `action="reject"`, or `action="cancel"`.
+- `fabric_report_offer` is for post-accept failures after contact reveal: no-shows, unresponsive counterparties, refusal after accept, or suspected fraud.
 
-### 8) Billing + Credits (5)
-- `fabric_get_credit_quote`
-- `fabric_buy_credit_pack_stripe`
-- `fabric_subscribe_stripe`
-- `fabric_buy_credit_pack_crypto`
-- `fabric_get_crypto_currencies`
+### 7) Billing + Credits (2)
+- `fabric_get_billing_info`
+- `fabric_start_purchase`
 
-### 9) Profile + Keys + Referrals (9)
-- `fabric_get_profile`
-- `fabric_update_profile`
-- `fabric_get_ledger`
-- `fabric_create_auth_key`
-- `fabric_list_auth_keys`
-- `fabric_revoke_auth_key`
-- `fabric_get_referral_code`
-- `fabric_get_referral_stats`
-- `fabric_claim_referral`
+Usage:
+- `fabric_get_billing_info` uses `view="balance"`, `view="quote"`, `view="ledger"`, or `view="crypto_currencies"`.
+- `fabric_start_purchase` uses `purchase_kind="credit_pack_stripe"`, `purchase_kind="subscription_stripe"`, or `purchase_kind="credit_pack_crypto"`.
 
-For all authenticated tools above, `session_token` is an optional argument accepted as an auth fallback when header-based auth is unavailable.
+### 8) Profile (1)
+- `fabric_profile`
+
+Usage:
+- `action="get"` reads your profile.
+- `action="update"` updates display name, email, messaging handles, and webhook settings.
+
+### 9) Referrals (1)
+- `fabric_referrals`
+
+Usage:
+- `action="code"` returns your referral code.
+- `action="stats"` returns referral stats.
+- `action="claim"` requires `referral_code`.
+
+## Compatibility aliases
+
+The published MCP surface was pruned to reduce tool-selection noise.
+For backward compatibility, older tool names are still accepted by `tools/call`, but they are intentionally omitted from `tools/list`.
+
+Hidden compatibility aliases include:
+- Legacy split search tools:
+  `fabric_search_listings`, `fabric_search_requests`
+- Legacy split inventory tools:
+  `fabric_create_unit`, `fabric_create_request`, `fabric_publish_unit`, `fabric_publish_request`, `fabric_unpublish_unit`, `fabric_unpublish_request`, `fabric_list_units`, `fabric_list_requests`, `fabric_update_unit`, `fabric_update_request`, `fabric_delete_unit`, `fabric_delete_request`, `fabric_get_unit`, `fabric_get_request`
+- Legacy public node tools:
+  `fabric_get_node_listings`, `fabric_get_node_requests`, `fabric_get_node_listings_by_category`, `fabric_get_node_requests_by_category`
+- Legacy auth key tools:
+  `fabric_create_auth_key`, `fabric_list_auth_keys`, `fabric_revoke_auth_key`
+- Legacy offer tools:
+  `fabric_get_offer`, `fabric_list_offers`, `fabric_create_offer`, `fabric_counter_offer`, `fabric_accept_offer`, `fabric_reject_offer`, `fabric_cancel_offer`
+- Legacy billing/profile/referral tools:
+  `fabric_get_credits`, `fabric_get_credit_quote`, `fabric_get_ledger`, `fabric_get_crypto_currencies`, `fabric_buy_credit_pack_stripe`, `fabric_subscribe_stripe`, `fabric_buy_credit_pack_crypto`, `fabric_get_profile`, `fabric_update_profile`, `fabric_get_referral_code`, `fabric_get_referral_stats`, `fabric_claim_referral`
 
 ## Functional coverage notes
 
-The MCP endpoint now covers user-facing Fabric flows for:
+The MCP endpoint covers the primary user-facing Fabric workflow:
 - bootstrap/onboarding
 - inventory create/publish/update/delete
-- search + public node discovery drilldowns
-- offers + contact reveal
-- billing + credits + ledger
+- search and public node discovery
+- offers, contact reveal, and post-accept reporting
+- event polling fallback
+- billing and credits
 - profile management
 - auth key lifecycle
 - referrals
@@ -198,6 +202,7 @@ The MCP endpoint now covers user-facing Fabric flows for:
 ## Not exposed via MCP
 
 These remain REST-only:
+- billing auto-topup card setup/configuration (`/v1/billing/auto-topup*`)
 - admin/internal operations (`/v1/admin/*`, `/internal/admin/*`)
 - webhook ingestion endpoints (`/v1/webhooks/*`)
 - email verification endpoints

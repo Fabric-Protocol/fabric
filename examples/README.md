@@ -1,40 +1,38 @@
 # Examples
 
-Runnable TypeScript examples for the in-repo SDK.
+Runnable TypeScript examples using the Fabric SDK.
 
 ## Prerequisites
 - Node.js 20+
-- Dependencies installed at repo root (`npm install`)
-- Fabric API running and reachable at `BASE_URL`
+- An explicit Fabric target instance selected via `BASE_URL` or `MCP_URL`
 
 ## Setup
-1. Copy env template:
 
+1. Install dependencies:
 ```bash
-cp examples/.env.example examples/.env
+npm --prefix sdk install
 ```
 
-2. Set required variables in `examples/.env`:
-- `BASE_URL`
-- `API_KEY` (required for `search-offer.ts`; `example:bootstrap` prints one you can paste back into `examples/.env`)
-- `SEARCH_TARGET_NODE_ID` (use the seeded seller node ID printed by `example:bootstrap` for deterministic search results)
+2. Set environment variables:
+```bash
+export BASE_URL="http://localhost:8080"
+export MCP_URL="http://localhost:8080/mcp"
+export API_KEY="<your_api_key>"
+```
+
+These examples are intentionally target-explicit. They do not default to production.
 
 ## Run
-From repo root:
 
 ```bash
-npm run example:bootstrap
+npx --yes tsx examples/bootstrap-recovery-me.ts
+npx --yes tsx examples/search-offer.ts
+node examples/mcp-smoke.mjs
 ```
 
-Copy the printed `api_key` into `examples/.env` as `API_KEY=...` and the printed `search_target_node_id` as `SEARCH_TARGET_NODE_ID=...`. `example:bootstrap` also seeds one publish-ready listing that is public immediately with `SEARCH_SCOPE_NOTES=sdk-example-scope`, so you can keep the default scope notes unless you intentionally change both scripts.
+- `bootstrap-recovery-me.ts` - bootstraps a new node, starts pubkey recovery, completes recovery, then calls `/v1/me`.
+- `search-offer.ts` - searches listings then creates an offer using the first result. Requires `API_KEY`.
+- `mcp-smoke.mjs` - minimal MCP smoke test: tools/list, bootstrap, session login, current profile, inventory, and offers snapshot through the published wrapper tools.
 
-Then run:
-
-```bash
-npm run example:search
-```
-
-Notes:
-- `example:bootstrap` bootstraps a buyer node, starts pubkey recovery, completes recovery, calls `/v1/me`, then bootstraps a second seller node and creates one publish-ready seeded listing for the search walkthrough.
-- `example:search` searches listings and creates an offer using the first result. It exits non-zero if your env does not point at a matching published listing from another node.
-- If you rerun `example:search` after a successful offer creation, rerun `example:bootstrap` first to seed a fresh listing. The previously seeded listing may already be tied up in an offer hold.
+`mcp-smoke.mjs` uses `MCP_URL` if set, otherwise defaults to:
+No default. Set `MCP_URL` explicitly before running it.
