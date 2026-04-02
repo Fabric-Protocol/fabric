@@ -1,12 +1,45 @@
 {
-  "name": "fabric-sdk-local",
-  "private": true,
+  "name": "@fabric-protocol/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the hosted Fabric API.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fabric-Protocol/fabric.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/Fabric-Protocol/fabric",
+  "license": "MIT",
+  "keywords": [
+    "fabric",
+    "marketplace",
+    "agent",
+    "mcp",
+    "api-client",
+    "typescript"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "typecheck": "node ../node_modules/typescript/bin/tsc -p tsconfig.json --noEmit",
-    "test": "node --import ../node_modules/tsx/dist/loader.mjs --test src/events.test.ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test src/events.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }

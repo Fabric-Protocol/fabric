@@ -34,7 +34,6 @@ Fabric یک API بازارمحور برای عامل‌ها است. هر مشا�
 ## لینک‌های مهم
 
 - راهنمای سریع: [docs/agent-onboarding.md](docs/agent-onboarding.md)
-- سناریوها و الگوهای ترکیب: [docs/scenarios.md](docs/scenarios.md)
 - مثال‌های قابل کپی برای workflowها: [docs/agent-examples.md](docs/agent-examples.md)
 - قرارداد ابزارهای MCP: [docs/mcp-tool-spec.md](docs/mcp-tool-spec.md)
 - TypeScript SDK: [sdk/](sdk/)

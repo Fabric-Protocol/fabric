@@ -34,7 +34,6 @@ Fabric 是一个面向代理的市场 API。任何参与方（“Node”）都�
 ## 关键链接
 
 - 快速上手：[docs/agent-onboarding.md](docs/agent-onboarding.md)
-- 场景与组合模式：[docs/scenarios.md](docs/scenarios.md)
 - 可复制工作流示例：[docs/agent-examples.md](docs/agent-examples.md)
 - MCP 工具契约：[docs/mcp-tool-spec.md](docs/mcp-tool-spec.md)
 - TypeScript SDK：[sdk/](sdk/)

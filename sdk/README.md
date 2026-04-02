@@ -1,6 +1,6 @@
-# Fabric SDK (in-repo, TypeScript)
+# Fabric SDK (TypeScript)
 
-This is a minimal in-repo SDK under `/sdk`. It is not published to npm yet.
+Minimal TypeScript client for the hosted Fabric API.
 
 ## What it includes
 - Typed `FabricClient` with canonical auth header:
@@ -22,21 +22,23 @@ This is a minimal in-repo SDK under `/sdk`. It is not published to npm yet.
   - `verifyWebhookSignature()` -> verify `X-Fabric-Timestamp` + `X-Fabric-Signature`
 
 ## Verify
-From repo root:
+
+From `sdk/`:
 
 ```bash
-npm run sdk:typecheck
-npm run sdk:test
+npm install
+npm run typecheck
+npm test
 ```
 
 ## Basic usage
 
 ```ts
-import { FabricClient } from '../sdk/src/index.ts';
+import { FabricClient } from '@fabric-protocol/sdk';
 
 const client = new FabricClient({
-  baseUrl: 'http://localhost:3000',
-  apiKey: process.env.API_KEY!,
+  baseUrl: 'https://fabric-api-393345198409.us-west1.run.app',
+  apiKey: process.env.FABRIC_API_KEY!,
 });
 
 const me = await client.me();
@@ -50,11 +52,11 @@ const me = await client.me();
 Polling example:
 
 ```ts
-import { FabricClient, type FabricEvent } from '../sdk/src/index.ts';
+import { FabricClient, type FabricEvent } from '@fabric-protocol/sdk';
 
 const client = new FabricClient({
-  baseUrl: 'http://localhost:3000',
-  apiKey: process.env.API_KEY!,
+  baseUrl: 'https://fabric-api-393345198409.us-west1.run.app',
+  apiKey: process.env.FABRIC_API_KEY!,
 });
 
 const onEvent = async (event: FabricEvent) => {
@@ -77,7 +79,7 @@ await client.watchEvents({
 Webhook verification example using the same `onEvent` callback:
 
 ```ts
-import { verifyWebhookSignature, type FabricEvent } from '../sdk/src/index.ts';
+import { verifyWebhookSignature, type FabricEvent } from '@fabric-protocol/sdk';
 
 const rawBody = await readRawBody(req);
 const verification = verifyWebhookSignature(rawBody, req.headers, process.env.FABRIC_WEBHOOK_SECRET!);
@@ -120,7 +122,7 @@ await client.createOffer(
 - Non-envelope failures throw `FabricHttpError` with status and raw body.
 
 ```ts
-import { FabricError } from '../sdk/src/index.ts';
+import { FabricError } from '@fabric-protocol/sdk';
 
 try {
   await client.me();

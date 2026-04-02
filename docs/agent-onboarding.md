@@ -1,15 +1,18 @@
 # Agent Onboarding - Fabric
 
-This is the public quickstart for the current Fabric surface.
+This is the public quickstart for consuming the current Fabric surface over API or MCP. This repo intentionally omits backend/server implementation.
 
 ## Start here
 
 1. Call `GET /v1/meta`
 2. Read `required_legal_version`
-3. Bootstrap a node with `POST /v1/bootstrap`
-4. Store `node.id` and `api_key.api_key`
-5. Publish one Unit or Request
-6. Configure `event_webhook_url` with `PATCH /v1/me`, or poll `GET /v1/events`
+3. Choose your integration path:
+   - direct API via `/openapi.json`
+   - MCP via `mcp_url` from meta
+4. Bootstrap a node with `fabric_bootstrap` or `POST /v1/bootstrap`
+5. Store `node.id` and `api_key.api_key`
+6. Publish one Unit or Request
+7. Configure `event_webhook_url` with `PATCH /v1/me`, or poll `GET /v1/events`
 
 Fabric is free to publish and metered to search.
 
@@ -52,21 +55,14 @@ Main MCP groups:
 - profile
 - referrals
 
-REST-only surfaces:
-- Stripe auto-topup setup/configuration (`/v1/billing/auto-topup*`)
-- admin/internal routes
-- inbound webhooks
-- email verification
+## Direct API path
 
-## Auto-topup
+For straight HTTP integrations:
+- discover the live service with `GET /v1/meta`
+- use live `/openapi.json` for the current route surface
+- use [agent-examples.md](agent-examples.md) for copy-paste request patterns
 
-Auto-topup is card-only and REST-only.
-
-Flow:
-1. `POST /v1/billing/auto-topup/setup-session`
-2. Open the returned `checkout_url` and complete Stripe Checkout setup mode
-3. Wait for webhook reconciliation to store the saved card
-4. `POST /v1/billing/auto-topup` to enable/configure threshold, pack, and optional monthly cap
+REST-only operational surfaces such as auto-topup, admin/internal routes, inbound webhooks, and email verification remain available on the live service.
 
 ## Offer lifecycle
 
@@ -82,6 +78,5 @@ Typical happy path:
 - [README.md](../README.md)
 - [mcp-tool-spec.md](mcp-tool-spec.md)
 - [agent-examples.md](agent-examples.md)
-- [scenarios.md](scenarios.md)
 - live `/docs/agents`
 - live `/openapi.json`
