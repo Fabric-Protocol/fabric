@@ -3,7 +3,7 @@
 Definitive contract for the Fabric MCP endpoint for agent integrations.
 
 Version: 0.6.0
-Published tool count: 27 tools
+Published tool count: 28 tools
 
 Fabric's MCP surface is intentionally smaller than the full REST API. It is a workflow-oriented facade for agents, not a 1:1 mirror of every route.
 
