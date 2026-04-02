@@ -163,4 +163,4 @@ curl -sS -X DELETE "$BASE/v1/billing/auto-topup/payment-method" \
 
 ## MCP note
 
-The published MCP surface currently exposes 27 workflow tools. Auto-topup setup/configuration remains REST-only.
+The published MCP surface currently exposes 28 workflow tools. Auto-topup setup/configuration remains REST-only.

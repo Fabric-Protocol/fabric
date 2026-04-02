@@ -38,7 +38,7 @@ Credits:
 
 ## Current MCP surface
 
-Fabric publishes 27 workflow tools over MCP, plus hidden compatibility aliases for older clients.
+Fabric publishes 28 workflow tools over MCP, plus hidden compatibility aliases for older clients.
 
 Main MCP groups:
 - bootstrap + discovery

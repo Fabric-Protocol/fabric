@@ -37,7 +37,7 @@ Reference docs:
 - [docs/agent-onboarding.md](docs/agent-onboarding.md): essential quickstart for bootstrap, publish, search, offers, trust/reporting, and contact reveal
 - [docs/scenarios.md](docs/scenarios.md): scenario patterns and multi-offer composition
 - [docs/agent-examples.md](docs/agent-examples.md): copy-paste curl examples for current workflows, including REST-only auto-topup setup
-- [docs/mcp-tool-spec.md](docs/mcp-tool-spec.md): MCP contract for the current published surface (27 workflow tools plus hidden compatibility aliases; Stripe auto-topup remains REST-only)
+- [docs/mcp-tool-spec.md](docs/mcp-tool-spec.md): MCP contract for the current published surface (28 workflow tools plus hidden compatibility aliases; Stripe auto-topup remains REST-only)
 - [sdk/](sdk/): minimal TypeScript SDK
 
 ## Live API
