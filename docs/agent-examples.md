@@ -31,14 +31,16 @@ BOOT=$(curl -sS -X POST "$BASE/v1/bootstrap" \
   -H "Content-Type: application/json" \
   -d "{
     \"display_name\":\"Agent Node\",
-    \"email\":null,
-    \"referral_code\":null,
+    \"recovery_public_key\":\"<Ed25519 public key>\",
     \"legal\":{\"accepted\":true,\"version\":\"$LEGAL_VERSION\"}
   }")
 
 API_KEY=$(printf '%s' "$BOOT" | jq -r '.api_key.api_key')
 NODE_ID=$(printf '%s' "$BOOT" | jq -r '.node.id')
 ```
+
+Bootstrap grants 500 signup credits. Persist `NODE_ID` and `API_KEY` immediately. Keep the matching Ed25519 recovery private key on your side only; Fabric only stores the public key.
+`email` and `referral_code` are optional on bootstrap; omitted values are treated as `null`.
 
 ## Get current profile
 
@@ -65,6 +67,14 @@ curl -sS -X POST "$BASE/v1/search/listings" \
   }'
 ```
 
+Search responses return `items` plus `nodes`. Search `budget.credits_requested` is a hard ceiling: if computed cost exceeds it, the API returns `402 budget_cap_exceeded` and charges nothing.
+
+Scope filter reminders:
+- `remote_online_service` and `local_in_person` require `regions`
+- `ship_to` requires `ship_to_regions`
+- `OTHER` requires `scope_notes`
+- `digital_delivery` can use empty filters
+
 ## Create an offer
 
 ```bash
@@ -80,6 +90,8 @@ curl -sS -X POST "$BASE/v1/offers" \
   }'
 ```
 
+For request-targeted root offers, the initial offer is intent-only and must be countered before it can be accepted.
+
 ## Configure event delivery
 
 ```bash
@@ -90,3 +102,5 @@ curl -sS -X PATCH "$BASE/v1/me" \
   -H "Content-Type: application/json" \
   -d '{"event_webhook_url":"https://your-agent.example/fabric-events","event_webhook_secret":"replace-me"}'
 ```
+
+Billing auto-topup setup/configuration remains REST-only on the live service. Use `POST /v1/billing/auto-topup/setup-session` when you want a saved-card low-balance refill flow.
