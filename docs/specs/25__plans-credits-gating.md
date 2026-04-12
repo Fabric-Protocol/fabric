@@ -1,192 +1,54 @@
-# Plans, Credits, and Gating (MVP)
+# Fabric Plans, Credits, and Gating
 
-This document defines commercial and access-control behavior enforced by the API.
-If this conflicts with `docs/specs/10__invariants.md` or `docs/specs/20__api-contracts.md`, those documents win.
+This document summarizes the public-facing economics and access model.
 
-## 0) Definitions
-- Subscriber: Node with active paid subscription status.
-- Trial-entitled: Node with an active upload trial entitlement window.
-- Search-eligible node: ACTIVE, not-suspended node with sufficient credits.
-- Credits: balance computed from `credit_ledger` deltas.
-- Metered endpoint: decrements credits only on HTTP 200.
-- Free node: node without active paid subscription.
+## Core model
 
-## 1) Gating rules
-### 1.1 Allowed for free and subscribed nodes
-- Manage own private canonical resources (Units, Requests).
-- Publish/unpublish own resources.
-- View own resources and own offers.
-- Reject inbound offers.
-- Report post-accept failures or suspicious outcomes.
+- Creating and publishing inventory is free.
+- Search is metered with credits.
+- Mutual acceptance applies a small finalization fee.
+- Billing and credit purchases exist to support ongoing marketplace use.
 
-### 1.2 Credit-metered actions (ACTIVE, not-suspended + sufficient credits)
-- `POST /v1/search/listings`
-- `POST /v1/search/requests`
-- `GET /v1/public/nodes/{node_id}/listings`
-- `GET /v1/public/nodes/{node_id}/requests`
-- `GET /v1/public/nodes/{node_id}/listings/categories/{category_id}`
-- `GET /v1/public/nodes/{node_id}/requests/categories/{category_id}`
+## Plans
 
-### 1.3 Legal-assent-gated offer lifecycle actions
-- `POST /v1/offers`
-- `POST /v1/offers/{offer_id}/counter`
-- `POST /v1/offers/{offer_id}/accept`
-- `POST /v1/offers/{offer_id}/cancel`
-- `POST /v1/offers/{offer_id}/reveal-contact`
+- Free
+- Basic
+- Pro
+- Business
 
-Rules:
-- These endpoints are **not** subscriber-only.
-- Caller must satisfy legal assent/version checks (`422 legal_required` when missing/outdated).
-- Caller must pass auth/not-suspended checks and endpoint rate limits.
+Plan availability and pricing should be treated as the current public offering exposed by a live Fabric instance and related billing surfaces.
 
-### 1.4 Offer rejection availability
-- `POST /v1/offers/{offer_id}/reject` remains available to authenticated nodes (including non-subscribers).
-- Reject remains authorization-gated by participation in the offer thread.
+## Credits
 
-### 1.5 Post-accept reporting
-- `POST /v1/offers/{offer_id}/report` is free (0 credits), auth-gated, and rate-limited.
-- Report calls do not require legal assent, but they do require mutual acceptance + prior contact reveal on the offer thread.
+Credits are used for metered marketplace actions such as search and certain follow-up discovery reads.
 
-## 2) Credits and metering
-### 2.1 Charging model
-- Charge only on HTTP 200.
-- Do not charge on 4xx/5xx.
-- Do not double-charge idempotent replays.
+Credits may be obtained through:
+- signup grant
+- milestone grants
+- subscription credits
+- credit pack purchases
+- eligible referral awards
 
-### 2.2 Base costs
-- `SEARCH_CREDIT_COST = 5`
-- `SEARCH_TARGET_CREDIT_COST = 1` (target-constrained follow-up)
-- Search listing/request call base (page 1): 5 credits.
-- Target-constrained search (`target` resolves by `node_id`/`username`) uses the lower target base cost for page 1.
-- Public node inventory expansion call base: 5 credits.
-- Node per-category drilldown call base: cheap fixed cost (see 2.5).
+## Search gating
 
-### 2.3 Search budget ceiling (request-level)
-- Search requests include `budget.credits_requested` (hard ceiling for that call).
-- Response includes `budget.credits_charged` (must be `<= credits_requested`).
-- If the ceiling prevents execution, return `402 budget_cap_exceeded` with actionable guidance and no credit charge.
+To search, a caller must:
+- be authenticated
+- have an active usable account state
+- have sufficient credits
 
-### 2.4 Broadening costs (search)
-- Broadening is deprecated and optional.
-- Broadening does not increase credit cost in MVP (`budget.breakdown.broadening_cost = 0`).
+## Offer and closeout gating
 
-### 2.5 Pagination add-on economics (search)
-- Page 1: included in base search cost (no page add-on).
-- Page 2: +2 credits.
-- Page 3: +3 credits.
-- Page 4: +4 credits.
-- Page 5: +5 credits.
-- Pages 6+: +100 credits per page.
-- Prohibitive pages are additionally protected via server-side detection/rate limiting (see 3).
+Offer lifecycle actions require:
+- authentication
+- current legal assent where applicable
+- compliance with the documented workflow state
 
-Implementation note:
-- The server surfaces `budget.breakdown.page_index` and `budget.breakdown.page_cost`.
+## Public billing surface
 
-### 2.6 Ledger behavior
-- Search/expand writes negative entries (`debit_search`, `debit_search_page`).
-- Deal finalization fee writes negative entries (`deal_accept_fee`).
-- Grants write positive entries (`grant_signup`, `grant_trial`, `grant_milestone_requests`, `grant_subscription_monthly`, `grant_referral`, `grant_promo_code`, `topup_purchase`).
-- Balance is authoritative `SUM(amount)` per node.
+Public billing flows include:
+- subscription checkout
+- credit pack checkout
+- crypto credit-pack purchase
+- credits balance and ledger reads
 
-### 2.7 Offer mutual-acceptance fee
-- When an offer transitions to `mutually_accepted`, charge `1` credit to each side.
-- Finalization is blocked with `402 credits_exhausted` if either side lacks required credits.
-- No partial finalize and no partial debit.
-
-## 3) Rate limits (default env-backed values)
-- Bootstrap: `3/hour`
-- Search: `20/min`
-- Search scrape guard (triggered by prohibitive paging or repeated broad queries): stricter than `search` (returns `429 rate_limit_exceeded`)
-- Credits quote: `60/min`
-- Shared credit redeem: `10/hour`
-- Inventory expand: `6/min`
-- Node per-category drilldown: minutely per node (cheap + paginated + rate-limited)
-- Offer create/counter: `30/min`
-- Offer accept/reject/cancel: `60/min`
-- Offer report: `20/day`
-- Reveal contact: `10/hour`
-- API key issuance: `10/day`
-
-## 4) Plans (MVP)
-- Free: 0 monthly credits, non-subscriber.
-- Basic: 1,000 monthly credits.
-- Pro: 3,000 monthly credits.
-- Business: 10,000 monthly credits.
-
-Implementation note:
-- Internal storage remains `free|basic|pro|business`.
-
-## 5) Credit Packs (enabled in MVP)
-- Endpoint: `POST /v1/billing/credit-packs/checkout-session`
-- Packs:
-  - `credits_500`: 500 credits, `$9.99` ("500 Credit Pack")
-  - `credits_1500`: 1,500 credits, `$19.99` ("1500 Credit Pack")
-  - `credits_4500`: 4,500 credits, `$49.99` ("4500 Credit Pack")
-- Fulfillment:
-  - Webhook grants `topup_purchase` on paid event with `metadata.pack_code`.
-  - Grant idempotency key uses payment reference (`payment_intent` / `invoice`).
-- Anti-abuse:
-  - `CREDIT_PACK_MAX_GRANTS_PER_DAY` (default `3`) enforced per node (UTC day).
-  - Over-limit events are acknowledged (`200`) but grant is skipped.
-
-## 5b) Auto-topup (card-only, optional)
-- Endpoints:
-  - `POST /v1/billing/auto-topup/setup-session`
-  - `GET /v1/billing/auto-topup`
-  - `POST /v1/billing/auto-topup`
-  - `DELETE /v1/billing/auto-topup/payment-method`
-- Behavior:
-  - Uses the existing Credit Pack catalog only; auto-topup does not introduce new prices or ledger types.
-  - Saved payment method setup is Stripe Checkout in `setup` mode, card-only.
-  - Auto-topup is triggered only after successful credit debits, when balance is `<= threshold_credits`.
-  - `threshold_credits` must be strictly less than the selected pack's credit amount.
-  - Optional `monthly_spend_cap_cents` caps successful auto-topup spend per UTC calendar month.
-- Safety rails:
-  - Existing `CREDIT_PACK_MAX_GRANTS_PER_DAY` applies before attempting an off-session charge.
-  - Server cooldown prevents repeated off-session charge attempts on every low-balance request.
-  - A `processing` auto-topup attempt blocks new attempts until Stripe later reconciles it.
-  - If Stripe reports `requires_payment_method` or `requires_action`, the attempted auto-topup is recorded as failed and no credits are granted.
-  - Success emits `credits_topup_completed`; blocked/failed attempts emit `credits_topup_failed`.
-  - Removing a saved card is Fabric-local only: disable auto-topup + clear Fabric-stored payment-method metadata without detaching the payment method from Stripe.
-
-## 6) Referrals
-- Claim endpoint: `POST /v1/referrals/claim`
-- Award trigger: first paid subscription invoice.
-- Current grant: 100 credits to referrer.
-- Cap: at most 50 referral grants per referrer.
-- One claim per referred node.
-
-## 6b) Upload trial bridge
-- Trigger: Unit-create milestones at 10 and 20.
-- Grant: `+100` credits at each milestone (max `+200`) as `grant_trial`.
-- Trial entitlement remains one-time at `UPLOAD_TRIAL_THRESHOLD` Unit creates (default `20`) for `UPLOAD_TRIAL_DURATION_DAYS` (default `7`).
-- Idempotency/audit:
-  - Entitlement is unique per node.
-  - Credit grants are idempotent per node/milestone threshold.
-  - Trial grant is recorded in trial entitlement event audit.
-
-## 6c) Request milestone bridge
-- Trigger: Request-create milestones at 10 and 20.
-- Grant: `+100` credits at each milestone (max `+200`) as `grant_milestone_requests`.
-- Idempotency/audit:
-  - Credit grants are idempotent per node/milestone threshold.
-
-## 6d) Shared redeem code
-- Endpoint: `POST /v1/credits/redeem-code`
-- Shape: one operator-configured shared code in MVP; not listed in onboarding metadata or public quote/catalog responses.
-- Grant: operator-configured positive credit grant as `grant_promo_code`.
-- Purchase-equivalence: a successful redeem permanently removes pre-purchase daily limits for that node, matching the same entitlement state as a first paid purchase.
-- Limits:
-  - Redemptions are repeatable per node with fresh idempotency keys.
-  - Refuse redemption while the node's current credits balance is greater than `500`.
-  - Refuse redemption if the same node redeemed the shared code within the previous `6` hours; return `retry_after_seconds`.
-  - Disabled/missing configuration and invalid code all return the same invalid-code behavior.
-
-## 7) Credits quote endpoints
-- `GET /v1/credits/quote`: returns catalog (search quote model, packs, plans).
-- `POST /v1/credits/quote`: search-shaped request returns estimated cost without executing search.
-- Quote endpoints do not mutate ledger.
-
-## 8) Plan-change semantics (MVP)
-- Upgrade invoice paid: grant difference-based credits for the cycle (idempotent by invoice id).
-- Downgrade: effective at next renewal (no immediate clawback).
+For exact current catalog details, inspect the live API and billing responses from a running Fabric instance.

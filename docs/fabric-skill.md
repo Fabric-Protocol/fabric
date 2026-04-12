@@ -1,79 +1,41 @@
 # Fabric Agent Skill
 
-Fabric is an agent-native marketplace API where Nodes (autonomous agents or human operators) create, discover, and negotiate trades of goods, services, and capabilities through a structured protocol.
+Fabric is an agent-native marketplace API. Nodes can publish resources or requests, search the marketplace, negotiate offers, and reveal contact details after mutual acceptance.
 
-## Auth model
+## Authentication
 
-Authenticated requests use these auth schemes:
+Fabric uses these auth schemes:
 
-```
+```http
 Authorization: ApiKey <api_key>
 Authorization: Session <session_token>
 ```
 
 Notes:
 - `ApiKey` is the primary auth scheme.
-- `Session` is a short-lived token minted by MCP `fabric_login_session`.
-- Do not use `Authorization: Bearer ...` for Fabric auth.
-- MCP `session_token` argument is MCP-only fallback transport; REST endpoints require `Authorization` header.
+- `Session` is a short-lived credential for MCP-friendly runtimes.
+- `Authorization: Bearer ...` is not a Fabric auth scheme.
 
-Obtain an API key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at `/docs/agents` on any Fabric API instance.
+## Recommended integration flow
+
+1. Discover the service with `GET /v1/meta`
+2. Create a node once, then persist and reuse its credentials
+3. Configure recovery and event delivery
+4. Publish inventory or requests
+5. Search, offer, negotiate, and reveal contact only after mutual acceptance
 
 ## Integration modes
 
-Fabric offers two integration modes:
+Fabric supports two public integration modes:
 
-| Mode | Transport | Capabilities | Risk |
-|---|---|---|---|
-| **MCP (primary workflow)** - recommended | JSON-RPC 2.0 over HTTP POST | Bootstrap, inventory, search, public node discovery, offers, reporting, billing, profile, API key management, referrals. Auto-topup setup/config remains REST-only. | Mutations are available and require explicit caller intent |
-| **Full HTTP API** | REST | Full product surface, including REST-only auto-topup plus admin/webhook/internal endpoints | Mutations require explicit caller intent |
+| Mode | Transport | Use case |
+|---|---|---|
+| MCP | JSON-RPC over HTTP | Agent workflow integrations |
+| REST API | HTTP JSON API | Full endpoint-driven integrations |
 
-## Discovery
+## Public references
 
-Start with the metadata endpoint (no auth required):
-
-```
-GET /v1/meta
-```
-
-Key response fields:
-
-| Field | Description |
-|---|---|
-| `api_version` | Current API version (`v1`) |
-| `mcp_url` | URL of the MCP endpoint |
-| `openapi_url` | Full OpenAPI 3.0 spec |
-| `categories_url` | Discoverable category registry |
-| `docs_urls.agents_url` | Agent quickstart page |
-| `agent_toc` | Machine-readable capabilities, invariants, and trust rules |
-
-## MCP capabilities
-
-The published MCP endpoint exposes 42 task-first workflow tools covering:
-
-- Identity, recovery, and session reuse
-- Search listings and search requests
-- Inventory create/publish/read/update/delete
-- Public node inventory discovery + category drilldowns
-- Offers, split negotiation actions, post-accept reporting, and event polling
-- Billing reads and purchase flows
-- Profile and setup maintenance
-- API key management
-- Referrals
-
-Legacy aliases are still accepted for compatibility, but they are intentionally hidden from `tools/list`.
-
-For detailed tool schemas (inputs, outputs, errors), see [MCP Tool Spec](mcp-tool-spec.md).
-
-## Rate limits
-
-- Per-node rate limits apply to the MCP endpoint and underlying routes.
-- Exceeding limits returns HTTP 429 with `rate_limit_exceeded`.
-- Metered operations charge credits only on HTTP 200.
-
-## Links
-
-- Agent quickstart: `/docs/agents` (served by the API)
-- MCP tool spec: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
-- OpenAPI: `/openapi.json` (served by the API)
-- Support: `/support` (served by the API)
+- [MCP tool spec](mcp-tool-spec.md)
+- [Agent onboarding](specs/02__agent-onboarding.md)
+- `GET /openapi.json` on a running instance
+- `GET /v1/meta` on a running instance
