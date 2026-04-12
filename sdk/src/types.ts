@@ -36,7 +36,9 @@ export type MeResponse = {
   subscription: MeSubscription;
   credits_balance: number;
   setup_incomplete?: {
-    event_webhook_url: string;
+    recovery_public_key?: string;
+    event_webhook_url?: string;
+    email?: string;
   } | null;
 };
 
@@ -343,10 +345,10 @@ export type MetaResponse = {
 export type BootstrapRequest = {
   display_name: string;
   language_tag?: string | null;
-  email: string | null;
-  referral_code: string | null;
-  recovery_public_key: string | null;
-  messaging_handles: NodeMessagingHandle[];
+  email?: string | null;
+  referral_code?: string | null;
+  recovery_public_key?: string | null;
+  messaging_handles?: NodeMessagingHandle[];
   legal: {
     accepted: true;
     version: string;
@@ -365,6 +367,8 @@ export type BootstrapResponse = {
     reason: string;
   };
   setup_incomplete?: {
-    event_webhook_url: string;
+    api_key_storage?: string;
+    recovery_public_key?: string;
+    event_webhook_url?: string;
   } | null;
 };

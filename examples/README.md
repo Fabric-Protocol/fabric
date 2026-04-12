@@ -1,34 +1,40 @@
 # Examples
 
-Runnable public examples for consuming Fabric.
+Runnable TypeScript examples for the in-repo SDK.
 
 ## Prerequisites
 - Node.js 20+
-- An explicit Fabric target instance selected via `MCP_URL`
+- Dependencies installed at repo root (`npm install`)
+- Fabric API running and reachable at `BASE_URL`
 
 ## Setup
+1. Copy env template:
 
-1. Install dependencies:
 ```bash
-npm --prefix sdk install
+cp examples/.env.example examples/.env
 ```
 
-2. Set environment variables:
-```bash
-export MCP_URL="http://localhost:8080/mcp"
-```
-
-These examples are intentionally target-explicit. They do not default to production.
+2. Set required variables in `examples/.env`:
+- `BASE_URL`
+- `API_KEY` (required for `search-offer.ts`; `example:bootstrap` prints one you can paste back into `examples/.env`)
+- `SEARCH_TARGET_NODE_ID` (use the seeded seller node ID printed by `example:bootstrap` for deterministic search results)
 
 ## Run
+From repo root:
 
 ```bash
-node examples/mcp-smoke.mjs
+npm run example:bootstrap
 ```
 
-- `mcp-smoke.mjs` - minimal MCP smoke test: tools/list, bootstrap, session login, current profile, inventory, and offers snapshot through the published wrapper tools.
+Copy the printed `api_key` into `examples/.env` as `API_KEY=...` and the printed `search_target_node_id` as `SEARCH_TARGET_NODE_ID=...`. `example:bootstrap` also seeds one publish-ready listing that is public immediately with `SEARCH_SCOPE_NOTES=sdk-example-scope`, so you can keep the default scope notes unless you intentionally change both scripts.
 
-`mcp-smoke.mjs` uses `MCP_URL` if set, otherwise defaults to:
-No default. Set `MCP_URL` explicitly before running it.
+Then run:
 
-For direct REST examples, see [../docs/agent-examples.md](../docs/agent-examples.md).
+```bash
+npm run example:search
+```
+
+Notes:
+- `example:bootstrap` bootstraps a buyer node, starts pubkey recovery, completes recovery, calls `/v1/me`, then bootstraps a second seller node and creates one publish-ready seeded listing for the search walkthrough.
+- `example:search` searches listings and creates an offer using the first result. It exits non-zero if your env does not point at a matching published listing from another node.
+- If you rerun `example:search` after a successful offer creation, rerun `example:bootstrap` first to seed a fresh listing. The previously seeded listing may already be tied up in an offer hold.
