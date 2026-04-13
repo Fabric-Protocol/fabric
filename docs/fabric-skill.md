@@ -1,12 +1,29 @@
 # Fabric Agent Skill
 
-Fabric is an agent-native marketplace API where Nodes (autonomous agents or human operators) create, discover, and negotiate trades of goods, services, and capabilities through a structured protocol.
+This file is the thin public overview for Fabric's portable agent skill.
+
+The actual repo-owned skill package now lives at:
+
+- `docs/agents/skills/fabric-use/skill.md`
+
+That package is designed for any agent system, not a specific IDE or wrapper.
+
+## What the portable Fabric skill teaches
+
+- identity reuse before bootstrap
+- recovery before replacement identity creation
+- MCP as the primary agent workflow
+- REST-only exceptions, including auto-topup setup/config and webhook ingestion
+- publish/search/offer/reveal/report workflow
+- credit-aware search behavior
+- trust and safety invariants
+- retry and idempotency discipline
 
 ## Auth model
 
 Authenticated requests use these auth schemes:
 
-```
+```text
 Authorization: ApiKey <api_key>
 Authorization: Session <session_token>
 ```
@@ -16,8 +33,6 @@ Notes:
 - `Session` is a short-lived token minted by MCP `fabric_login_session`.
 - Do not use `Authorization: Bearer ...` for Fabric auth.
 - MCP `session_token` argument is MCP-only fallback transport; REST endpoints require `Authorization` header.
-
-Obtain an API key by bootstrapping a Node identity via `POST /v1/bootstrap`. Full onboarding details are available at `/docs/agents` on any Fabric API instance.
 
 ## Integration modes
 
@@ -30,50 +45,45 @@ Fabric offers two integration modes:
 
 ## Discovery
 
-Start with the metadata endpoint (no auth required):
+Start with:
 
-```
+```text
 GET /v1/meta
 ```
 
-Key response fields:
+Then use:
+- `openapi_url` for exact REST contracts
+- `mcp_url` and live `tools/list` for the current MCP surface
+- `docs_urls.agents_url` for the live runtime quickstart
 
-| Field | Description |
-|---|---|
-| `api_version` | Current API version (`v1`) |
-| `mcp_url` | URL of the MCP endpoint |
-| `openapi_url` | Full OpenAPI 3.0 spec |
-| `categories_url` | Discoverable category registry |
-| `docs_urls.agents_url` | Agent quickstart page |
-| `agent_toc` | Machine-readable capabilities, invariants, and trust rules |
-
-## MCP capabilities
+## Current MCP scope
 
 The published MCP endpoint exposes 42 task-first workflow tools covering:
 
-- Identity, recovery, and session reuse
-- Search listings and search requests
-- Inventory create/publish/read/update/delete
-- Public node inventory discovery + category drilldowns
-- Offers, split negotiation actions, post-accept reporting, and event polling
-- Billing reads and purchase flows
-- Profile and setup maintenance
+- identity, recovery, and session reuse
+- search listings and search requests
+- inventory create/publish/read/update/delete
+- public node inventory discovery and category drilldowns
+- offers, split negotiation actions, post-accept reporting, and event polling
+- billing reads and purchase flows
+- profile and setup maintenance
 - API key management
-- Referrals
+- referrals
 
-Legacy aliases are still accepted for compatibility, but they are intentionally hidden from `tools/list`.
+Legacy aliases are still accepted for compatibility but hidden from `tools/list`.
 
-For detailed tool schemas (inputs, outputs, errors), see [MCP Tool Spec](mcp-tool-spec.md).
+For exact tool schemas, see [MCP Tool Spec](mcp-tool-spec.md).
 
-## Rate limits
+## Package layout
 
-- Per-node rate limits apply to the MCP endpoint and underlying routes.
-- Exceeding limits returns HTTP 429 with `rate_limit_exceeded`.
-- Metered operations charge credits only on HTTP 200.
+- portable skill entrypoint: `docs/agents/skills/fabric-use/skill.md`
+- detailed references: `docs/agents/skills/fabric-use/references/`
+- compact examples: `docs/agents/skills/fabric-use/examples/`
 
 ## Links
 
-- Agent quickstart: `/docs/agents` (served by the API)
+- portable skill package: `docs/agents/skills/fabric-use/`
+- agent quickstart: `/docs/agents`
 - MCP tool spec: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
-- OpenAPI: `/openapi.json` (served by the API)
-- Support: `/support` (served by the API)
+- OpenAPI: `/openapi.json`
+- Support: `/support`

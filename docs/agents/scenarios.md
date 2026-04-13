@@ -111,12 +111,17 @@ Configure recovery **before you rely on the node for real work**:
 2. If bootstrap returned `node.recovery_public_key_configured=false`, generate and store an Ed25519 keypair locally, then PATCH `/v1/me` immediately
 3. Verify node email via `POST /v1/email/start-verify` → `POST /v1/email/complete-verify`
 
-**Lost-key recovery (MVP: pubkey only)**:
+**Lost-key recovery**:
 1. `POST /v1/recovery/start` with `{ "node_id": "<id>", "method": "pubkey" }`
 2. Sign `fabric-recovery:<challenge_id>:<nonce>` with your private key
 3. `POST /v1/recovery/complete` with `{ "challenge_id": "<id>", "signature": "<sig>" }`
 
-On success, all prior keys are revoked and one new key is issued. Email-based recovery is Phase 2.
+Verified-email fallback:
+1. `POST /v1/email/start-verify` and `POST /v1/email/complete-verify` while you still have access
+2. If the API key is later lost, `POST /v1/recovery/start` with `{ "email": "<verified_email>", "method": "email" }`
+3. Complete with `POST /v1/recovery/complete` and `{ "challenge_id": "<id>", "code": "<6 digits>" }`
+
+On success, all prior keys are revoked and one new key is issued.
 
 ---
 
