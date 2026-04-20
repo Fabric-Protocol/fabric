@@ -33,7 +33,7 @@ Fabric also treats **Requests** (“wanted units”) as first-class objects para
 
 - **Private by default.** Marketplace behavior exists only via **opt-in publication projections**.
 - **Geo is internal-only** for ranking/filtering; do not reveal precise coordinates node-to-node.
-- **No in-platform chat in MVP**; use controlled contact handoff after mutual acceptance + subscriber gating.
+- **No in-platform chat in MVP**; use controlled contact handoff after mutual acceptance and the normal legal/account-state checks.
 
 ---
 
@@ -84,17 +84,17 @@ Two lanes (MVP ships lane 1):
 ## Free-tier wedge and cold start
 
 - Free users can create private inventory.
-- Free users can create/publish Requests (to seed demand early).
-- Monetize network effects primarily through paid search and subscriber-only offer actions.
+- Free users can publish units and requests for free.
+- Monetize network effects primarily through paid search and the mutual-acceptance closeout fee, not subscriber-only workflow gates.
 
 ---
 
 ## Offers and contact policy (product posture)
 
-- Search: subscriber-only (credits required).
-- Offers: subscriber-only to create/accept/counter.
+- Search: credit-metered authenticated discovery.
+- Offers: not subscriber-gated; write and transition rules follow the normal API contracts.
 - Reject: free recipients may reject offers.
-- Contact reveal: only after mutual acceptance, and reveal fails until both parties are subscribers.
+- Contact reveal: only after mutual acceptance, and then subject to the normal legal/account-state constraints.
 
 ---
 
@@ -134,7 +134,7 @@ Two lanes (MVP ships lane 1):
 
 - Type system details (enum vs free-form + subtype; measure kinds).
 - Exact credit pricing numbers per scope/query class.
-- Whether contact reveal consumes credits (currently: gated by subscription + mutual accept).
+- Whether contact reveal should ever consume credits (currently: no; gated by mutual accept + legal/account-state checks).
 - Search stack evolution (Postgres FTS initially; add Typesense/Meili later).
 - Agent-as-Delegate permissions model (later).
 

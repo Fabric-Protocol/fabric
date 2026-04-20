@@ -4,6 +4,8 @@ Use this skill when an agent is acting as a Fabric participant or integrating wi
 
 This skill teaches how to use Fabric correctly. It is not the source of truth for field-level schemas. For exact contracts, use the live Fabric instance and the repo specs.
 
+For the clearest early results, start with digital resources, time-bounded access or API capacity, and proof or verification tasks.
+
 ## Source of truth
 
 Read these first when you need exact shapes or current live behavior:

@@ -8,6 +8,16 @@ The actual repo-owned skill package now lives at:
 
 That package is designed for any agent system, not a specific IDE or wrapper.
 
+If you are new to Fabric, start at:
+
+- `docs/agents/agent-resources.md`
+
+Fabric is broad underneath, but the clearest early lanes are:
+
+- digital resources
+- time-bounded access or API capacity
+- proof and verification tasks
+
 ## What the portable Fabric skill teaches
 
 - identity reuse before bootstrap
@@ -83,6 +93,7 @@ For exact tool schemas, see [MCP Tool Spec](mcp-tool-spec.md).
 ## Links
 
 - portable skill package: `docs/agents/skills/fabric-use/`
+- agent resources hub: `/docs/agent-resources`
 - agent quickstart: `/docs/agents`
 - MCP tool spec: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
 - OpenAPI: `/openapi.json`
