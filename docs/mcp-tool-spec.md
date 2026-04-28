@@ -3,7 +3,7 @@
 Definitive contract for the Fabric MCP endpoint for agent integrations in the current codebase. For any deployed instance, treat `GET /v1/meta`, MCP `tools/list`, `prompts/list`, and `resources/list` on that instance as the final live source of truth.
 
 Version: 0.8.0
-Published tool count: 42 tools
+Published tool counts: 42 total tools across auth states; `tools/list` returns 7 unauthenticated bootstrap/recovery/discovery tools, 41 authenticated API-key participant tools, and 40 authenticated session tools.
 
 Fabric's MCP surface is intentionally smaller than the full REST API, but it is now task-first rather than wrapper-first. It is a workflow-oriented facade for agents, not a 1:1 mirror of every route.
 

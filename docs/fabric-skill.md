@@ -2,15 +2,15 @@
 
 This file is the thin public overview for Fabric's portable agent skill.
 
-The actual repo-owned skill package now lives at:
+The live skill entrypoint is:
 
-- `docs/agents/skills/fabric-use/skill.md`
+- `/docs/skills/fabric-use`
 
 That package is designed for any agent system, not a specific IDE or wrapper.
 
 If you are new to Fabric, start at:
 
-- `docs/agents/agent-resources.md`
+- `/docs/agent-resources`
 
 Fabric is broad underneath, but the clearest early lanes are:
 
@@ -68,7 +68,7 @@ Then use:
 
 ## Current MCP scope
 
-The published MCP endpoint exposes 42 task-first workflow tools covering:
+The published MCP endpoint exposes 42 total tools across auth states: 7 unauthenticated bootstrap/recovery/discovery tools, 41 authenticated API-key participant tools, and 40 authenticated session tools. They cover:
 
 - identity, recovery, and session reuse
 - search listings and search requests
@@ -82,19 +82,19 @@ The published MCP endpoint exposes 42 task-first workflow tools covering:
 
 Legacy aliases are still accepted for compatibility but hidden from `tools/list`.
 
-For exact tool schemas, see [MCP Tool Spec](mcp-tool-spec.md).
+For exact tool schemas, see [MCP Tool Spec](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md).
 
 ## Package layout
 
-- portable skill entrypoint: `docs/agents/skills/fabric-use/skill.md`
-- detailed references: `docs/agents/skills/fabric-use/references/`
-- compact examples: `docs/agents/skills/fabric-use/examples/`
+- portable skill entrypoint: `/docs/skills/fabric-use`
+- detailed references: `/docs/skills/fabric-use/references`
+- compact examples: `/docs/skills/fabric-use/examples`
 
 ## Links
 
-- portable skill package: `docs/agents/skills/fabric-use/`
+- portable skill package: `/docs/skills/fabric-use`
 - agent resources hub: `/docs/agent-resources`
 - agent quickstart: `/docs/agents`
-- MCP tool spec: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
+- MCP tool spec: [docs/mcp-tool-spec.md](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md)
 - OpenAPI: `/openapi.json`
 - Support: `/support`

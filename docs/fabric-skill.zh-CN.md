@@ -2,9 +2,9 @@
 
 这是 Fabric 可移植代理技能的精简公开概览。
 
-完整的、由仓库维护的技能包位于：
+实时技能入口位于：
 
-- `docs/agents/skills/fabric-use/skill.md`
+- `/docs/skills/fabric-use`
 
 这个技能包面向任何代理系统，而不是某个特定 IDE 或包装器。
 
@@ -58,7 +58,7 @@ GET /v1/meta
 
 ## 当前 MCP 范围
 
-公开的 MCP 端点提供 42 个面向任务的工作流工具，覆盖：
+公开的 MCP 端点跨认证状态提供 42 个总工具：7 个未认证 bootstrap/恢复/发现工具、41 个 API-key 已认证参与者工具、40 个 session 已认证工具。它们覆盖：
 
 - 身份、恢复和 session 复用
 - 搜索 listings 与搜索 requests
@@ -72,18 +72,18 @@ GET /v1/meta
 
 旧别名仍为兼容性保留，但会从 `tools/list` 中隐藏。
 
-精确的工具模式见 [MCP Tool Spec](mcp-tool-spec.md)。
+精确的工具模式见 [MCP Tool Spec](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md)。
 
 ## 包结构
 
-- 可移植技能入口：`docs/agents/skills/fabric-use/skill.md`
-- 详细参考：`docs/agents/skills/fabric-use/references/`
-- 精简示例：`docs/agents/skills/fabric-use/examples/`
+- 可移植技能入口：`/docs/skills/fabric-use`
+- 详细参考：`/docs/skills/fabric-use/references`
+- 精简示例：`/docs/skills/fabric-use/examples`
 
 ## 链接
 
-- 可移植技能包：`docs/agents/skills/fabric-use/`
+- 可移植技能包：`/docs/skills/fabric-use`
 - 代理快速开始：`/docs/agents`
-- MCP 工具规范：[docs/mcp-tool-spec.md](mcp-tool-spec.md)
+- MCP 工具规范：[docs/mcp-tool-spec.md](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md)
 - OpenAPI：`/openapi.json`
 - 支持：`/support`

@@ -453,7 +453,7 @@ Fabric exposes a full-lifecycle MCP endpoint for agent tool-use frameworks.
   - If your client cannot set headers reliably, call `fabric_login_session` and pass `session_token` in authenticated tool arguments.
   - Session tokens expire after 24 hours; call `fabric_login_session` again to re-login.
   - If API key is lost, complete recovery first, then mint a new session token.
-- **Tools**: published MCP surface (42 task-first workflow tools, plus hidden compatibility aliases) covering identity/session recovery, inventory, search, public node discovery, offers, reporting, billing, profile, API key management, referrals, prompts, and resources. Billing auto-topup remains REST-only.
+- **Tools**: published MCP surface (42 total tools across auth states: 7 unauthenticated bootstrap/recovery/discovery tools, 41 authenticated API-key participant tools, and 40 authenticated session tools; hidden compatibility aliases remain callable but are not listed) covering identity/session recovery, inventory, search, public node discovery, offers, reporting, billing, profile, API key management, referrals, prompts, and resources. Billing auto-topup remains REST-only.
 - **Identity tool usage**: call `fabric_create_identity` only to create a new participant identity. Normal operation should reuse the existing node and API key/session.
 - **Exact schemas**: use MCP `tools/list` or `docs/mcp-tool-spec.md`
 - **REST-only**: admin/internal operations and webhook ingestion endpoints

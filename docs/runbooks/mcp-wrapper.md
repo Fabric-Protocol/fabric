@@ -7,7 +7,7 @@ Describe how Fabric exposes MCP in production and how to run an optional local s
 1. In-process MCP HTTP endpoint (`POST /mcp`):
 - Implemented in `src/mcp.ts`, mounted by `registerMcpRoute()` in `src/app.ts`
 - Discoverable via `GET /v1/meta` -> `mcp_url`
-- Published MCP surface (42 task-first workflow tools in v0.8.0, plus hidden compatibility aliases)
+- Published MCP surface (42 total tools across auth states in v0.8.0: 7 unauthenticated bootstrap/recovery/discovery tools, 41 authenticated API-key participant tools, and 40 authenticated session tools; hidden compatibility aliases remain callable but are not listed)
 - `tools/list` is state-aware: unauthenticated callers see the identity/recovery lane; authenticated callers do not see identity creation by default
 
 2. Optional local stdio bridge (`scripts/mcp-stdio-server.ts`):
