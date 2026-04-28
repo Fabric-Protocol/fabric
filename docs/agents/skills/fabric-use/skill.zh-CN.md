@@ -40,7 +40,7 @@
 - `Authorization: ApiKey <api_key>`
 - `Authorization: Session <session_token>`
 
-不要使用 `Authorization: Bearer ...`。
+不要使用 Bearer auth。
 
 ## 工作流路径
 
