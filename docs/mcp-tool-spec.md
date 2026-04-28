@@ -32,7 +32,7 @@ If your MCP client cannot reliably set headers:
 - Pass `session_token` in authenticated tool arguments.
 - Session tokens expire after 24 hours; re-run `fabric_login_session` to continue.
 - Revoke early with `fabric_logout_session`.
-- If the API key is lost, run recovery (`fabric_recovery_start` + `fabric_recovery_complete`) before creating a new identity.
+- If the API key is lost, run recovery (`fabric_recovery_start` + `fabric_recovery_complete`) before creating a new identity. Recovery supports either Ed25519 pubkey challenge/response or a verified-email code.
 
 Callable without prior MCP auth:
 - `fabric_create_identity`

@@ -425,10 +425,15 @@ None
 
 Purpose
 
-Start API key recovery for a known Node ID.
+Start API key recovery for either:
+- a known Node ID using public-key challenge/response, or
+- a previously verified email address using an emailed code.
 
-Request
+Request (pubkey)
 { "node_id": "uuid", "method": "pubkey" }
+
+Request (email)
+{ "email": "string(email)", "method": "email" }
 
 Response 200 (pubkey)
 {
@@ -437,13 +442,17 @@ Response 200 (pubkey)
   "expires_at": "iso"
 }
 
+Response 200 (email)
+{
+  "challenge_id": "uuid",
+  "expires_at": "iso"
+}
+
 Rules / side effects
 
 - `method='pubkey'` requires `nodes.recovery_public_key`.
-- `method='email'` is not supported in MVP and MUST return `422 validation_error` with `details.reason="email_recovery_not_supported"`.
+- `method='email'` requires a previously verified email already bound to the Node.
 - TTL and attempts use recovery challenge policy.
-- Pre-Phase-2 manual exception policy (outside API endpoint flow): verified email-on-file plus Stripe receipt proof (`pi_...` or `in_...`).
-- If no Stripe history exists, manual key rotation is unavailable before Phase 2.
 
 Errors
 
@@ -473,6 +482,9 @@ Complete API key recovery and mint exactly one new plaintext API key.
 Request (pubkey)
 { "challenge_id": "uuid", "signature": "base64|hex Ed25519 signature (must decode to 64 bytes) over fabric-recovery:<challenge_id>:<nonce>" }
 
+Request (email)
+{ "challenge_id": "uuid", "code": "string(6 digits)" }
+
 Response 200
 {
   "node_id": "uuid",
@@ -486,7 +498,7 @@ Rules / side effects
 - After recovery, MCP clients that use session login must call `fabric_login_session` again to mint a fresh session token.
 - Recovery challenge is one-time use (`used_at`).
 - Writes audit event (`api_key_recovery_completed`).
-- Code-based email recovery payloads are rejected in MVP with `422 validation_error` and `details.reason="email_recovery_not_supported"`.
+- Exactly one secret is accepted per completion request: `signature` for pubkey recovery or `code` for email recovery.
 
 Errors
 

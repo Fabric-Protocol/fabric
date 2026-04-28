@@ -198,8 +198,9 @@ Acquisition:
 ---
 
 ## 21) Self-serve API key recovery invariants (MVP)
-- Recovery **MUST** be self-serve via public-key challenge/response (`nonce` + signature) in MVP.
-- Email-based API key recovery is **Phase 2** and is not available in MVP runtime endpoints.
+- Recovery **MUST** be self-serve in MVP via either:
+  - public-key challenge/response (`nonce` + signature), or
+  - verified-email challenge/response (emailed 6-digit code).
 - Session tokens **MUST** be re-established after key recovery (recover API key first, then mint a new MCP session token).
 - Recovery challenges **MUST** be single-use, time-bounded, and attempt-bounded:
   - TTL default 10 minutes,
@@ -207,6 +208,5 @@ Acquisition:
   - expired/used challenges cannot be reused.
 - Successful recovery **MUST** revoke all previously active API keys for the Node and mint exactly one new plaintext API key.
 - Recovery starts **MUST** be rate-limited per IP and per target node.
-- Pre-Phase-2 manual exception policy requires verified email-on-file plus Stripe receipt proof (`pi_...` PaymentIntent or `in_...` Invoice ID).
-- If no Stripe history exists, manual key rotation is not available; Node must use pubkey recovery.
+- Email recovery **MUST** require a previously verified email already bound to the Node.
 - Recovery and email-verification completions **MUST** produce auditable events.
