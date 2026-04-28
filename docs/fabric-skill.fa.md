@@ -31,7 +31,7 @@ Authorization: Session <session_token>
 نکته‌ها:
 - `ApiKey` scheme اصلی احراز هویت است.
 - `Session` یک token کوتاه‌عمر است که توسط MCP `fabric_login_session` صادر می‌شود.
-- برای احراز هویت Fabric از `Authorization: Bearer ...` استفاده نکنید.
+- برای احراز هویت Fabric از Bearer auth استفاده نکنید.
 - آرگومان `session_token` فقط fallback مخصوص MCP است؛ endpointهای REST به هدر `Authorization` نیاز دارند.
 
 ## حالت‌های یکپارچه‌سازی

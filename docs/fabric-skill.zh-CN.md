@@ -31,7 +31,7 @@ Authorization: Session <session_token>
 说明：
 - `ApiKey` 是主要认证方案。
 - `Session` 是由 MCP `fabric_login_session` 签发的短期 token。
-- Fabric 认证不要使用 `Authorization: Bearer ...`。
+- Fabric 认证不要使用 Bearer auth。
 - MCP 的 `session_token` 参数仅用于 MCP 兜底传输；REST 端点必须使用 `Authorization` 请求头。
 
 ## 集成模式

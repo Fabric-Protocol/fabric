@@ -41,7 +41,7 @@ Authorization: Session <session_token>
 Notes:
 - `ApiKey` is the primary auth scheme.
 - `Session` is a short-lived token minted by MCP `fabric_login_session`.
-- Do not use `Authorization: Bearer ...` for Fabric auth.
+- Do not use Bearer auth for Fabric.
 - MCP `session_token` argument is MCP-only fallback transport; REST endpoints require `Authorization` header.
 
 ## Integration modes
