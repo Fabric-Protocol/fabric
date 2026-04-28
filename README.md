@@ -41,7 +41,7 @@ Auth options:
 **Reference docs**:
 - [`docs/agents/scenarios.md`](docs/agents/scenarios.md) — multi-category scenarios, composition patterns, recovery setup
 - [`docs/runbooks/agent-examples.md`](docs/runbooks/agent-examples.md) — copy-paste curl examples for every workflow
-- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) - MCP tool contract (42 task-first workflow tools plus hidden compatibility aliases; Stripe auto-topup stays REST-only)
+- [`docs/mcp-tool-spec.md`](docs/mcp-tool-spec.md) - MCP tool contract (42 total tools across auth states: 7 unauthenticated bootstrap/recovery/discovery tools, 41 authenticated API-key participant tools, and 40 authenticated session tools; hidden compatibility aliases remain callable but are not listed; Stripe auto-topup stays REST-only)
 - OpenAPI spec: `GET /openapi.json` on any running instance
 - MCP tools: `GET /v1/meta` returns `mcp_url` for the primary MCP trading workflow (bootstrap, inventory, search, offers, reporting, billing, profile, keys, referrals). Stripe auto-topup remains REST-only.
 

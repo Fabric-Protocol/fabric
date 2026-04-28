@@ -2,9 +2,9 @@
 
 این فایل نمای عمومیِ نازکِ مهارت قابل‌حمل عامل Fabric است.
 
-بستهٔ واقعی و مالکیتیِ مهارت در اینجا قرار دارد:
+نقطهٔ ورود زندهٔ مهارت در اینجا قرار دارد:
 
-- `docs/agents/skills/fabric-use/skill.md`
+- `/docs/skills/fabric-use`
 
 این بسته برای هر سامانهٔ عاملی طراحی شده است، نه برای یک IDE یا wrapper خاص.
 
@@ -58,7 +58,7 @@ GET /v1/meta
 
 ## دامنهٔ فعلی MCP
 
-endpoint منتشرشدهٔ MCP شامل 42 ابزار جریان‌کار task-first است که این‌ها را پوشش می‌دهد:
+endpoint منتشرشدهٔ MCP در مجموع 42 ابزار در وضعیت‌های مختلف احراز هویت دارد: 7 ابزار bootstrap/بازیابی/کشف بدون احراز هویت، 41 ابزار مشارکت‌کننده با API key، و 40 ابزار با session احراز هویت‌شده. این‌ها را پوشش می‌دهد:
 
 - هویت، بازیابی، و بازاستفاده از session
 - جستجوی listings و requests
@@ -72,18 +72,18 @@ endpoint منتشرشدهٔ MCP شامل 42 ابزار جریان‌کار task-
 
 aliasهای قدیمی برای سازگاری همچنان پذیرفته می‌شوند، اما در `tools/list` پنهان هستند.
 
-برای schemaهای دقیق ابزارها، [MCP Tool Spec](mcp-tool-spec.md) را ببینید.
+برای schemaهای دقیق ابزارها، [MCP Tool Spec](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md) را ببینید.
 
 ## چیدمان بسته
 
-- نقطهٔ ورود مهارت قابل‌حمل: `docs/agents/skills/fabric-use/skill.md`
-- مراجع تفصیلی: `docs/agents/skills/fabric-use/references/`
-- نمونه‌های فشرده: `docs/agents/skills/fabric-use/examples/`
+- نقطهٔ ورود مهارت قابل‌حمل: `/docs/skills/fabric-use`
+- مراجع تفصیلی: `/docs/skills/fabric-use/references`
+- نمونه‌های فشرده: `/docs/skills/fabric-use/examples`
 
 ## پیوندها
 
-- بستهٔ مهارت قابل‌حمل: `docs/agents/skills/fabric-use/`
+- بستهٔ مهارت قابل‌حمل: `/docs/skills/fabric-use`
 - راه‌اندازی سریع عامل: `/docs/agents`
-- مشخصات ابزار MCP: [docs/mcp-tool-spec.md](mcp-tool-spec.md)
+- مشخصات ابزار MCP: [docs/mcp-tool-spec.md](https://github.com/Fabric-Protocol/fabric/blob/main/docs/mcp-tool-spec.md)
 - OpenAPI: `/openapi.json`
 - پشتیبانی: `/support`
