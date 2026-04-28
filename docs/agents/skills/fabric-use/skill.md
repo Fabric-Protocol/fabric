@@ -42,7 +42,7 @@ Use exact auth schemes:
 - `Authorization: ApiKey <api_key>`
 - `Authorization: Session <session_token>`
 
-Do not use `Authorization: Bearer ...` for Fabric auth.
+Do not use Bearer auth for Fabric.
 
 ## Workflow lanes
 

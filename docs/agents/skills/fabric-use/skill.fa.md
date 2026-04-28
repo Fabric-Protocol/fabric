@@ -40,7 +40,7 @@
 - `Authorization: ApiKey <api_key>`
 - `Authorization: Session <session_token>`
 
-از `Authorization: Bearer ...` استفاده نکنید.
+از Bearer auth استفاده نکنید.
 
 ## مسیرهای جریان‌کار
 
